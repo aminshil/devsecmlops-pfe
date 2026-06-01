@@ -50,7 +50,8 @@ python ml-model/train.py            # trains, evaluates, saves models/model.pkl
 ## Setup
 ```bash
 python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt           # runtime deps
+pip install -r requirements-dev.txt       # dev/test deps (pytest etc.)
 ```
 
 ## Compliance & constraints
