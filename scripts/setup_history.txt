@@ -1,0 +1,182 @@
+[200~sudo apt update && sudo apt upgrade -y
+sudo apt update && sudo apt upgrade -y
+cd ~/devsecmlops-pfe/
+ls
+ls -l
+ls -a
+[200~cd ~/devsecmlops-pfe
+git remote add origin https://github.com/aminshil/devsecmlops-pfe.git
+git branch -M main~
+cd ~/devsecmlops-pfe
+git branch -M main
+git push -u origin main
+git login
+git account
+[200~ping -c 3 8.8.8.8
+~
+ping -c 3 8.8.8.8
+cat /etc/resolv.conf
+sudo dhclient -v
+ping 8.8.8.8
+cd ~/devsecmlops-pfe/ml-model~
+cd ~/devsecmlops-pfe/ml-model
+gedit generate_data.py
+python generate_data.py
+python3 generate_data.py
+sudo apt install -y git curl wget vim python3 python3-pip python3-venv build-essential net-tools numpy
+source venv/bin/activate
+..
+.
+cd ..
+cat requirements.txt
+git status
+# Full tree (install tree if missing)
+which tree || sudo apt install -y tree
+tree -a -I 'venv|__pycache__|.git|mlruns' -L 3
+# Git state
+git log --oneline -20
+git branch -vv
+git remote -v
+# Check that typo file
+ls -la requirements.txt*
+# Python deps
+pip list
+clear
+cat ml-model/generate_data.py
+cat > ml-model/generate_data.py << 'EOF'
+
+IT-infrastructure KPI generator for the anomaly-detection POC.
+a time-series dataset of CPU, RAM and network metrics with a
+proportion of injected anomalies, matching the use case
+in the Restitution 1 deck (anomaly detection on Tunisie Telecom
+metrics via Isolation Forest).
+columns:
+cpu, ram, network, label
+: CPU usage (%), normal ~ N(40, 10)
+: RAM usage (%), normal ~ N(60, 10)
+: Network throughput (MB/s), normal ~ N(100, 20)
+: 0 = normal, 1 = anomaly
+overlap partially with normal points to keep the task non-trivial.
+__future__ import annotations
+argparse
+logging
+datetime import datetime, timedelta
+pathlib import Path
+numpy as np
+pandas as pd
+format="%(asctime)s [%(levelname)s] %(message)s")
+= logging.getLogger("generate_data")
+Defaults match the deck spec: ~5% anomalies, 1000 samples
+= 1000
+= 0.05
+= 42
+= Path(__file__).resolve().parent.parent / "data" / "data.csv"
+generate(n: int, anomaly_ratio: float, seed: int) -> pd.DataFrame:
+a synthetic IT-metric dataset with injected anomalies."""
+= np.random.default_rng(seed)
+= int(round(n * anomaly_ratio))
+= n - n_anomaly
+Normal regime (realistic server load)
+= rng.normal(40, 10, n_normal).clip(0, 100)
+= rng.normal(60, 10, n_normal).clip(0, 100)
+= rng.normal(100, 20, n_normal).clip(0, None)
+Anomalies: high values, but with noise so detection isn't trivial.
+A fraction of anomalies are "subtle" — only one of the three KPIs spikes.
+= 0.3
+= int(round(n_anomaly * subtle_ratio))
+= n_anomaly - n_subtle
+Full anomalies: all three KPIs elevated
+= rng.normal(85, 6, n_full).clip(0, 100)
+= rng.normal(88, 5, n_full).clip(0, 100)
+= rng.normal(600, 120, n_full).clip(0, None)
+Subtle anomalies: only one KPI spikes; the others stay normal
+= rng.normal(40, 10, n_subtle).clip(0, 100)
+= rng.normal(60, 10, n_subtle).clip(0, 100)
+= rng.normal(100, 20, n_subtle).clip(0, None)
+= rng.integers(0, 3, n_subtle)
+== 0] = rng.normal(90, 4, (pick == 0).sum()).clip(0, 100)
+== 1] = rng.normal(92, 3, (pick == 1).sum()).clip(0, 100)
+== 2] = rng.normal(550, 100, (pick == 2).sum()).clip(0, None)
+= np.concatenate([cpu_n, cpu_af, cpu_as])
+= np.concatenate([ram_n, ram_af, ram_as])
+= np.concatenate([net_n, net_af, net_as])
+= np.concatenate([
+dtype=int),
++ n_subtle, dtype=int),
+Shuffle so anomalies are not contiguous at the end
+= rng.permutation(n)
+ram, net, labels = cpu[idx], ram[idx], net[idx], labels[idx]
+Add a timestamp column (1-minute scrape interval, matches Prometheus default)
+= datetime(2026, 1, 1, 0, 0, 0)
+= [start + timedelta(minutes=i) for i in range(n)]
+= pd.DataFrame({
+timestamps,
+cpu.round(3),
+ram.round(3),
+net.round(3),
+labels,
+df
+parse_args() -> argparse.Namespace:
+= argparse.ArgumentParser(description=__doc__)
+type=int, default=DEFAULT_N,
+samples (default: {DEFAULT_N})")
+type=float, default=DEFAULT_ANOMALY_RATIO,
+of anomalies (default: {DEFAULT_ANOMALY_RATIO})")
+type=int, default=DEFAULT_SEED,
+seed (default: {DEFAULT_SEED})")
+type=Path, default=DEFAULT_OUTPUT,
+CSV path (default: {DEFAULT_OUTPUT})")
+p.parse_args()
+main() -> None:
+= parse_args()
+not (0 < args.anomaly_ratio < 1):
+SystemExit("anomaly-ratio must be in (0, 1)")
+%d samples (anomaly ratio: %.1f%%, seed: %d)",
+args.anomaly_ratio * 100, args.seed)
+= generate(args.samples, args.anomaly_ratio, args.seed)
+exist_ok=True)
+index=False)
+= int(df["label"].sum())
+%d rows to %s (normal: %d, anomaly: %d)",
+args.output, len(df) - n_anom, n_anom)
+__name__ == "__main__":
+rm ml-model/generate_data.py
+ls ml-model/
+[200~nano ml-model/generate_data.py
+nano ml-model/generate_data.py
+python -c "import ast; ast.parse(open('ml-model/generate_data.py').read()); print('OK')"
+~~~~~[200~(venv) root@pfe-virtual-machine:~/devsecmlops-pfe# ^[[200~python -c "import ast; ast.parse(open('ml-model/generate_data.py').read()); print('OK')"~^C
+(venv) root@pfe-virtual-machine:~/devsecmlops-pfe# python -c "import ast; ast.parse(open('ml-model/generate_data.py').read()); print('OK')"
+OK
+(venv) root@pfe-virtual-machine:~/devsecmlops-pfe#
+~clear
+gedit ml-model/generate_data.pDDDy
+gedit ml-model/generate_data.py
+[200~python -c "import ast; ast.parse(open('ml-model/generate_data.py').read()); print('OK')"
+python ml-model/generate_data.py
+ls data/data.csv
+tail -10 data/data.csv
+cat data/data.csv
+git add ml-model/generate_data.py
+[200~git commit -m "feat(ml-model): synthetic data generator (POC)"
+git commit -m "feat(ml-model): synthetic data generator (POC)"
+git push
+git config --global credential.helper store
+ls -la ~/.git-credentials 2>/dev/null && echo "exists" || echo "empty"
+cat ~/.git-credentials 2>/dev/null
+echo "" >> README.md 2>/dev/null || touch .keep
+git add -A
+git commit --allow-empty -m "chore: trigger credential save"
+cat ~/.git-credentials
+gedit ml-model/train.py
+[200~python -c "import ast; ast.parse(open('ml-model/train.py').read()); print('OK')"
+python -c "import ast; ast.parse(open('ml-model/train.py').read()); print('OK')"
+python ml-model/train.py
+git add ml-model/train.py
+git commit -m "feat(ml-model): Isolation Forest training (F1=0.94 on synthetic POC)"
+cat README.md
+cat requirements.txtpip
+rm -f requirements.txtpip
+# 1. Delete the typo file
+# 2. Save command history to scripts/
+history | awk '{$1=""; print substr($0,2)}' | awk '!seen[$0]++' > scripts/setup_history.txt
