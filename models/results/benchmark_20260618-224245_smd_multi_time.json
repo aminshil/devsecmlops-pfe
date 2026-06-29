@@ -1,0 +1,45 @@
+{
+  "data": "data/smd_multi.csv",
+  "time_features": true,
+  "contamination": 0.05,
+  "n_machines": 28,
+  "anomaly_ratio": 0.041562914655148074,
+  "models": {
+    "z-threshold (|z|>3)": {
+      "precision": 0.19044306274185835,
+      "recall": 0.49586776859504134,
+      "f1": 0.27519477255591857,
+      "roc_auc": 0.7911326473056758
+    },
+    "IsolationForest (raw)": {
+      "precision": 0.15074471112797647,
+      "recall": 0.1798935808898449,
+      "f1": 0.16403427273665738,
+      "roc_auc": 0.6738059969020946
+    },
+    "IsolationForest (z-scored)": {
+      "precision": 0.23036499140072617,
+      "recall": 0.2729536963659006,
+      "f1": 0.2498575055702368,
+      "roc_auc": 0.741887427014085
+    },
+    "OneClassSVM (z-scored)": {
+      "precision": 0.2748792727961367,
+      "recall": 0.3286539114683573,
+      "f1": 0.29937093946581417,
+      "roc_auc": 0.7677845366136213
+    },
+    "LocalOutlierFactor (z-scored)": {
+      "precision": 0.19268784185778717,
+      "recall": 0.22732933318238424,
+      "f1": 0.20858003531733665,
+      "roc_auc": 0.6965254052504228
+    },
+    "Autoencoder (z-scored)": {
+      "precision": 0.2542580220193846,
+      "recall": 0.3058983357862561,
+      "f1": 0.2776978417266187,
+      "roc_auc": 0.7839675176536154
+    }
+  }
+}

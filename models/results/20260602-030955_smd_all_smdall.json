@@ -1,0 +1,89 @@
+{
+  "experiment_id": "20260602-030955_smd_all_smdall",
+  "timestamp": "20260602-030955",
+  "data": "data/smd_all.csv",
+  "model": "IsolationForest",
+  "hyperparameters": {
+    "contamination": 0.0946,
+    "n_estimators": 100,
+    "max_samples": "auto",
+    "random_state": 42
+  },
+  "dataset": {
+    "total_samples": 28479,
+    "features": [
+      "cpu",
+      "ram",
+      "network",
+      "col_3",
+      "col_5",
+      "col_6",
+      "col_8",
+      "col_9",
+      "col_10",
+      "col_11",
+      "col_12",
+      "col_13",
+      "col_14",
+      "col_15",
+      "col_18",
+      "col_19",
+      "col_20",
+      "col_21",
+      "col_22",
+      "col_23",
+      "col_24",
+      "col_25",
+      "col_26",
+      "col_27",
+      "col_28",
+      "col_29",
+      "col_30",
+      "col_31",
+      "col_32",
+      "col_33",
+      "col_34",
+      "col_35"
+    ],
+    "n_features": 32,
+    "anomaly_ratio": 0.09459601811861372,
+    "train_size": 19935,
+    "test_size": 8544
+  },
+  "metrics_test": {
+    "f1": 0.45085995085995084,
+    "precision": 0.4475609756097561,
+    "recall": 0.4542079207920792,
+    "roc_auc": 0.8804090045767763,
+    "confusion_matrix": [
+      [
+        7283,
+        453
+      ],
+      [
+        441,
+        367
+      ]
+    ],
+    "n_samples": 8544,
+    "n_anomalies": 808
+  },
+  "metrics_train": {
+    "f1": 0.43584305408271473,
+    "precision": 0.43584305408271473,
+    "recall": 0.43584305408271473,
+    "roc_auc": 0.8842900089287985,
+    "confusion_matrix": [
+      [
+        16985,
+        1064
+      ],
+      [
+        1064,
+        822
+      ]
+    ],
+    "n_samples": 19935,
+    "n_anomalies": 1886
+  }
+}

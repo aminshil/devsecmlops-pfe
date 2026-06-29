@@ -1,0 +1,60 @@
+{
+  "experiment_id": "20260602-030954_smd_3feat_smd3",
+  "timestamp": "20260602-030954",
+  "data": "data/smd_3feat.csv",
+  "model": "IsolationForest",
+  "hyperparameters": {
+    "contamination": 0.0946,
+    "n_estimators": 100,
+    "max_samples": "auto",
+    "random_state": 42
+  },
+  "dataset": {
+    "total_samples": 28479,
+    "features": [
+      "cpu",
+      "ram",
+      "network"
+    ],
+    "n_features": 3,
+    "anomaly_ratio": 0.09459601811861372,
+    "train_size": 19935,
+    "test_size": 8544
+  },
+  "metrics_test": {
+    "f1": 0.4956949569495695,
+    "precision": 0.49266503667481665,
+    "recall": 0.49876237623762376,
+    "roc_auc": 0.9145043713588008,
+    "confusion_matrix": [
+      [
+        7321,
+        415
+      ],
+      [
+        405,
+        403
+      ]
+    ],
+    "n_samples": 8544,
+    "n_anomalies": 808
+  },
+  "metrics_train": {
+    "f1": 0.4809119830328738,
+    "precision": 0.4809119830328738,
+    "recall": 0.4809119830328738,
+    "roc_auc": 0.9214079623120918,
+    "confusion_matrix": [
+      [
+        17070,
+        979
+      ],
+      [
+        979,
+        907
+      ]
+    ],
+    "n_samples": 19935,
+    "n_anomalies": 1886
+  }
+}

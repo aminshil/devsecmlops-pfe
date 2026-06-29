@@ -1,10 +1,21 @@
+# Python
 venv/
 __pycache__/
 *.pyc
+*.pyo
+
+# Large ML binary artifacts (regenerate locally)
 *.pkl
 *.h5
-*.csv
+
+# Large data files (regenerate with scripts)
+data/smd-raw/
+data/*.csv
+
+# MLflow local runs
+mlruns/
+
+# IDE
 .vscode/
 .idea/
 .DS_Store
-mlruns/

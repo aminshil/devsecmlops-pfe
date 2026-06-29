@@ -1,0 +1,38 @@
+{
+  "data": "data/smd_multi.csv",
+  "contamination": 0.0946,
+  "n_machines": 28,
+  "anomaly_ratio": 0.04156666666666667,
+  "models": {
+    "z-threshold (|z|>3)": {
+      "precision": 0.5238095238095238,
+      "recall": 0.16176470588235295,
+      "f1": 0.24719101123595505,
+      "roc_auc": 0.6845142189202895
+    },
+    "IsolationForest (raw)": {
+      "precision": 0.14353782013103036,
+      "recall": 0.32219251336898397,
+      "f1": 0.19859909353110836,
+      "roc_auc": 0.6220215419494105
+    },
+    "IsolationForest (z-scored)": {
+      "precision": 0.19350887936313532,
+      "recall": 0.42245989304812837,
+      "f1": 0.26543469130617386,
+      "roc_auc": 0.6853644652220435
+    },
+    "OneClassSVM (z-scored)": {
+      "precision": 0.20352941176470588,
+      "recall": 0.4625668449197861,
+      "f1": 0.2826797385620915,
+      "roc_auc": 0.7250419543700118
+    },
+    "LocalOutlierFactor (z-scored)": {
+      "precision": 0.07816091954022988,
+      "recall": 0.18181818181818182,
+      "f1": 0.10932475884244373,
+      "roc_auc": 0.5719200114440735
+    }
+  }
+}

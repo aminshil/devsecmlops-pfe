@@ -1,0 +1,151 @@
+# ============================================================
+# DevSecMLOps PFE — Setup & POC Commands Log
+# Author: Amine Shil
+# Period covered: Initial repo setup → M1-W3 POC complete
+# ============================================================
+
+# ------------------------------------------------------------
+# 0. SYSTEM PREP (Ubuntu VM, run once)
+# ------------------------------------------------------------
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y git curl wget vim python3 python3-pip python3-venv build-essential net-tools tree
+
+git config --global user.name "Amine Shil"
+git config --global user.email "amine.shil@esprit.tn"
+
+# ------------------------------------------------------------
+# 1. PROJECT STRUCTURE
+# ------------------------------------------------------------
+mkdir -p ~/devsecmlops-pfe/{docs,ml-model,data,models,api,kubernetes,monitoring,tests,scripts}
+cd ~/devsecmlops-pfe
+
+# ------------------------------------------------------------
+# 2. PYTHON ENVIRONMENT
+# ------------------------------------------------------------
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install pandas numpy scikit-learn mlflow joblib fastapi uvicorn matplotlib seaborn
+pip freeze > requirements.txt
+
+# ------------------------------------------------------------
+# 3. GIT INIT + .gitignore + first commits
+# ------------------------------------------------------------
+git init
+
+cat > .gitignore << 'EOF'
+venv/
+__pycache__/
+*.pyc
+*.pkl
+*.h5
+*.csv
+.vscode/
+.idea/
+.DS_Store
+mlruns/
+EOF
+
+git add .
+git commit -m "Initial project structure"
+git add .gitignore
+git commit -m "Add .gitignore"
+
+# ------------------------------------------------------------
+# 4. REMOTE (GitHub) + AUTH
+# ------------------------------------------------------------
+git remote add origin https://github.com/aminshil/devsecmlops-pfe.git
+git branch -M main
+git push -u origin main
+
+# Auth: GitHub Personal Access Token (PAT) created at
+#   https://github.com/settings/tokens  (scope: repo)
+# Stored once via:
+git config --global credential.helper store
+# (next git push will save the token to ~/.git-credentials)
+
+# ------------------------------------------------------------
+# 5. ML CODE — Synthetic data generator (M1-W3)
+# ------------------------------------------------------------
+gedit ml-model/generate_data.py
+# (file content: see ml-model/generate_data.py in the repo)
+# Validate syntax without running:
+python -c "import ast; ast.parse(open('ml-model/generate_data.py').read()); print('OK')"
+# Run it (creates data/data.csv):
+python ml-model/generate_data.py
+
+git add ml-model/generate_data.py
+git commit -m "feat(ml-model): synthetic data generator (POC)"
+git push
+
+# ------------------------------------------------------------
+# 6. ML CODE — Isolation Forest training (M1-W3 deliverable)
+# ------------------------------------------------------------
+gedit ml-model/train.py
+# (file content: see ml-model/train.py in the repo)
+python -c "import ast; ast.parse(open('ml-model/train.py').read()); print('OK')"
+python ml-model/train.py
+# Result: F1 = 0.940 (target was >= 0.85)  ✓
+
+git add ml-model/train.py
+git commit -m "feat(ml-model): Isolation Forest training (F1=0.94 on synthetic POC)"
+git push
+
+# ------------------------------------------------------------
+# 7. DOCS — README with POC results + setup history
+# ------------------------------------------------------------
+gedit README.md
+# (sections: Stack, Architecture pillars, Current status (POC), Repo layout,
+#  Setup, Compliance, Author, Supervisors)
+
+git add README.md scripts/setup_history.txt
+git commit -m "docs: README with POC results (F1=0.94) + setup history"
+git push
+
+# ------------------------------------------------------------
+# 8. CLEANUP — remove typo file
+# ------------------------------------------------------------
+rm -f requirements.txtpip
+git add -A
+git commit -m "chore: remove typo file requirements.txtpip"
+git push
+
+# ------------------------------------------------------------
+# USEFUL ONE-LINERS
+# ------------------------------------------------------------
+# View repo tree without venv/git noise:
+tree -a -I 'venv|__pycache__|.git|mlruns' -L 3
+
+# Inspect current git state:
+git status
+git log --oneline -20
+git branch -vv
+git remote -v
+
+# Inspect installed Python deps:
+pip list
+cat requirements.txt
+
+# Validate Python syntax without running:
+python -c "import ast; ast.parse(open('FILE.py').read()); print('OK')"
+
+# Re-generate full history snapshot:
+history | awk '{$1=""; print substr($0,2)}' | awk '!seen[$0]++' > scripts/setup_history.txt
+
+# ------------------------------------------------------------
+# CONVENTIONAL COMMITS USED
+# ------------------------------------------------------------
+# feat(scope)  : new feature       e.g. feat(ml-model): training script
+# fix(scope)   : bug fix
+# docs(scope)  : docs only
+# chore(scope) : maintenance (deps, configs)
+# refactor     : restructure without behavior change
+# test         : tests added/changed
+# ci           : CI/CD pipeline (Jenkinsfile, GH Actions)
+
+# ------------------------------------------------------------
+# NEXT STEPS
+# ------------------------------------------------------------
+# M1-W4: Validate on Server Machine Dataset (SMD)
+# M2  : Wrap training in Jenkins CI/CD pipeline
+# M3  : MLflow tracking + MinIO artifact storage

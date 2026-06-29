@@ -1,0 +1,60 @@
+{
+  "experiment_id": "20260602-030901_data_synthetic",
+  "timestamp": "20260602-030901",
+  "data": "data/data.csv",
+  "model": "IsolationForest",
+  "hyperparameters": {
+    "contamination": 0.05,
+    "n_estimators": 100,
+    "max_samples": "auto",
+    "random_state": 42
+  },
+  "dataset": {
+    "total_samples": 1000,
+    "features": [
+      "cpu",
+      "ram",
+      "network"
+    ],
+    "n_features": 3,
+    "anomaly_ratio": 0.05,
+    "train_size": 700,
+    "test_size": 300
+  },
+  "metrics_test": {
+    "f1": 0.8888888888888888,
+    "precision": 1.0,
+    "recall": 0.8,
+    "roc_auc": 0.9976608187134504,
+    "confusion_matrix": [
+      [
+        285,
+        0
+      ],
+      [
+        3,
+        12
+      ]
+    ],
+    "n_samples": 300,
+    "n_anomalies": 15
+  },
+  "metrics_train": {
+    "f1": 0.9714285714285714,
+    "precision": 0.9714285714285714,
+    "recall": 0.9714285714285714,
+    "roc_auc": 0.9997851772287862,
+    "confusion_matrix": [
+      [
+        664,
+        1
+      ],
+      [
+        1,
+        34
+      ]
+    ],
+    "n_samples": 700,
+    "n_anomalies": 35
+  }
+}
