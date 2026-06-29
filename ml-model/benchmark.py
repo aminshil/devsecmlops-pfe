@@ -28,7 +28,7 @@ from preprocess import build_baselines, apply_zscore, save_baselines
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS_DIR = ROOT / "models" / "results"
 MODELS_DIR = ROOT / "models"
-META_COLS = {"timestamp", "machine", "label"}
+META_COLS = {"timestamp", "machine", "label", "type"}
 console = Console()
 
 
