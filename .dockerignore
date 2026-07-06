@@ -1,0 +1,49 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Big data — never bake into image
+data/
+*.csv
+*.h5
+
+# MLflow
+mlruns/
+
+# Backups
+*.bak
+
+# Old / experimental models (only ship telecom serving artifacts)
+models/model_*.pkl
+models/model.pkl
+models/baselines_*.json
+models/serving_*.pkl
+models/serving_*.json
+models/smd_serving_*.pkl
+models/smd_serving_*.json
+models/results/
+
+# Repo housekeeping
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+docs/
+notebooks/
+scripts/
+tests/
+kubernetes/
+monitoring/
+ansible/
+
+# Docker & CI files themselves
+Dockerfile
+docker-compose.yml
+Jenkinsfile
+requirements-dev.txt
+README.md

@@ -1,0 +1,7 @@
+# Pinned to match VM versions so joblib can load the .pkl inside the container.
+fastapi==0.135.3
+uvicorn[standard]==0.44.0
+pydantic==2.12.5
+pandas==2.3.3
+scikit-learn==1.7.2
+joblib==1.5.3
