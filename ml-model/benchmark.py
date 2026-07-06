@@ -23,12 +23,12 @@ from rich import box
 
 warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from preprocess import build_baselines, apply_zscore, save_baselines
+from preprocess import build_baselines, apply_zscore, save_baselines, add_window_column
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS_DIR = ROOT / "models" / "results"
 MODELS_DIR = ROOT / "models"
-META_COLS = {"timestamp", "machine", "label", "type"}
+META_COLS = {"timestamp", "machine", "label", "type", "hour", "window"}
 console = Console()
 
 
@@ -139,6 +139,8 @@ def run():
     idx_tr, idx_te = train_test_split(df.index, test_size=args.test_size, random_state=args.seed, stratify=y)
     df_tr, df_te = df.loc[idx_tr], df.loc[idx_te]
     y_tr, y_te = y.loc[idx_tr], y.loc[idx_te]
+    df_tr = add_window_column(df_tr)
+    df_te = add_window_column(df_te)
     baselines = build_baselines(df_tr, features)
     Xz_tr = apply_zscore(df_tr, baselines, features)
     Xz_te = apply_zscore(df_te, baselines, features)

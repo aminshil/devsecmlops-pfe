@@ -15,8 +15,14 @@ data/*.csv
 # MLflow local runs
 mlruns/
 
+# Backups
+*.bak
+
 # IDE
 .vscode/
 .idea/
 .DS_Store
-venv/
+
+# --- Allow the shipped serving artifacts (baked into Docker image) ---
+!models/telecom_serving_model.pkl
+!models/telecom_serving_baselines.json
