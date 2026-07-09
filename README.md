@@ -1,69 +1,259 @@
-# DevSecMLOps Cloud-Native Platform
+# DevSecMLOps Platform
 
-End-of-studies project — ESPRIT × Tunisie Telecom (Jan–June 2026).
+**Conception et mise en œuvre d'une plateforme DevSecMLOps Cloud-Native**
+PFE ESPRIT × Tunisie Telecom — 2025–2026 — Amine Shil
 
-Open-source platform automating the secure ML lifecycle: from a Git commit
-to a monitored anomaly-detection model in production. Use case: anomaly
-detection on IT infrastructure KPIs (CPU, RAM, network) via Isolation Forest.
+A self-hosted, cloud-native platform that detects anomalies on IT infrastructure
+(CPU, RAM, network, disk, load) using machine learning, delivered through a
+fully automated, security-gated CI/CD pipeline.
 
-## Stack
-Jenkins · Docker · Kubernetes · Ansible · Python/FastAPI · scikit-learn ·
-MLflow · MinIO · SonarQube · Trivy · Prometheus · Grafana
+---
 
-## Architecture pillars
-1. **Automation** — end-to-end CI/CD from commit to deployed model
-2. **Reproducibility** — every experiment and artefact versioned
-3. **Security** — SAST + image scanning as pipeline gates
-4. **Observability** — metrics, alerts, drift detection, auto-retraining
+## Status
 
-## Current status — POC
+| Layer | Component | Status |
+|-------|-----------|--------|
+| L0 | ML model — Isolation Forest, per-machine per-time-window z-score | ✅ Done |
+| L1 | FastAPI serving layer | ✅ Done |
+| L2 | Docker + local registry | ✅ Done |
+| L3 | Jenkins CI/CD (7 stages, SonarQube, Trivy) | 🔨 In progress |
+| L4 | Kubernetes (Minikube) | 📋 Planned |
+| L5 | Monitoring (Prometheus, Grafana, Node Exporter) | 📋 Planned |
+| L6 | Ansible (infrastructure as code) | 📋 Planned |
 
-**M1-W3 (POC validation):** Synthetic data generator + Isolation Forest baseline.
+**Current model (v2.3.0):** F1 = 0.648 · Precision = 0.646 · Recall = 0.650 · ROC-AUC = 0.924
+on a 200-machine synthetic Tunisie Telecom fleet, 6.77% anomaly rate, 6 features.
 
-- Dataset: 1000 samples, 5% anomalies (950 normal, 50 anomaly)
-- Model: scikit-learn IsolationForest, 100 estimators, contamination=0.05
-- Result: **F1-score = 0.94** on synthetic data (target: ≥ 0.85)
+---
 
-### Run the POC
-```bash
-source venv/bin/activate
-python ml-model/generate_data.py    # writes data/data.csv
-python ml-model/train.py            # trains, evaluates, saves models/model.pkl
+## Architecture
+
+```
+Git push → Jenkins (SonarQube → train → F1 gate → Docker build → Trivy scan → deploy)
+                                                          │
+                                                          ▼
+                                          Docker image (model baked in)
+                                                          │
+                                                          ▼
+                                   Kubernetes: FastAPI pods (2+ replicas)
+                                                          │
+                        ┌─────────────────────────────────┼─────────────────────┐
+                        ▼                                 ▼                     ▼
+              Node Exporter (fleet)              Prometheus scrape      Grafana dashboards
+                                                          │
+                                                          ▼
+                                         Anomaly bridge → /predict → Alertmanager
 ```
 
-### Next milestones
-- **M1-W4:** Validate on real data (Server Machine Dataset)
-- **M2:** Wrap training in Jenkins CI/CD pipeline
-- **M3:** Log experiments to MLflow, store artifacts in MinIO
+Everything runs on a single self-hosted VM for the PFE demo. The same Docker
+images and Kubernetes manifests deploy unmodified to a multi-node production
+cluster — only configuration changes, not code.
 
-## Repo layout
-- `ml-model/`     training code, notebooks, model artefacts
-- `api/`          FastAPI inference service
-- `data/`         datasets (gitignored)
-- `models/`       trained models (gitignored)
-- `kubernetes/`   K8s manifests
-- `monitoring/`   Prometheus + Grafana configs
-- `tests/`        pytest suite
-- `scripts/`      utility scripts (training, deploy)
-- `docs/`         architecture diagrams, report drafts
+---
 
-## Setup
-```bash
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt           # runtime deps
-pip install -r requirements-dev.txt       # dev/test deps (pytest etc.)
+## The ML model
+
+### Why Isolation Forest
+
+Six anomaly-detection methods were benchmarked on the same data
+(`ml-model/benchmark.py`, results in `models/results/`):
+
+| Model | F1 | ROC-AUC |
+|-------|-----|---------|
+| **Isolation Forest, z-scored (shipped)** | **0.640+** | **0.90+** |
+| OneClassSVM, z-scored | 0.59 | 0.88 |
+| z-threshold (\|z\|>3) baseline | 0.48–0.65 | 0.84–0.90 |
+| Autoencoder, z-scored | 0.43 | 0.85 |
+| Local Outlier Factor, z-scored | 0.30 | 0.74 |
+| Isolation Forest, raw (no z-score) | 0.35 | 0.76 |
+
+Isolation Forest was chosen deliberately, not by default: it requires no
+labeled anomalies (production has none), infers in under 10ms, needs only one
+key hyperparameter (`contamination`), and scales cleanly to 200+ machines.
+The z-score normalization step is what actually drives performance — raw
+Isolation Forest scores ~0.35 F1; z-scored jumps to ~0.64.
+
+### Why unsupervised, not supervised
+
+A supervised classifier (Random Forest, XGBoost, etc.) would score higher F1
+on this labeled synthetic dataset, but it needs labeled anomalies to train.
+Production infrastructure has none — nobody manually labels every anomalous
+minute across 200 servers. Isolation Forest learns "normal" from the incoming
+metric stream with zero labels, and can flag anomaly *types* it has never
+seen before. The dataset's `label` column is used only to evaluate the model,
+never to train it.
+
+### Why per-machine, per-time-window baselines (not global, not raw)
+
+Every metric is z-scored *before* reaching the model:
+
+```
+z = (raw_value - machine's own mean) / machine's own std
 ```
 
-## Compliance & constraints
-- ISO 27001 alignment (access control, audit, vulnerability management)
-- Data sovereignty: all artefacts hosted in-country (MinIO, self-hosted MLflow)
-- Network segmentation: K8s NetworkPolicies between training/serving/monitoring
-- Data security: TLS in transit, encryption at rest, K8s Secrets
+A web server idling at 30% CPU and a database server running hot at 75% CPU
+are both "normal" — a single global threshold can't capture that, but a
+per-machine baseline can.
 
-## Author
-Amine Shil — amine.shil@esprit.tn
+Baselines are split further into four **time windows** — night (00–06),
+morning (06–12), afternoon (12–18), evening (18–24) — because a single
+all-day average smooths out day/night variation. A machine idling at 30% CPU
+at night that jumps to 50% CPU still at night is anomalous, but a same-machine
+50% CPU reading during the day is completely normal. Splitting the baseline
+by time window lets the model catch subtle time-dependent anomalies that a
+flat, all-day baseline misses.
 
-## Supervisors
-- Werghemmi Radhia (ESPRIT — faculty)
-- Shema Essaddi (ESPRIT — technical expert)
-- Sebti Chouchene (Tunisie Telecom — company)
+This was tested rigorously, not assumed (`ml-model/test_timewindow_full.py`,
+full 200-machine fleet, threshold-tuned comparison):
+
+| Baseline strategy | F1 (tuned threshold) | ROC-AUC |
+|---|---|---|
+| Per-machine, all-day | 0.6434 | 0.9066 |
+| **Per-machine, per-time-window (shipped)** | **0.6475** | **0.9091** |
+| Per-machine + explicit time features (hour_sin/cos) | 0.6064 | 0.8964 |
+
+Explicit time features (adding `hour_sin`, `hour_cos` as extra columns) were
+tested and **rejected**: the per-machine baseline already implicitly encodes
+temporal patterns (its mean is computed over the full day/night cycle), so
+adding time as a separate feature is redundant and slightly hurts the
+Isolation Forest's decision boundary in low-dimensional space. Splitting the
+*baseline itself* by time window, instead of adding time as a model feature,
+avoids that redundancy while still capturing the temporal signal.
+
+**Four-level fallback chain** for machines the model has never seen:
+`machine+window → machine (all-day) → machine type → global fleet average`.
+The API reports which level was used on every prediction (`baseline_used`),
+making the fallback auditable.
+
+### Why 6 features, and why network gear doesn't get all of them
+
+The model started with 3 features (cpu, ram, network) and was expanded to 6:
+`cpu, ram, network, disk_io, disk_usage, load_avg`.
+
+**Why expand:** 3 features miss entire classes of real incidents. A disk
+filling up, or a disk I/O storm, produces almost no signal in cpu/ram/network
+— the model is structurally blind to it. Benchmarked on the full fleet, 6
+features raised the shipped model from F1=0.641 to F1=0.648 with ROC-AUC
+0.918 → 0.924, and — more importantly — made an entire failure category
+(disk saturation) detectable at all.
+
+**Why not more than 6:** Isolation Forest degrades in high-dimensional spaces
+(the "curse of dimensionality" — splits become less informative as dimensions
+grow). Six complementary, low-correlation metrics is close to the practical
+ceiling for this model family at this data volume; the six chosen map
+directly to what real monitoring agents actually export.
+
+**Why network gear (router, firewall, dns, voip) has near-zero disk/load:**
+This is not a shortcut, it reflects real hardware. Servers
+(web/app/db/cache/queue/batch/edge) run Linux and expose all 6 metrics via
+Node Exporter. Network appliances like Cisco routers and firewalls are
+monitored via **SNMP**, not Node Exporter, and physically have no spinning
+disk — they boot from flash. `disk_io`, `disk_usage`, and `load_avg` (a
+Unix scheduler concept) don't meaningfully exist on that hardware. The
+synthetic data generator (`ml-model/generate_telecom_fleet.py`) reflects
+this: network-gear profiles carry near-zero disk/load noise floors instead
+of fabricated values, and the `disk_saturation` anomaly type is disabled for
+those machine types since it is physically impossible on diskless hardware.
+The per-type baseline correctly learns that near-zero disk activity is
+*normal* for a router, so it is never falsely flagged.
+
+### Known limitation
+
+A single mean/std per machine-window still smooths within that 6-hour
+window. A very short, sharp spike inside one window could be partially
+absorbed. Finer-grained (hourly) baselines were not pursued — the 4-window
+split already captures the dominant day/night pattern, and finer windows
+would fragment the training data per bucket on a 30-day dataset.
+
+---
+
+## API
+
+FastAPI service, model baked into the Docker image (2 MB `.pkl` — rebuild
+cost is seconds, so image tag = exact model version; no external model
+registry needed at this scale).
+
+```
+GET  /health     service status, feature list, fallback chain
+GET  /machines    all known machines with type
+POST /predict     anomaly score for one reading
+```
+
+`POST /predict` body:
+```json
+{
+  "machine": "web-01",
+  "hour": 14,
+  "metrics": {
+    "cpu": 30, "ram": 50, "network": 80,
+    "disk_io": 25, "disk_usage": 40, "load_avg": 1.2
+  }
+}
+```
+`hour` (0–23) or `timestamp` (ISO 8601) is optional — omitting it falls back
+to the machine's all-day baseline.
+
+Response includes `is_anomaly`, `anomaly_score`, per-feature `z_scores`
+(for operator-facing explainability — "cpu z=7.4" tells the ops team exactly
+which metric is driving the alert), and `baseline_used` (which fallback
+level fired).
+
+---
+
+## Repository layout
+
+```
+api/                  FastAPI service (app.py)
+ml-model/             training, benchmarking, data generation
+  preprocess.py         baseline construction + z-score + fallback chain
+  train_serving_telecom.py   final trainer (production artifact)
+  generate_telecom_fleet.py  synthetic 200-machine fleet generator
+  benchmark.py           6-model comparison harness
+  test_timewindow_full.py    baseline-strategy experiment (evidence)
+  zscore_demo.py         worked example / defense demo script
+models/                trained artifacts + benchmark result JSONs (evidence)
+data/                  generated fleet CSV (not committed — regenerate locally)
+Dockerfile             API image, model baked in, non-root user
+docker-compose.yml     local dev stack
+kubernetes/            manifests (L4, in progress)
+monitoring/            Prometheus/Grafana config (L5, in progress)
+scripts/               utility scripts (screenshot capture, etc.)
+screenshots/           defense evidence — benchmark tables, API demos
+```
+
+---
+
+## Reproducing locally
+
+```bash
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+
+# Generate the synthetic fleet (200 machines, 30 days, 6 features)
+python ml-model/generate_telecom_fleet.py --machines 200 --days 30
+
+# Train the serving model
+python ml-model/train_serving_telecom.py
+
+# Benchmark against 5 alternative methods
+python ml-model/benchmark.py --data data/telecom_fleet.csv --max-rows 80000
+
+# Serve
+MODEL_NAME=telecom uvicorn api.app:app --host 0.0.0.0 --port 8000
+
+# Or containerized
+docker build -t devsecmlops-api:2.3.0 .
+docker run -p 8000:8000 devsecmlops-api:2.3.0
+```
+
+---
+
+## Roadmap
+
+- **L3 — Jenkins:** 7-stage pipeline (checkout → SonarQube SAST → train + F1
+  quality gate → Docker build → Trivy CVE scan → push → deploy)
+- **L4 — Kubernetes:** Minikube, `ml-serving` + `infra` namespaces, HPA,
+  non-root securityContext
+- **L5 — Monitoring:** Node Exporter on the fleet → Prometheus → anomaly
+  bridge (polls Prometheus, calls `/predict`) → Grafana + Alertmanager
+- **L6 — Ansible:** playbook to reproduce the entire platform from a bare VM
