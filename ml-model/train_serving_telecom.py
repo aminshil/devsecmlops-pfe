@@ -3,12 +3,16 @@ Trains the Telecom serving artifact using per-machine PER-TIME-WINDOW
 z-scored features across all 200 telecom machines on the full fleet dataset.
 
 Decision record:
-  - Time features as explicit columns (hour_sin/cos): tested, REJECTED (F1 0.640 -> 0.616)
+  - Time features as explicit columns (hour_sin/cos): tested, REJECTED (adds redundancy)
   - Per-time-window baselines (this approach): tested on full fleet, ADOPTED
-    A) per-machine        F1@thr=0.6434  ROC-AUC=0.9066
-    C) per-time-window    F1@thr=0.6475  ROC-AUC=0.9091  <-- shipped
+
+  Final v2.3.0 (6 features, per-time-window):
+      F1 = 0.648   Precision = 0.646   Recall = 0.650   ROC-AUC = 0.924
+
   Per-time-window catches subtle time-dependent anomalies (e.g. 50% CPU at 3am
   on a machine that idles at 30% at night) that a single all-day baseline misses.
+  See test_timewindow_full.py for the tuned-threshold comparison that motivated
+  choosing C over per-machine baselines.
 
 Outputs:
   models/telecom_serving_model.pkl

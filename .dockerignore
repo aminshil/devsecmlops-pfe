@@ -27,6 +27,10 @@ models/smd_serving_*.pkl
 models/smd_serving_*.json
 models/results/
 
+# Only preprocess.py is needed at runtime (Dockerfile COPYs it explicitly)
+ml-model/
+!ml-model/preprocess.py
+
 # Repo housekeeping
 .git/
 .gitignore

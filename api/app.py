@@ -1,8 +1,8 @@
 """
-FastAPI anomaly-detection service — DevSecMLOps Platform v2.2.0
+FastAPI anomaly-detection service — DevSecMLOps Platform v2.3.0
 Selectable artifact via MODEL_NAME env var: telecom (default) | smd | serving
 
-NEW in v2.2.0 — per-time-window baselines:
+v2.2.0 introduced — per-time-window baselines:
   Each machine has separate baselines for night/morning/afternoon/evening.
   /predict accepts an optional 'hour' (0-23) or 'timestamp' to pick the window.
   If neither is given, falls back to the per-machine (all-day) baseline.
@@ -113,7 +113,7 @@ def _get_stats(machine: str, window: str | None, machine_type: str | None):
 
 app = FastAPI(
     title=f"DevSecMLOps — Anomaly Detector [{MODEL_NAME}]",
-    version="2.2.0",
+    version="2.3.0",
     description=(
         "Per-machine per-time-window z-score + Isolation Forest anomaly detection. "
         "Trained on a 200-machine synthetic Tunisie Telecom fleet "
@@ -136,7 +136,7 @@ def health():
     return {
         "status":          "ok",
         "model":           MODEL_NAME,
-        "version":         "2.2.0",
+        "version":         "2.3.0",
         "n_machines":      len(machines_known),
         "n_features":      len(FEATURES),
         "features":        FEATURES,
