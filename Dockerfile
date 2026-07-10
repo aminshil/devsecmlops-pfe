@@ -18,10 +18,12 @@ RUN pip install --no-cache-dir --upgrade pip setuptools>=70.0.0 wheel>=0.46.2 &&
 # ── Copy application code ──
 COPY api/ ./api/
 COPY ml-model/preprocess.py ./ml-model/preprocess.py
+COPY ml-model/root_cause.py ./ml-model/root_cause.py
 
 # ── Copy the ONE shipped model artifact ──
 COPY models/telecom_serving_model.pkl     ./models/
 COPY models/telecom_serving_baselines.json ./models/
+COPY models/dependency_graph.json ./models/
 
 # ── Runtime config (override at run/deploy time with -e MODEL_NAME=...) ──
 ENV MODEL_NAME=telecom \

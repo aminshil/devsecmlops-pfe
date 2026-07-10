@@ -7,6 +7,12 @@ v2.2.0 introduced — per-time-window baselines:
   /predict accepts an optional 'hour' (0-23) or 'timestamp' to pick the window.
   If neither is given, falls back to the per-machine (all-day) baseline.
 
+v2.4.0 introduced — root cause analysis:
+  /root-cause accepts a batch of currently-anomalous machines and ranks
+  them by likelihood of being the true root cause versus a downstream
+  victim of a cascading failure, using the network-layer dependency
+  graph (router -> downstream machines).
+
 Fallback chain for the z-score baseline:
   1. Per-machine + window   (machine trained, this time window available)
   2. Per-machine (all-day)   (window missing or not supplied)
@@ -14,12 +20,14 @@ Fallback chain for the z-score baseline:
   4. Global                 (completely unknown)
 
 Endpoints:
-  GET  /health     — service status + model info
-  GET  /machines   — list all known machines with type
-  POST /predict    — anomaly score for one machine reading
+  GET  /health       — service status + model info
+  GET  /machines     — list all known machines with type
+  POST /predict      — anomaly score for one machine reading
+  POST /root-cause   — rank a batch of anomalous machines by root-cause likelihood
 """
 import json
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -31,6 +39,9 @@ from pydantic import BaseModel
 ROOT       = Path(__file__).resolve().parent.parent
 MODELS_DIR = ROOT / "models"
 MODEL_NAME = os.environ.get("MODEL_NAME", "telecom").lower()
+
+sys.path.insert(0, str(ROOT / "ml-model"))
+from root_cause import score_root_causes, load_graph
 
 ARTIFACTS = {
     "telecom": ("telecom_serving_model.pkl", "telecom_serving_baselines.json"),
@@ -113,12 +124,13 @@ def _get_stats(machine: str, window: str | None, machine_type: str | None):
 
 app = FastAPI(
     title=f"DevSecMLOps — Anomaly Detector [{MODEL_NAME}]",
-    version="2.3.0",
+    version="2.4.0",
     description=(
         "Per-machine per-time-window z-score + Isolation Forest anomaly detection. "
         "Trained on a 200-machine synthetic Tunisie Telecom fleet "
         "(11 types, 4 time windows: night/morning/afternoon/evening). "
-        "Fallback chain: machine+window -> machine -> type -> global."
+        "Fallback chain: machine+window -> machine -> type -> global. "
+        "Includes dependency-graph-based root cause ranking for cascading failures."
     ),
 )
 
@@ -131,12 +143,16 @@ class Reading(BaseModel):
     timestamp: str | None = None      # ISO string, alternative to hour
 
 
+class AnomalyBatch(BaseModel):
+    anomalies: dict[str, float]   # {machine_name: anomaly_score, ...}
+
+
 @app.get("/health")
 def health():
     return {
         "status":          "ok",
         "model":           MODEL_NAME,
-        "version":         "2.3.0",
+        "version":         "2.4.0",
         "n_machines":      len(machines_known),
         "n_features":      len(FEATURES),
         "features":        FEATURES,
@@ -145,6 +161,7 @@ def health():
         "machines_sample": machines_known[:10],
         "machines_total":  len(machines_known),
         "fallback_chain":  ["machine+window", "machine", "type", "global"],
+        "root_cause_analysis": True,
     }
 
 
@@ -195,4 +212,28 @@ def predict(reading: Reading):
         "z_scores":       z_scores,
         "machine_known":  reading.machine in baselines,
         "baseline_used":  baseline_used,   # machine+window | machine | type | global
+    }
+
+
+@app.post("/root-cause")
+def root_cause(batch: AnomalyBatch):
+    """
+    Given a set of currently-anomalous machines (from /predict results),
+    rank them by likelihood of being the true root cause versus a
+    downstream victim of a cascading failure.
+
+    Uses the network-layer dependency graph (router -> downstream
+    machines). Does NOT use service-tier correlation (web->app->db),
+    which was tested and found to degrade detection accuracy -- see
+    README "cascading failures" section.
+    """
+    if not batch.anomalies:
+        raise HTTPException(status_code=400, detail="anomalies dict cannot be empty")
+
+    graph = load_graph()
+    ranked = score_root_causes(batch.anomalies, graph)
+    return {
+        "input_count": len(batch.anomalies),
+        "ranked": ranked,
+        "likely_root_causes": [r["machine"] for r in ranked if r["role"] == "likely_root_cause"],
     }

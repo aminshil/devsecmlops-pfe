@@ -30,6 +30,7 @@ models/results/
 # Only preprocess.py is needed at runtime (Dockerfile COPYs it explicitly)
 ml-model/
 !ml-model/preprocess.py
+!ml-model/root_cause.py
 
 # Repo housekeeping
 .git/
