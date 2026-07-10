@@ -18,16 +18,24 @@ pipeline {
             }
         }
 
-        stage('2. SAST (SonarQube placeholder)') {
+        stage('2. SAST (SonarQube)') {
             steps {
-                echo "SAST stage — will integrate SonarQube in next iteration"
-                echo "For now: basic Python syntax check on all source files"
-                sh '''
-                    python3 -m py_compile api/app.py
-                    python3 -m py_compile ml-model/preprocess.py
-                    python3 -m py_compile ml-model/train_serving_telecom.py
-                    echo "SAST placeholder passed"
-                '''
+                withSonarQubeEnv('sonarqube') {
+                    sh '''
+                        sonar-scanner \
+                          -Dsonar.projectKey=devsecmlops-pfe \
+                          -Dsonar.sources=api,ml-model \
+                          -Dsonar.python.version=3.10
+                    '''
+                }
+            }
+        }
+
+        stage('2b. Quality Gate') {
+            steps {
+                timeout(time: 3, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: false
+                }
             }
         }
 
