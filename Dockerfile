@@ -12,7 +12,7 @@ WORKDIR /app
 # ── Install deps FIRST (layer caching: deps change less often than code) ──
 # --no-cache-dir keeps the image small
 COPY requirements-api.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
+RUN pip install --no-cache-dir --upgrade pip setuptools>=70.0.0 wheel>=0.46.2 && \
     pip install --no-cache-dir -r requirements-api.txt
 
 # ── Copy application code ──

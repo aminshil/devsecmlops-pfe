@@ -30,3 +30,4 @@ mlruns/
 # Screenshots — defense evidence, tracked in git
 !screenshots/
 !screenshots/*.png
+context_dump.txt
