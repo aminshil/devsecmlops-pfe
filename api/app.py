@@ -183,7 +183,7 @@ def predict(reading: Reading):
     is_anomaly = int(model.predict(X)[0] == -1)
     score      = float(-model.score_samples(X)[0])
     z_scores   = {c: round(float(v), 2)
-                  for c, v in zip(FEATURES, X.values[0])}
+                  for c, v in zip(FEATURES, X.to_numpy()[0])}
 
     return {
         "machine":        reading.machine,

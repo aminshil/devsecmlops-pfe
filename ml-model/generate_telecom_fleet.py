@@ -120,7 +120,7 @@ def generate_machine(name, profile_name, profile, n_minutes,
         injected += blen
 
     if correlated_mask is not None:
-        for i in np.where(correlated_mask)[0]:
+        for i in np.nonzero(correlated_mask)[0]:
             if labels[i] == 0:
                 net[i] = float(np.clip(net[i] * 2.0 + rng.normal(0, net_sig * 2), 0, None))
                 if not is_net_gear:
@@ -144,7 +144,7 @@ def generate_machine(name, profile_name, profile, n_minutes,
 
 def build_fleet(n_machines):
     total_w = sum(p[7] for p in PROFILES.values())
-    fleet, counters = [], {k: 0 for k in PROFILES}
+    fleet, counters = [], dict.fromkeys(PROFILES, 0)
     for pname, profile in PROFILES.items():
         count = max(1, round(n_machines * profile[7] / total_w))
         for _ in range(count):

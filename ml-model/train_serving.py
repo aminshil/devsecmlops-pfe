@@ -84,7 +84,7 @@ def main():
             raise SystemExit(f"Unknown profile {p!r}.")
 
     rng = np.random.default_rng(args.seed)
-    counters, frames, fleet = {p: 0 for p in pool}, [], []
+    counters, frames, fleet = dict.fromkeys(pool, 0), [], []
     for i in range(args.n_machines):
         profile_name = pool[i % len(pool)]
         counters[profile_name] += 1
