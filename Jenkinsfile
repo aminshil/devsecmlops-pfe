@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         IMAGE_NAME    = "devsecmlops-api"
-        IMAGE_TAG     = "2.3.${BUILD_NUMBER}"
+        IMAGE_TAG     = "${readFile('VERSION').trim()}-b${BUILD_NUMBER}"
         REGISTRY      = "localhost:5000"
         F1_THRESHOLD  = "0.60"
     }
