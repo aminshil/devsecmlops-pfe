@@ -74,7 +74,7 @@ def generate_machine(name, profile_name, profile, n_minutes,
     is_net_gear = profile_name in NETWORK_GEAR
 
     start = datetime(2026, 1, 1, 0, 0, 0)
-    timestamps = [start + timedelta(minutes=i) for i in range(n_minutes)]
+    timestamps = [start + timedelta(seconds=30*i) for i in range(n_minutes)]
     hours = np.array([t.hour for t in timestamps])
     tf = np.array([time_factor(h, night_factor) for h in hours])
 
@@ -169,7 +169,7 @@ def main():
     args = ap.parse_args()
 
     rng = np.random.default_rng(args.seed)
-    n_minutes = args.days * 24 * 60
+    n_minutes = args.days * 24 * 60 * 2   # 2x steps: 30s resolution over same time span
     fleet = build_fleet(args.machines)
 
     type_counts = {}
