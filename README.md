@@ -55,23 +55,48 @@ cluster — only configuration changes, not code.
 
 ### Why Isolation Forest
 
-Six anomaly-detection methods were benchmarked on the same data
+Six anomaly-detection methods were benchmarked on the same data, matched to
+production settings (`contamination=0.068`, `n_estimators=200`)
 (`ml-model/benchmark.py`, results in `models/results/`):
 
-| Model | F1 | ROC-AUC |
-|-------|-----|---------|
-| **Isolation Forest, z-scored (shipped)** | **0.640+** | **0.90+** |
-| OneClassSVM, z-scored | 0.59 | 0.88 |
-| z-threshold (\|z\|>3) baseline | 0.48–0.65 | 0.84–0.90 |
-| Autoencoder, z-scored | 0.43 | 0.85 |
-| Local Outlier Factor, z-scored | 0.30 | 0.74 |
-| Isolation Forest, raw (no z-score) | 0.35 | 0.76 |
+| Model | Precision | Recall | F1 | F1@adj | ROC-AUC | PR-AUC@adj |
+|-------|-----------|--------|-----|--------|---------|------------|
+| z-threshold (\|z\|>3) | 0.695 | 0.623 | **0.657** | **0.680** | 0.914 | 0.710 |
+| Isolation Forest, raw (no z-score) | 0.362 | 0.359 | 0.361 | 0.382 | 0.771 | 0.409 |
+| **Isolation Forest, z-scored (shipped)** | 0.599 | 0.656 | 0.626 | 0.647 | **0.922** | **0.722** |
+| OneClassSVM, z-scored | 0.493 | 0.622 | 0.550 | 0.569 | 0.897 | 0.635 |
+| Local Outlier Factor, z-scored | 0.245 | 0.332 | 0.282 | 0.303 | 0.735 | 0.292 |
+| Autoencoder, z-scored | 0.270 | 0.271 | 0.270 | 0.295 | 0.740 | 0.262 |
 
-Isolation Forest was chosen deliberately, not by default: it requires no
-labeled anomalies (production has none), infers in under 10ms, needs only one
-key hyperparameter (`contamination`), and scales cleanly to 200+ machines.
-The z-score normalization step is what actually drives performance — raw
-Isolation Forest scores ~0.35 F1; z-scored jumps to ~0.64.
+F1@adj = point-adjusted F1 (OmniAnomaly/SMD standard): a single correctly
+flagged point inside an anomaly block counts the whole block as detected --
+the metric commonly reported in time-series anomaly detection research.
+
+Honest reading of this table: the simple z-threshold rule is competitive on
+strict F1, and even modestly ahead of Isolation Forest (0.657 vs 0.626). We
+still ship Isolation Forest for three reasons a single F1 number does not
+capture:
+
+1. **Better ranking quality.** ROC-AUC (0.922 vs 0.914) and PR-AUC@adj
+   (0.722 vs 0.710) both favor Isolation Forest -- it ranks anomalies more
+   reliably across all possible thresholds, not just the one z-threshold
+   happens to use.
+2. **Continuous, tunable score.** z-threshold is a fixed per-feature cutoff
+   (exactly 3 sigma). Isolation Forest exposes a continuous `anomaly_score`
+   (already in the API response) that operators can re-tune via
+   `contamination` without code changes.
+3. **Multivariate detection.** z-threshold flags a reading if ANY single
+   feature exceeds 3 sigma. It cannot catch a case where four features are
+   each moderately elevated (say 2 sigma each) but jointly represent a real
+   incident -- a structural gap the per-feature rule cannot close, that
+   Isolation Forest's split-based structure can.
+
+Isolation Forest was chosen deliberately, not by default: it also requires
+no labeled anomalies (production has none), infers in under 10ms, needs only
+one key hyperparameter (`contamination`), and scales cleanly to 200+
+machines. Comparing "Isolation Forest, raw" vs "z-scored" in the table above
+shows the z-score normalization step is what actually drives its
+performance -- raw Isolation Forest scores 0.361 F1; z-scored reaches 0.626.
 
 ### Why unsupervised, not supervised
 
