@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-api
+  namespace: ml-serving
+  labels:
+    app: anomaly-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: anomaly-api
+  template:
+    metadata:
+      labels:
+        app: anomaly-api
+    spec:
+      containers:
+        - name: api
+          image: devsecmlops-api:2.4.0
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+          env:
+            - name: MODEL_NAME
+              value: "telecom"
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
