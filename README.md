@@ -19,7 +19,7 @@ victims when multiple machines alert at once.
 | L1 | FastAPI serving layer + root cause analysis endpoint | ✅ Done |
 | L2 | Docker + local registry | ✅ Done |
 | L3 | Jenkins CI/CD (7 stages, real SonarQube SAST, Trivy) | ✅ Done |
-| L4 | Kubernetes (Minikube) | 📋 Planned |
+| L4 | Kubernetes (Minikube) | ✅ Done |
 | L5 | Monitoring (Prometheus, Grafana, Node Exporter, anomaly bridge) | 📋 Planned |
 | L6 | Ansible (infrastructure as code) | 📋 Planned |
 
@@ -352,6 +352,63 @@ Requires: SonarQube Scanner plugin, `sonarqube-token` credential (Secret
 text), `sonar-scanner` CLI installed in the Jenkins container, a dedicated
 Docker network (`devsecmlops-net`) for stable container-name DNS resolution
 between the jenkins, sonarqube, and registry containers.
+
+---
+
+## Kubernetes (L4)
+
+Minikube, single-node, Docker driver. Two namespaces: `ml-serving` (API
+workloads) and `infra` (reserved for future MLflow/MinIO).
+
+- **Deployment:** 2 replicas of `devsecmlops-api:2.4.0`
+- **Service:** NodePort 30080
+- **HorizontalPodAutoscaler:** 2–5 replicas, target 70% CPU
+- **Security:** non-root `securityContext` (`runAsUser: 1000`,
+  `allowPrivilegeEscalation: false`), CPU/memory requests and limits set
+- **Reliability:** liveness and readiness probes on `/health`
+  (10s/5s initial delay) — Kubernetes automatically restarts a pod that
+  stops responding correctly, and only routes traffic to pods that pass
+  the readiness check
+
+Image loading: `imagePullPolicy: Never`, with the image loaded directly
+into Minikube's Docker daemon (`minikube image load`) rather than pulled
+from the local registry. Minikube's Docker driver could not be reliably
+configured with `--insecure-registry` in this environment (the internal
+`host.minikube.internal` hostname did not resolve correctly with the
+Docker driver on this Linux setup), so direct image loading was used as
+the pragmatic alternative for a single-node demo cluster. A production
+multi-node cluster would pull from a real registry (Harbor, ECR, etc.)
+instead — the Deployment manifest would only need the `image:` field and
+`imagePullPolicy` changed, nothing else.
+
+Verified end-to-end through the K8s-managed service (not just a bare
+Docker container):
+
+```
+$ curl http://$(minikube ip):30080/health
+status=ok version=2.4.0 n_features=6 machines=200 root_cause=True
+
+$ curl -X POST http://$(minikube ip):30080/predict ... (disk saturation)
+machine=db-01 is_anomaly=1 score=0.6232 disk_usage_z=4.93 load_avg_z=5.31
+
+$ curl -X POST http://$(minikube ip):30080/root-cause ...
+likely_root_causes=['router-01']
+  router-01    score=0.55  role=likely_root_cause
+  web-01       score=0.62  role=downstream_effect
+  app-01       score=0.60  role=downstream_effect
+  web-09       score=0.58  role=downstream_effect
+  mystery-01   score=0.71  role=isolated
+```
+
+```bash
+minikube start --driver=docker --insecure-registry="localhost:5000" --force
+minikube image load devsecmlops-api:2.4.0
+kubectl apply -f kubernetes/namespace.yaml
+kubectl apply -f kubernetes/deployment.yaml
+kubectl apply -f kubernetes/service.yaml
+kubectl apply -f kubernetes/hpa.yaml
+kubectl get pods -n ml-serving
+```
 
 ---
 
