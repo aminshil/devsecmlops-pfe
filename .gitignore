@@ -31,3 +31,5 @@ mlruns/
 !screenshots/
 !screenshots/*.png
 context_dump.txt
+kubectl
+minikube-linux-amd64
