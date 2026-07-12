@@ -20,7 +20,7 @@ victims when multiple machines alert at once.
 | L2 | Docker + local registry | ✅ Done |
 | L3 | Jenkins CI/CD (7 stages, real SonarQube SAST, Trivy) | ✅ Done |
 | L4 | Kubernetes (Minikube) | ✅ Done |
-| L5 | Monitoring (Prometheus, Grafana, Node Exporter, anomaly bridge) | 📋 Planned |
+| L5 | Monitoring (Prometheus, Grafana, real-data replay, K8s monitoring) | ✅ Done |
 | L6 | Ansible (infrastructure as code) | 📋 Planned |
 
 **Current model:** F1 = 0.663 · Precision = 0.660 · Recall = 0.667 · ROC-AUC = 0.926
@@ -28,7 +28,7 @@ on a 200-machine synthetic Tunisie Telecom fleet, 6.75% anomaly rate, 6 features
 30-second sampling resolution.
 
 **Full version history:** see [GitHub Releases](https://github.com/aminshil/devsecmlops-pfe/releases)
-— 17 tagged releases from v0.1.0 (initial POC) through v2.3.0, each with
+— tagged releases from v0.1.0 (initial POC) through v2.8.0, each with
 detailed release notes covering what changed and why.
 
 ---
@@ -42,14 +42,19 @@ Git push → Jenkins (SonarQube SAST → Docker build → Trivy scan → registr
                                           Docker image (model baked in)
                                                           │
                                                           ▼
-                                   Kubernetes: FastAPI pods (2+ replicas) [planned]
+                                   Kubernetes: FastAPI pods (2+ replicas)
                                                           │
                         ┌─────────────────────────────────┼─────────────────────┐
                         ▼                                 ▼                     ▼
-              Node Exporter (fleet)              Prometheus scrape      Grafana dashboards
-                                                          │
+              Node Exporter (VM)                  Real-data replay      Kubernetes exporter
+                        │                          (200 machines)                │
+                        └─────────────────────────────────┼─────────────────────┘
                                                           ▼
-                              Anomaly bridge → /predict → /root-cause → Alertmanager
+                                                Prometheus scrape
+                                                          │
+                        ┌─────────────────────────────────┼─────────────────────┐
+                        ▼                                                       ▼
+              Grafana dashboards (20 panels)          Anomaly bridge → /predict → /root-cause
 ```
 
 Everything runs on a single self-hosted VM (Ubuntu 22.04) for the PFE demo. The
@@ -245,10 +250,11 @@ root_cause_score = own_anomaly_score + 0.15 × anomalous_downstream_count
 Verified end to end: given 5 anomalous machines (1 router + 3 of its
 dependents + 1 unrelated machine), the router was correctly ranked #1
 despite having the LOWEST raw anomaly score (0.55 vs the unrelated
-machine's 0.71) — because it explains 3 of the other 4 alerts. The
-unrelated machine was correctly identified as `isolated`; the router's
-dependents were correctly tagged `downstream_effect` with their
-`upstream_router` identified.
+machine's 0.71) — because it explains 3 of the other 4 alerts. Verified
+live in the monitoring pipeline too: across a full session, all 8 routers
+in the fleet independently triggered real incidents and were correctly
+identified as `likely_root_cause` every time, with their dependents
+correctly tagged `downstream_effect`.
 
 **Known limitation:** this only models the network-layer (router)
 dependency. Real core telecom networks use mesh topologies with redundant
@@ -319,8 +325,8 @@ clean `likely_root_causes` list for direct use in an alert summary.
 - Local registry (`registry:2`, port 5000) for Jenkins to push to
 
 ```bash
-docker build -t devsecmlops-api:2.7.0 .
-docker run -p 8000:8000 devsecmlops-api:2.7.0
+docker build -t devsecmlops-api:2.4.0 .
+docker run -p 8000:8000 devsecmlops-api:2.4.0
 ```
 
 ---
@@ -381,6 +387,18 @@ multi-node cluster would pull from a real registry (Harbor, ECR, etc.)
 instead — the Deployment manifest would only need the `image:` field and
 `imagePullPolicy` changed, nothing else.
 
+**Metrics-server enabled** for real HPA readings (`kubectl top pods/nodes`
+now returns actual CPU/memory usage instead of `<unknown>`).
+
+**Operational incident, documented:** restarting the Docker daemon while
+Minikube is running leaves the cluster's internal networking in a stale,
+unreachable state even though the container itself stays "Up" — diagnosed
+via a drifting host-port mapping that invalidated `kubectl`'s cached
+config. Resolved with a full `minikube delete` + fresh start. Standing
+rule adopted: always run `minikube start` (not `docker start minikube`)
+after any Docker daemon restart, since only `minikube start` properly
+re-establishes cluster networking and certificates.
+
 Verified end-to-end through the K8s-managed service (not just a bare
 Docker container):
 
@@ -401,14 +419,97 @@ likely_root_causes=['router-01']
 ```
 
 ```bash
-minikube start --driver=docker --insecure-registry="localhost:5000" --force
+minikube start --driver=docker --force
+minikube addons enable metrics-server
 minikube image load devsecmlops-api:2.4.0
 kubectl apply -f kubernetes/namespace.yaml
 kubectl apply -f kubernetes/deployment.yaml
 kubectl apply -f kubernetes/service.yaml
 kubectl apply -f kubernetes/hpa.yaml
 kubectl get pods -n ml-serving
+kubectl top pods -n ml-serving
 ```
+
+---
+
+## Monitoring (L5)
+
+Full-stack observability: Prometheus + Grafana (20 panels) + a real-data
+replay engine + Kubernetes monitoring, all built on top of the trained
+model and the root-cause endpoint.
+
+### Real-data replay, not random simulation
+
+`monitoring/replay_exporter.py` replays the ACTUAL evaluation dataset
+(`data/telecom_fleet.csv`, the exact 200-machine, 30-day, 30-second-
+resolution data the model was trained and validated against — F1=0.663,
+ROC-AUC=0.926) through Prometheus, cycling continuously. This was a
+deliberate upgrade from an earlier random-noise simulator
+(`fleet_simulator.py`, superseded): the live demo now uses data provably
+identical to what the model was evaluated on, not freshly generated
+numbers that only approximate it.
+
+It also exposes the dataset's real ground-truth label
+(`sim_ground_truth_anomaly`) alongside the model's live prediction —
+enabling a direct "did the model agree with reality" comparison panel,
+not just "did the model flag something."
+
+### A critical bug found and fixed
+
+The anomaly bridge originally used real wall-clock time
+(`datetime.now().hour`) to select which per-time-window baseline to
+compare against. But the replay exporter runs on an independent simulated
+30-day timeline that has nothing to do with real time. This mismatch
+(e.g. comparing a replayed night-quiet reading against an afternoon-peak
+baseline) caused up to 181 of 200 machines to falsely appear anomalous
+simultaneously. Fixed by publishing the replay's actual simulated hour
+(`sim_replay_hour`) and having the bridge read that instead — anomaly
+counts returned to realistic levels (single digits to ~15) immediately
+after the fix. Documented here because it is a genuine, instructive
+example of a synchronization bug between two independently-clocked
+components.
+
+### anomaly_bridge.py
+
+Polls Prometheus every 30s for all 200 machines, calls `/predict` on
+each, batches multi-machine anomalies into `/root-cause`, and publishes
+its own findings back to Prometheus (`bridge_is_anomaly`,
+`bridge_anomaly_score`) so Grafana can visualize live detection state,
+not just raw fleet metrics.
+
+Verified live: a router set anomalous correctly stressed its real
+`dependency_graph.json` dependents; `/root-cause` correctly identified
+the router as `likely_root_cause` across every cycle of the incident,
+correctly tagged dependents as `downstream_effect`, and correctly
+separated unrelated background noise as `isolated`. Across the full
+session, all 8 routers in the fleet independently triggered and were
+correctly detected at least once.
+
+### Kubernetes monitoring
+
+`monitoring/k8s_exporter.py` publishes pod readiness, restart counts,
+deployment replica counts, and HPA CPU utilization as Prometheus metrics,
+using `kubectl` as the data source rather than scraping the K8s API
+server directly — a deliberate choice after Minikube's internal
+networking proved fragile (see Kubernetes section above).
+
+### Grafana dashboard (20 panels)
+
+Live anomaly detection, root-cause event history (proved all 8 routers
+triggered real incidents this session), fleet-wide averages for all 6
+features, model-prediction-vs-ground-truth comparison, real host-VM
+health (Node Exporter), and Kubernetes pod/replica/HPA status — one
+dashboard covering the model, the API, the infrastructure, and the
+orchestration layer.
+
+A `$machine_type` template variable filters every panel by machine type
+(router, web, db, etc., or All).
+
+### Machine roster
+
+`docs/machine_roster.txt`: complete identification of all 200 simulated
+machines — name, type, and a plain-English description of its role
+(e.g. `db-01 / db / Database - persistent data storage`).
 
 ---
 
@@ -441,9 +542,22 @@ Dockerfile                API image, model + dependency graph baked in
 requirements-api.txt      serving-only deps, pinned versions
 Jenkinsfile               7-stage CI/CD pipeline
 
-kubernetes/               K8s manifests (L4, planned)
-monitoring/               Prometheus/Grafana config (L5, planned)
-scripts/                  utility scripts (screenshot capture)
+kubernetes/               K8s manifests (namespace, deployment, service, HPA)
+monitoring/
+  prometheus.yml               scrape config: node-exporter, replay,
+                                anomaly-bridge, k8s-exporter
+  replay_exporter.py           replays the real evaluation dataset live
+  anomaly_bridge.py            polls Prometheus, calls /predict + /root-cause
+  k8s_exporter.py              publishes pod/replica/HPA status via kubectl
+  grafana_dashboard.json       20-panel dashboard definition
+
+docs/
+  machine_roster.txt           all 200 machines: name, type, role
+
+scripts/
+  full_verification.sh         one-shot health check across all 6 layers
+  capture_all_screenshots.sh   defense screenshot automation
+
 screenshots/              defense evidence PNGs
 ```
 
@@ -474,8 +588,8 @@ python ml-model/zscore_demo.py
 MODEL_NAME=telecom uvicorn api.app:app --host 0.0.0.0 --port 8000
 
 # Or containerized
-docker build -t devsecmlops-api:2.7.0 .
-docker run -p 8000:8000 devsecmlops-api:2.7.0
+docker build -t devsecmlops-api:2.4.0 .
+docker run -p 8000:8000 devsecmlops-api:2.4.0
 
 # Test endpoints
 curl localhost:8000/health
@@ -483,20 +597,18 @@ curl -X POST localhost:8000/predict -H "Content-Type: application/json" \
   -d '{"machine":"web-01","hour":14,"metrics":{"cpu":30,"ram":50,"network":80,"disk_io":25,"disk_usage":40,"load_avg":1.2}}'
 curl -X POST localhost:8000/root-cause -H "Content-Type: application/json" \
   -d '{"anomalies":{"router-01":0.55,"web-01":0.62}}'
+
+# Full-stack monitoring
+python monitoring/replay_exporter.py &   # replays real evaluation data
+python monitoring/anomaly_bridge.py &    # detects + explains, every 30s
+python monitoring/k8s_exporter.py &      # publishes K8s pod/HPA status
+# Prometheus + Grafana: import monitoring/grafana_dashboard.json
 ```
 
 ---
 
 ## Roadmap
 
-- **L4 — Kubernetes:** Minikube on the VM, `ml-serving` + `infra`
-  namespaces, Deployment with 2+ replicas, HPA on CPU, non-root
-  securityContext, Service (NodePort :30080), liveness/readiness probes on
-  `/health`
-- **L5 — Monitoring:** Node Exporter on the fleet → Prometheus :9090 →
-  anomaly bridge (CronJob polls Prometheus, calls `/predict` for each
-  machine, batches anomalies into `/root-cause`) → Grafana :3000
-  dashboards + Alertmanager → Slack/email
 - **L6 — Ansible:** single playbook to reproduce the entire platform from
   a fresh bare Ubuntu VM
 - **Continuous learning (documented, not implemented):** a tiered
@@ -517,3 +629,6 @@ curl -X POST localhost:8000/root-cause -H "Content-Type: application/json" \
   correlation injection from the baseline computation, e.g. training on
   uncorrelated data and only using the service graph for root-cause
   ranking, never for anomaly injection) are both natural next steps.
+- **Alertmanager integration:** wire real Slack/email notifications when
+  `/root-cause` identifies a `likely_root_cause`, closing the loop from
+  detection to human notification.
