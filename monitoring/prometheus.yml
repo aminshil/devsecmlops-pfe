@@ -14,3 +14,13 @@ scrape_configs:
     scrape_interval: 30s
     static_configs:
       - targets: ["localhost:9200"]
+
+  - job_name: "anomaly-bridge"
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["localhost:9300"]
+
+  - job_name: "k8s-exporter"
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["localhost:9400"]

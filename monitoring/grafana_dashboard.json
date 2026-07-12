@@ -1,0 +1,754 @@
+{
+  "title": "DevSecMLOps \u2014 Anomaly Detection Fleet",
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "machine_type",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "bfrs36nmhw64gb"
+        },
+        "query": "label_values(sim_cpu_percent, type)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "label": "Machine type"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Anomaly count over time",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "bridge_anomaly_count",
+          "legendFormat": "anomalous machines",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Currently anomalous machines",
+      "type": "table",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "bridge_is_anomaly{type=~\"$machine_type\"} == 1",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "__name__": true,
+              "instance": true,
+              "job": true
+            },
+            "renameByName": {
+              "machine": "Machine",
+              "role": "Role",
+              "type": "Type"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Anomaly score by machine (high to low)",
+      "type": "bargauge",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "sort_desc(bridge_anomaly_score{type=~\"$machine_type\"})",
+          "legendFormat": "{{machine}}",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 0.65
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Fleet-wide average CPU",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "avg(sim_cpu_percent{type=~\"$machine_type\"})",
+          "legendFormat": "avg cpu %",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Fleet-wide average network",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "avg(sim_network_mbps{type=~\"$machine_type\"})",
+          "legendFormat": "avg network MB/s",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "MBs",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15
+          }
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Root cause spotlight",
+      "type": "stat",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "bridge_is_anomaly{role=\"likely_root_cause\", type=~\"$machine_type\"}",
+          "legendFormat": "{{machine}}",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "textMode": "name",
+        "colorMode": "background",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null+nan",
+                "result": {
+                  "text": "No active root cause",
+                  "color": "green"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Root cause events over time (full history)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "bridge_is_anomaly{role=\"likely_root_cause\"}",
+          "legendFormat": "{{machine}} ({{type}})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "points",
+            "pointSize": 8,
+            "fillOpacity": 0
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Total distinct anomalous machines seen (session)",
+      "type": "stat",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 39
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "count(count by (machine) (bridge_is_anomaly))",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 9,
+      "title": "Total root-cause incidents (session)",
+      "type": "stat",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 39
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "count(count by (machine) (bridge_is_anomaly{role=\"likely_root_cause\"}))",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          }
+        }
+      },
+      "options": {
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 10,
+      "title": "Fleet uptime (Prometheus scraping since)",
+      "type": "stat",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 39
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "(time() - process_start_time_seconds{job=\"fleet-simulator\"}) / 60",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          }
+        }
+      },
+      "options": {
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      }
+    },
+    {
+      "id": 11,
+      "title": "Fleet-wide average load",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "avg(sim_load_avg{type=~\"$machine_type\"})",
+          "legendFormat": "avg load",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15
+          }
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "Host VM \u2014 CPU usage (real)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 53
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\",job=\"node-exporter\"}[1m])) * 100)",
+          "legendFormat": "real VM cpu %",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15
+          }
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "Host VM \u2014 RAM available",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 53
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "node_memory_MemAvailable_bytes{job=\"node-exporter\"} / 1e9",
+          "legendFormat": "available RAM (GB)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decgbytes",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15
+          }
+        }
+      }
+    },
+    {
+      "id": 14,
+      "title": "Host VM \u2014 Disk free (root)",
+      "type": "stat",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 61
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "node_filesystem_avail_bytes{mountpoint=\"/\",job=\"node-exporter\"} / 1e9",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decgbytes",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        }
+      },
+      "options": {
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "id": 15,
+      "title": "Host VM \u2014 Load average (1m)",
+      "type": "stat",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 61
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "node_load1{job=\"node-exporter\"}",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "id": 16,
+      "title": "Model prediction vs ground truth (replayed real data)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 69
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "sum(bridge_is_anomaly)",
+          "legendFormat": "Model flagged anomalous",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(sim_ground_truth_anomaly)",
+          "legendFormat": "Actually anomalous (real label)",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "title": "Kubernetes \u2014 pod status",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 77
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "k8s_pod_ready",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true
+            },
+            "renameByName": {
+              "pod": "Pod",
+              "namespace": "Namespace",
+              "Value": "Ready (1=yes)"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "Kubernetes \u2014 pod restart counts",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 77
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "k8s_pod_restarts",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true
+            },
+            "renameByName": {
+              "pod": "Pod",
+              "namespace": "Namespace",
+              "Value": "Restarts"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "Kubernetes \u2014 replicas (desired vs available)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 85
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "k8s_deployment_replicas_desired",
+          "legendFormat": "desired",
+          "refId": "A"
+        },
+        {
+          "expr": "k8s_deployment_replicas_available",
+          "legendFormat": "available",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      }
+    },
+    {
+      "id": 20,
+      "title": "Kubernetes \u2014 HPA CPU utilization",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 85
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "bfrs36nmhw64gb"
+      },
+      "targets": [
+        {
+          "expr": "k8s_hpa_cpu_utilization_percent",
+          "legendFormat": "{{hpa}} cpu %",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

@@ -1,0 +1,201 @@
+"Machine"           "Type"         "Role"
+web-01      web       Web server - handles incoming HTTP requests
+web-02      web       Web server - handles incoming HTTP requests
+web-03      web       Web server - handles incoming HTTP requests
+web-04      web       Web server - handles incoming HTTP requests
+web-05      web       Web server - handles incoming HTTP requests
+web-06      web       Web server - handles incoming HTTP requests
+web-07      web       Web server - handles incoming HTTP requests
+web-08      web       Web server - handles incoming HTTP requests
+web-09      web       Web server - handles incoming HTTP requests
+web-10      web       Web server - handles incoming HTTP requests
+web-11      web       Web server - handles incoming HTTP requests
+web-12      web       Web server - handles incoming HTTP requests
+web-13      web       Web server - handles incoming HTTP requests
+web-14      web       Web server - handles incoming HTTP requests
+web-15      web       Web server - handles incoming HTTP requests
+web-16      web       Web server - handles incoming HTTP requests
+web-17      web       Web server - handles incoming HTTP requests
+web-18      web       Web server - handles incoming HTTP requests
+web-19      web       Web server - handles incoming HTTP requests
+web-20      web       Web server - handles incoming HTTP requests
+web-21      web       Web server - handles incoming HTTP requests
+web-22      web       Web server - handles incoming HTTP requests
+web-23      web       Web server - handles incoming HTTP requests
+web-24      web       Web server - handles incoming HTTP requests
+web-25      web       Web server - handles incoming HTTP requests
+web-26      web       Web server - handles incoming HTTP requests
+web-27      web       Web server - handles incoming HTTP requests
+web-28      web       Web server - handles incoming HTTP requests
+web-29      web       Web server - handles incoming HTTP requests
+web-30      web       Web server - handles incoming HTTP requests
+web-31      web       Web server - handles incoming HTTP requests
+web-32      web       Web server - handles incoming HTTP requests
+web-33      web       Web server - handles incoming HTTP requests
+web-34      web       Web server - handles incoming HTTP requests
+web-35      web       Web server - handles incoming HTTP requests
+web-36      web       Web server - handles incoming HTTP requests
+web-37      web       Web server - handles incoming HTTP requests
+web-38      web       Web server - handles incoming HTTP requests
+web-39      web       Web server - handles incoming HTTP requests
+web-40      web       Web server - handles incoming HTTP requests
+app-01      app       Application server - business logic, calls db/cache/queue
+app-02      app       Application server - business logic, calls db/cache/queue
+app-03      app       Application server - business logic, calls db/cache/queue
+app-04      app       Application server - business logic, calls db/cache/queue
+app-05      app       Application server - business logic, calls db/cache/queue
+app-06      app       Application server - business logic, calls db/cache/queue
+app-07      app       Application server - business logic, calls db/cache/queue
+app-08      app       Application server - business logic, calls db/cache/queue
+app-09      app       Application server - business logic, calls db/cache/queue
+app-10      app       Application server - business logic, calls db/cache/queue
+app-11      app       Application server - business logic, calls db/cache/queue
+app-12      app       Application server - business logic, calls db/cache/queue
+app-13      app       Application server - business logic, calls db/cache/queue
+app-14      app       Application server - business logic, calls db/cache/queue
+app-15      app       Application server - business logic, calls db/cache/queue
+app-16      app       Application server - business logic, calls db/cache/queue
+app-17      app       Application server - business logic, calls db/cache/queue
+app-18      app       Application server - business logic, calls db/cache/queue
+app-19      app       Application server - business logic, calls db/cache/queue
+app-20      app       Application server - business logic, calls db/cache/queue
+app-21      app       Application server - business logic, calls db/cache/queue
+app-22      app       Application server - business logic, calls db/cache/queue
+app-23      app       Application server - business logic, calls db/cache/queue
+app-24      app       Application server - business logic, calls db/cache/queue
+app-25      app       Application server - business logic, calls db/cache/queue
+app-26      app       Application server - business logic, calls db/cache/queue
+app-27      app       Application server - business logic, calls db/cache/queue
+app-28      app       Application server - business logic, calls db/cache/queue
+app-29      app       Application server - business logic, calls db/cache/queue
+app-30      app       Application server - business logic, calls db/cache/queue
+app-31      app       Application server - business logic, calls db/cache/queue
+app-32      app       Application server - business logic, calls db/cache/queue
+app-33      app       Application server - business logic, calls db/cache/queue
+app-34      app       Application server - business logic, calls db/cache/queue
+app-35      app       Application server - business logic, calls db/cache/queue
+db-01       db        Database - persistent data storage
+db-02       db        Database - persistent data storage
+db-03       db        Database - persistent data storage
+db-04       db        Database - persistent data storage
+db-05       db        Database - persistent data storage
+db-06       db        Database - persistent data storage
+db-07       db        Database - persistent data storage
+db-08       db        Database - persistent data storage
+db-09       db        Database - persistent data storage
+db-10       db        Database - persistent data storage
+db-11       db        Database - persistent data storage
+db-12       db        Database - persistent data storage
+db-13       db        Database - persistent data storage
+db-14       db        Database - persistent data storage
+db-15       db        Database - persistent data storage
+db-16       db        Database - persistent data storage
+db-17       db        Database - persistent data storage
+db-18       db        Database - persistent data storage
+db-19       db        Database - persistent data storage
+db-20       db        Database - persistent data storage
+db-21       db        Database - persistent data storage
+db-22       db        Database - persistent data storage
+db-23       db        Database - persistent data storage
+db-24       db        Database - persistent data storage
+db-25       db        Database - persistent data storage
+db-26       db        Database - persistent data storage
+db-27       db        Database - persistent data storage
+db-28       db        Database - persistent data storage
+db-29       db        Database - persistent data storage
+db-30       db        Database - persistent data storage
+cache-01    cache     Cache server - fast temporary data (Redis-like)
+cache-02    cache     Cache server - fast temporary data (Redis-like)
+cache-03    cache     Cache server - fast temporary data (Redis-like)
+cache-04    cache     Cache server - fast temporary data (Redis-like)
+cache-05    cache     Cache server - fast temporary data (Redis-like)
+cache-06    cache     Cache server - fast temporary data (Redis-like)
+cache-07    cache     Cache server - fast temporary data (Redis-like)
+cache-08    cache     Cache server - fast temporary data (Redis-like)
+cache-09    cache     Cache server - fast temporary data (Redis-like)
+cache-10    cache     Cache server - fast temporary data (Redis-like)
+cache-11    cache     Cache server - fast temporary data (Redis-like)
+cache-12    cache     Cache server - fast temporary data (Redis-like)
+cache-13    cache     Cache server - fast temporary data (Redis-like)
+cache-14    cache     Cache server - fast temporary data (Redis-like)
+cache-15    cache     Cache server - fast temporary data (Redis-like)
+cache-16    cache     Cache server - fast temporary data (Redis-like)
+cache-17    cache     Cache server - fast temporary data (Redis-like)
+cache-18    cache     Cache server - fast temporary data (Redis-like)
+cache-19    cache     Cache server - fast temporary data (Redis-like)
+cache-20    cache     Cache server - fast temporary data (Redis-like)
+queue-01    queue     Message queue - async task/message broker
+queue-02    queue     Message queue - async task/message broker
+queue-03    queue     Message queue - async task/message broker
+queue-04    queue     Message queue - async task/message broker
+queue-05    queue     Message queue - async task/message broker
+queue-06    queue     Message queue - async task/message broker
+queue-07    queue     Message queue - async task/message broker
+queue-08    queue     Message queue - async task/message broker
+queue-09    queue     Message queue - async task/message broker
+queue-10    queue     Message queue - async task/message broker
+queue-11    queue     Message queue - async task/message broker
+queue-12    queue     Message queue - async task/message broker
+queue-13    queue     Message queue - async task/message broker
+queue-14    queue     Message queue - async task/message broker
+queue-15    queue     Message queue - async task/message broker
+queue-16    queue     Message queue - async task/message broker
+queue-17    queue     Message queue - async task/message broker
+queue-18    queue     Message queue - async task/message broker
+queue-19    queue     Message queue - async task/message broker
+queue-20    queue     Message queue - async task/message broker
+batch-01    batch     Batch job runner - scheduled/background processing
+batch-02    batch     Batch job runner - scheduled/background processing
+batch-03    batch     Batch job runner - scheduled/background processing
+batch-04    batch     Batch job runner - scheduled/background processing
+batch-05    batch     Batch job runner - scheduled/background processing
+batch-06    batch     Batch job runner - scheduled/background processing
+batch-07    batch     Batch job runner - scheduled/background processing
+batch-08    batch     Batch job runner - scheduled/background processing
+batch-09    batch     Batch job runner - scheduled/background processing
+batch-10    batch     Batch job runner - scheduled/background processing
+batch-11    batch     Batch job runner - scheduled/background processing
+batch-12    batch     Batch job runner - scheduled/background processing
+batch-13    batch     Batch job runner - scheduled/background processing
+batch-14    batch     Batch job runner - scheduled/background processing
+batch-15    batch     Batch job runner - scheduled/background processing
+edge-01     edge      Edge node - forwards inbound traffic to app tier
+edge-02     edge      Edge node - forwards inbound traffic to app tier
+edge-03     edge      Edge node - forwards inbound traffic to app tier
+edge-04     edge      Edge node - forwards inbound traffic to app tier
+edge-05     edge      Edge node - forwards inbound traffic to app tier
+edge-06     edge      Edge node - forwards inbound traffic to app tier
+edge-07     edge      Edge node - forwards inbound traffic to app tier
+edge-08     edge      Edge node - forwards inbound traffic to app tier
+edge-09     edge      Edge node - forwards inbound traffic to app tier
+edge-10     edge      Edge node - forwards inbound traffic to app tier
+edge-11     edge      Edge node - forwards inbound traffic to app tier
+edge-12     edge      Edge node - forwards inbound traffic to app tier
+edge-13     edge      Edge node - forwards inbound traffic to app tier
+edge-14     edge      Edge node - forwards inbound traffic to app tier
+edge-15     edge      Edge node - forwards inbound traffic to app tier
+router-01   router    Network router - routes traffic between machines
+router-02   router    Network router - routes traffic between machines
+router-03   router    Network router - routes traffic between machines
+router-04   router    Network router - routes traffic between machines
+router-05   router    Network router - routes traffic between machines
+router-06   router    Network router - routes traffic between machines
+router-07   router    Network router - routes traffic between machines
+router-08   router    Network router - routes traffic between machines
+firewall-01 firewall  Firewall - network security filtering
+firewall-02 firewall  Firewall - network security filtering
+firewall-03 firewall  Firewall - network security filtering
+firewall-04 firewall  Firewall - network security filtering
+firewall-05 firewall  Firewall - network security filtering
+firewall-06 firewall  Firewall - network security filtering
+firewall-07 firewall  Firewall - network security filtering
+dns-01      dns       DNS server - name resolution
+dns-02      dns       DNS server - name resolution
+dns-03      dns       DNS server - name resolution
+dns-04      dns       DNS server - name resolution
+dns-05      dns       DNS server - name resolution
+voip-01     voip      VoIP gateway - voice/telephony traffic
+voip-02     voip      VoIP gateway - voice/telephony traffic
+voip-03     voip      VoIP gateway - voice/telephony traffic
+voip-04     voip      VoIP gateway - voice/telephony traffic
+voip-05     voip      VoIP gateway - voice/telephony traffic
