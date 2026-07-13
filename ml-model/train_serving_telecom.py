@@ -23,6 +23,8 @@ from pathlib import Path
 
 import joblib
 import pandas as pd
+import mlflow
+import mlflow.sklearn
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import train_test_split
@@ -35,6 +37,10 @@ ROOT   = Path(__file__).resolve().parent.parent
 DATA   = ROOT / "data" / "telecom_fleet.csv"
 MODELS = ROOT / "models"
 META_COLS = {"timestamp", "machine", "label", "type", "hour", "window"}
+
+mlflow.set_tracking_uri("http://localhost:5001")
+mlflow.set_experiment("telecom-anomaly-detection")
+mlflow.start_run()
 
 print(f"Loading {DATA} ...")
 df = pd.read_csv(DATA)
@@ -66,15 +72,36 @@ y_pred  = (model.predict(apply_zscore(df_te, baselines, features)) == -1).astype
 y_score = -model.score_samples(apply_zscore(df_te, baselines, features))
 y_true  = df_te["label"]
 
-print(f"\n  F1        : {f1_score(y_true, y_pred):.3f}")
-print(f"  Precision : {precision_score(y_true, y_pred):.3f}")
-print(f"  Recall    : {recall_score(y_true, y_pred):.3f}")
-print(f"  ROC-AUC   : {roc_auc_score(y_true, y_score):.3f}")
+f1  = f1_score(y_true, y_pred)
+prec = precision_score(y_true, y_pred)
+rec  = recall_score(y_true, y_pred)
+auc  = roc_auc_score(y_true, y_score)
+
+print(f"\n  F1        : {f1:.3f}")
+print(f"  Precision : {prec:.3f}")
+print(f"  Recall    : {rec:.3f}")
+print(f"  ROC-AUC   : {auc:.3f}")
+
+mlflow.log_param("contamination", 0.068)
+mlflow.log_param("n_estimators", 200)
+mlflow.log_param("n_features", len(features))
+mlflow.log_param("n_machines", df["machine"].nunique())
+mlflow.log_param("resolution_seconds", 30)
+mlflow.log_metric("f1", f1)
+mlflow.log_metric("precision", prec)
+mlflow.log_metric("recall", rec)
+mlflow.log_metric("roc_auc", auc)
 
 MODELS.mkdir(parents=True, exist_ok=True)
 joblib.dump(model, MODELS / "telecom_serving_model.pkl")
 save_baselines(baselines, MODELS / "telecom_serving_baselines.json")
 
+mlflow.sklearn.log_model(model, "model", registered_model_name="telecom-anomaly-model")
+mlflow.log_artifact(str(MODELS / "telecom_serving_baselines.json"))
+
 print(f"\nSaved: {MODELS / 'telecom_serving_model.pkl'}")
 print(f"Saved: {MODELS / 'telecom_serving_baselines.json'}")
 print(f"Machines in artifact: {n_machine}  |  window baselines: {n_window}")
+print(f"Logged to MLflow: http://localhost:5001")
+
+mlflow.end_run()

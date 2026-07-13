@@ -33,3 +33,5 @@ mlruns/
 context_dump.txt
 kubectl
 minikube-linux-amd64
+mlflow.db
+mlruns/
