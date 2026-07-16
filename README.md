@@ -363,8 +363,10 @@ between the jenkins, sonarqube, and registry containers.
 
 ## Kubernetes (L4)
 
-Minikube, single-node, Docker driver. Two namespaces: `ml-serving` (API
-workloads) and `infra` (reserved for future MLflow/MinIO).
+Minikube, single-node, Docker driver. Single namespace: `ml-serving`
+(API workloads). MLflow and MinIO run as standalone Docker containers
+outside the cluster, not in a K8s namespace -- see MLOps section below
+for why.
 
 - **Deployment:** 2 replicas of `devsecmlops-api:2.4.0`
 - **Service:** NodePort 30080
@@ -510,6 +512,68 @@ A `$machine_type` template variable filters every panel by machine type
 `docs/machine_roster.txt`: complete identification of all 200 simulated
 machines — name, type, and a plain-English description of its role
 (e.g. `db-01 / db / Database - persistent data storage`).
+
+---
+
+## MLOps: experiment tracking and model registry
+
+MLflow (tracking + model registry) backed by MinIO (self-hosted
+S3-compatible artifact storage). This closes a real gap from the
+original architecture proposal: MLflow/MinIO were planned but not
+built until this point in the project.
+
+**MinIO** (`docker run minio/minio`, ports 9001 API / 9002 console):
+generic object storage, playing the role AWS S3 would in a cloud
+deployment, but self-hosted -- satisfying the data-sovereignty
+requirement (no cloud SaaS in the critical path) from the original
+Tunisie Telecom constraints.
+
+**MLflow** (`mlflow server`, port 5001, SQLite backend + MinIO artifact
+store): every run of `train_serving_telecom.py` now logs:
+- **Parameters:** contamination, n_estimators, n_features, n_machines,
+  resolution_seconds
+- **Metrics:** F1, Precision, Recall, ROC-AUC
+- **Model artifact:** registered to the Model Registry as
+  `telecom-anomaly-model`, versioned
+
+Verified with a real training run: F1=0.663, Precision=0.660,
+Recall=0.667, ROC-AUC=0.926 -- exactly matching prior benchmark
+numbers, confirming the MLflow integration adds tracking without
+changing model behavior.
+
+**Honest scope note:** the Docker build/deploy pipeline still uses the
+git-committed model artifact (`telecom_serving_model.pkl`) directly --
+it has not been rewired to pull from the MLflow registry. This was a
+deliberate choice to avoid introducing a new runtime dependency into
+the working CI/CD path this late in the project. A natural next step
+would be having the Jenkins Docker-build stage fetch the latest
+Production-stage model version from MLflow instead of reading the
+git-committed file.
+
+**Why MLflow/MinIO run as standalone Docker containers, not inside the
+Kubernetes cluster:** same reasoning as Jenkins, SonarQube, and the
+registry -- these are shared platform/tooling services supporting the
+development process, not the product being served to end users. In a
+real organization, one MLflow server typically tracks experiments
+across many projects; it would not live inside a single project's own
+K8s namespace.
+
+```bash
+# MinIO
+docker run -d --name minio --restart=always \
+  -p 9001:9000 -p 9002:9001 \
+  -e "MINIO_ROOT_USER=admin" -e "MINIO_ROOT_PASSWORD=minioadmin123" \
+  -v minio_data:/data \
+  minio/minio server /data --console-address ":9001"
+
+# MLflow (create the mlflow-artifacts bucket in MinIO's console first)
+export MLFLOW_S3_ENDPOINT_URL=http://localhost:9001
+export AWS_ACCESS_KEY_ID=admin
+export AWS_SECRET_ACCESS_KEY=minioadmin123
+mlflow server --host 0.0.0.0 --port 5001 \
+  --backend-store-uri sqlite:///mlflow.db \
+  --default-artifact-root s3://mlflow-artifacts/
+```
 
 ---
 

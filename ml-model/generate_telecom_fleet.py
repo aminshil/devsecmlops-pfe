@@ -94,6 +94,7 @@ def generate_machine(name, profile_name, profile, n_minutes,
             + rng.normal(0, load_sig, n_minutes)).clip(0, None)
 
     labels = np.zeros(n_minutes, dtype=int)
+    atypes = np.array([""] * n_minutes, dtype=object)
 
     target = int(n_minutes * anomaly_ratio)
     injected = attempts = 0
@@ -117,6 +118,7 @@ def generate_machine(name, profile_name, profile, n_minutes,
                 dusage[i] = float(np.clip(dusage[i] * m["disk_usage"]   + rng.normal(0, dusage_sig), 0, 100))
                 load[i]   = float(np.clip(load_mu * tf[i] * m["load_avg"] + rng.normal(0, load_sig), 0, None))
         labels[sidx:sidx + blen] = 1
+        atypes[sidx:sidx + blen] = atype
         injected += blen
 
     if correlated_mask is not None:
@@ -127,6 +129,7 @@ def generate_machine(name, profile_name, profile, n_minutes,
                     load[i] = float(np.clip(load[i] * 1.5 + rng.normal(0, load_sig), 0, None))
                 if rng.random() < 0.4:
                     labels[i] = 1
+                    atypes[i] = "cascade"
 
     return pd.DataFrame({
         "timestamp":  [str(t) for t in timestamps],
@@ -139,6 +142,7 @@ def generate_machine(name, profile_name, profile, n_minutes,
         "disk_usage": np.round(dusage, 3),
         "load_avg":   np.round(load, 3),
         "label":      labels,
+        "anomaly_type": atypes,
     })
 
 
