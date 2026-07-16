@@ -49,23 +49,37 @@ ARTIFACTS = {
     "serving": ("serving_model.pkl",          "serving_baselines.json"),
 }
 
-if MODEL_NAME not in ARTIFACTS:
-    raise RuntimeError(
-        f"Unknown MODEL_NAME={MODEL_NAME!r}. Choose from: {list(ARTIFACTS)}"
-    )
+# v2: dual-model (RandomForest cause classifier + IsolationForest safety net),
+# trained on labeled anomaly_type data. See ml-model/train tonight's session.
+IS_V2 = MODEL_NAME == "telecom_v2"
 
-model_file, baselines_file = ARTIFACTS[MODEL_NAME]
-MODEL_PATH     = MODELS_DIR / model_file
-BASELINES_PATH = MODELS_DIR / baselines_file
-
-if not MODEL_PATH.exists():
-    raise RuntimeError(f"Model not found: {MODEL_PATH}")
-if not BASELINES_PATH.exists():
-    raise RuntimeError(f"Baselines not found: {BASELINES_PATH}")
-
-model = joblib.load(MODEL_PATH)
-with open(BASELINES_PATH) as f:
-    baselines = json.load(f)
+if IS_V2:
+    RF_PATH  = MODELS_DIR / "telecom_rf_classifier_v2.pkl"
+    ISO_PATH = MODELS_DIR / "telecom_iso_v2.pkl"
+    BASELINES_PATH = MODELS_DIR / "telecom_baselines_v2.json"
+    for path in (RF_PATH, ISO_PATH, BASELINES_PATH):
+        if not path.exists():
+            raise RuntimeError(f"v2 artifact not found: {path}")
+    rf_model  = joblib.load(RF_PATH)
+    iso_model = joblib.load(ISO_PATH)
+    model = rf_model  # kept for any code that references `model` generically
+    with open(BASELINES_PATH) as f:
+        baselines = json.load(f)
+else:
+    if MODEL_NAME not in ARTIFACTS:
+        raise RuntimeError(
+            f"Unknown MODEL_NAME={MODEL_NAME!r}. Choose from: {list(ARTIFACTS)} or 'telecom_v2'"
+        )
+    model_file, baselines_file = ARTIFACTS[MODEL_NAME]
+    MODEL_PATH     = MODELS_DIR / model_file
+    BASELINES_PATH = MODELS_DIR / baselines_file
+    if not MODEL_PATH.exists():
+        raise RuntimeError(f"Model not found: {MODEL_PATH}")
+    if not BASELINES_PATH.exists():
+        raise RuntimeError(f"Baselines not found: {BASELINES_PATH}")
+    model = joblib.load(MODEL_PATH)
+    with open(BASELINES_PATH) as f:
+        baselines = json.load(f)
 
 HAS_WINDOWS = baselines.get("__has_windows__", False)
 
@@ -196,11 +210,43 @@ def predict(reading: Reading):
                                 detail=f"Missing metric: {col}")
         vals.append((raw - mean) / std)
 
-    X          = pd.DataFrame([vals], columns=FEATURES)
+    X        = pd.DataFrame([vals], columns=FEATURES)
+    z_scores = {c: round(float(v), 2) for c, v in zip(FEATURES, X.to_numpy()[0])}
+
+    if IS_V2:
+        # RandomForest: predicted cause (normal | cpu_spike | memory_leak | ...)
+        cause = str(rf_model.predict(X)[0])
+        rf_is_anomaly = cause != "normal"
+
+        # IsolationForest: independent unsupervised vote (safety net for
+        # patterns the classifier wasn't trained to recognize, e.g. cascade)
+        iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
+        iso_score = float(-iso_model.score_samples(X)[0])
+
+        is_anomaly = rf_is_anomaly or iso_is_anomaly
+        if rf_is_anomaly:
+            likely_cause = cause
+        elif iso_is_anomaly:
+            likely_cause = "unknown (flagged by safety-net model only)"
+        else:
+            likely_cause = None
+
+        return {
+            "machine":        reading.machine,
+            "machine_type":   machine_type or "unknown",
+            "model":          MODEL_NAME,
+            "window":         window or "not-supplied",
+            "is_anomaly":     int(is_anomaly),
+            "likely_cause":   likely_cause,
+            "rf_vote":        {"is_anomaly": int(rf_is_anomaly), "cause": cause},
+            "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
+            "z_scores":       z_scores,
+            "machine_known":  reading.machine in baselines,
+            "baseline_used":  baseline_used,
+        }
+
     is_anomaly = int(model.predict(X)[0] == -1)
     score      = float(-model.score_samples(X)[0])
-    z_scores   = {c: round(float(v), 2)
-                  for c, v in zip(FEATURES, X.to_numpy()[0])}
 
     return {
         "machine":        reading.machine,
