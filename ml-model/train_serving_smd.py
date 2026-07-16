@@ -20,7 +20,7 @@ from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from preprocess import build_baselines, apply_zscore, save_baselines
+from preprocess import build_baselines, apply_zscore, save_baselines, add_window_column
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data" / "smd_multi.csv"
@@ -37,6 +37,12 @@ print(f"  Feature order (first 5): {features[:5]} ... ({len(features)} total)")
 df_tr, df_te = train_test_split(df, test_size=0.3, random_state=42,
                                 stratify=df["label"])
 print(f"  Train: {len(df_tr):,}  Test: {len(df_te):,}\n")
+
+# Variant B: constant window (per-machine baseline only, no time-of-day split)
+df_tr = df_tr.copy()
+df_te = df_te.copy()
+df_tr["window"] = "all"
+df_te["window"] = "all"
 
 print("Building per-machine baselines on the TRAIN split only...")
 baselines = build_baselines(df_tr, features)
