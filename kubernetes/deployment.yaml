@@ -17,25 +17,33 @@ spec:
     spec:
       containers:
         - name: api
-          image: devsecmlops-api:2.4.0
+          image: devsecmlops-api:2.10.0
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
           env:
             - name: MODEL_NAME
-              value: "telecom"
+              value: "telecom_v2"
+            - name: MINIO_ENDPOINT
+              value: "http://host.minikube.internal:9001"
+            - name: MINIO_ACCESS_KEY
+              value: "admin"
+            - name: MINIO_SECRET_KEY
+              value: "minioadmin123"
+            - name: MINIO_BUCKET
+              value: "model-artifacts"
           resources:
-            requests: { cpu: "100m", memory: "256Mi" }
-            limits:   { cpu: "500m", memory: "512Mi" }
+            requests: { cpu: "200m", memory: "512Mi" }
+            limits:   { cpu: "1000m", memory: "1Gi" }
           livenessProbe:
             httpGet: { path: /health, port: 8000 }
-            initialDelaySeconds: 10
+            initialDelaySeconds: 45
             periodSeconds: 15
           readinessProbe:
             httpGet: { path: /health, port: 8000 }
-            initialDelaySeconds: 5
+            initialDelaySeconds: 30
             periodSeconds: 10
           securityContext:
             runAsNonRoot: true
-            runAsUser: 1000
+            runAsUser: 999
             allowPrivilegeEscalation: false
