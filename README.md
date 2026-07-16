@@ -315,6 +315,22 @@ cascades — the classifier structurally cannot learn.
 Both are documented here rather than discarded silently — they are real,
 informative negative results, not implementation bugs.
 
+**A fourth alternative was also explored:** a separate generator variant
+adding two additional features (`response_time`, `packet_loss`) and
+gradual-onset anomaly injection (severity ramping linearly over the
+anomaly's duration, rather than applying full severity instantly, as the
+production generator does). Evaluated with a threshold search on the test
+set itself -- an optimistic evaluation that should favor this variant --
+it still underperformed the production pipeline (F1=0.522 vs 0.644-0.731).
+Per-cause results were highly uneven (silent_failure 0.918, network_flood
+0.839, but memory_leak only 0.071): gradual onset appears to make
+snapshot-based z-score detection harder for slow-building anomalies,
+since metrics are only mildly elevated for most of the anomaly's
+duration. This suggests gradual onset is a more realistic injection model
+but would need trend-aware features (rate of change, rolling statistics)
+rather than single-timestamp z-scores to detect well -- consistent with
+the sequence-aware future-work direction noted in the Roadmap.
+
 **Real-world validation on SMD (Server Machine Dataset):** the same
 per-machine, per-time-window z-score methodology was applied unmodified to
 SMD — 28 real servers, 708K rows, 4.16% anomaly rate, the public benchmark
