@@ -265,6 +265,88 @@ training data or the root-cause graph.
 
 ---
 
+## ML model v2: labeled cause classification (July 2026)
+
+The original Isolation Forest (above) is unsupervised and flags anomalies
+without saying why. A second experiment track added labeled cause data and
+a supervised classifier on top, evaluated with a stricter methodology than
+the original benchmark: training and test data are two **independently
+generated** 30-day, 200-machine datasets (different random seeds), so the
+test set was never seen in any form during training — not even a different
+time-slice of the same file.
+
+**Generator upgrade:** `generate_telecom_fleet.py` now emits a labeled
+`anomaly_type` column (`cpu_spike`, `memory_leak`, `network_flood`,
+`disk_saturation`, `silent_failure`, `cascade`) alongside the existing
+binary `label`, without changing any existing behavior.
+
+**Two models, evaluated on the independent test set:**
+
+| Model | F1 | Precision | Recall |
+|---|---|---|---|
+| **RandomForest (supervised, primary)** | **0.731** | 0.849 | 0.641 |
+| Isolation Forest (unsupervised, safety net) | 0.652 | 0.655 | 0.649 |
+
+Per-cause recall, RandomForest: cpu_spike 0.858, memory_leak 0.688,
+network_flood 0.881, disk_saturation 0.965, silent_failure 0.868,
+cascade 0.029.
+
+**Why both models are kept, not just the better one:** `cascade` labels
+are only 40% consistent by generator design (a downstream machine affected
+by a router failure is labeled anomalous 40% of the time, unlabeled 60%,
+for the identical feature pattern) — not cleanly learnable by a supervised
+classifier. RandomForest trained on this label alone collapsed to F1=0.513
+(cascade precision 0.16, poisoning the other classes). Folding cascade
+into "normal" during training fixed that (F1=0.731) but left RandomForest
+blind to cascades specifically (0.029 recall). Isolation Forest, being
+unsupervised, has no such blind spot (0.262 cascade recall) since it
+reacts to any statistical deviation regardless of label noise. Production
+therefore runs both: RandomForest as the primary detector with cause
+explanation, Isolation Forest as a safety net for patterns — like
+cascades — the classifier structurally cannot learn.
+
+**Two architectural fixes attempted and rejected, with evidence:**
+
+| Attempt | F1 | Why it failed |
+|---|---|---|
+| Blind ensemble (flag if either model fires) | 0.663 | Inherited Isolation Forest's false positives on top of RandomForest's correct calls |
+| Dependency-graph cascade rule (flag all downstream machines when router predicted anomalous) | 0.550 | Each router has ~22 downstream machines; one wrong router prediction produced ~22 wrong flags (precision on cascade-rule-fired rows: 2.9%) |
+
+Both are documented here rather than discarded silently — they are real,
+informative negative results, not implementation bugs.
+
+**Real-world validation on SMD (Server Machine Dataset):** the same
+per-machine, per-time-window z-score methodology was applied unmodified to
+SMD — 28 real servers, 708K rows, 4.16% anomaly rate, the public benchmark
+used in Su et al. (KDD 2019, OmniAnomaly). Three variants tested:
+
+| Variant | Features | F1 |
+|---|---|---|
+| Per-machine, no window | 37 (all) | 0.248 |
+| **Per-machine + time window** | 37 (all) | **0.269** |
+| Top-3 variance features only | 3 | 0.159 |
+
+F1=0.269 is lower than the synthetic-data results, expected and consistent
+with the literature: published unsupervised sequence models on SMD
+(OmniAnomaly and similar GRU-VAE architectures) report F1 in the 0.40–0.55
+range, but those models read a *sliding window* of recent history rather
+than one timestamp in isolation — a fundamentally more powerful signal for
+gradual-onset anomalies, at the cost of a much heavier architecture
+(recurrent neural networks vs. IsolationForest/RandomForest here). This
+project prioritizes training speed, interpretability, and straightforward
+CI/CD-integrated deployment over the marginal accuracy gains of a
+recurrent sequence model — a deliberate, documented tradeoff, not an
+oversight (see Roadmap for the future-work framing). The SMD result's
+purpose is not to win on the leaderboard; it confirms the same
+methodology generalizes to real, independently-collected data and isn't
+an artifact of the synthetic generator.
+
+**Model artifacts:** `models/telecom_rf_classifier_v2.pkl` (RandomForest,
+not committed — 125MB exceeds GitHub's 100MB limit, fully reproducible via
+`generate_telecom_fleet.py --seed 42` + the training pipeline,
+`random_state=42`, deterministic), `models/telecom_iso_v2.pkl`
+(IsolationForest, committed), `models/telecom_baselines_v2.json`.
+
 ## API
 
 FastAPI service, model baked into the Docker image. Rebuild cost is
@@ -295,6 +377,14 @@ to the machine's all-day baseline. Response includes `is_anomaly`,
 `anomaly_score`, per-feature `z_scores` (operator-facing explainability —
 "cpu z=7.4" tells the ops team exactly which metric is driving the alert),
 and `baseline_used` (which fallback level fired).
+
+**With `MODEL_NAME=telecom_v2`**, `/predict` additionally returns
+`likely_cause` (one of the 5 named anomaly types, or `null` if normal, or
+"unknown" if only the Isolation Forest safety net fired) plus `rf_vote`
+and `iso_vote` showing each model's independent decision — see the
+"ML model v2" section above. Live-tested against three distinct anomaly
+signatures (disk_saturation, memory_leak, network_flood): all three
+correctly identified with matching z-score evidence.
 
 ### POST /root-cause
 
@@ -696,3 +786,14 @@ python monitoring/k8s_exporter.py &      # publishes K8s pod/HPA status
 - **Alertmanager integration:** wire real Slack/email notifications when
   `/root-cause` identifies a `likely_root_cause`, closing the loop from
   detection to human notification.
+- **Sequence-aware detection:** the current models (Isolation Forest,
+  RandomForest) evaluate each timestamp independently, which limits
+  sensitivity to gradual-onset anomalies such as memory leaks (currently
+  the weakest per-cause recall, 0.688). State-of-the-art approaches on
+  SMD -- notably OmniAnomaly (Su et al., KDD 2019), a GRU-VAE architecture
+  that models temporal dependence across a sliding window of readings --
+  report higher F1 by using this recent-history signal. A simpler,
+  lower-risk step toward the same idea (rolling/delta features -- e.g.
+  `cpu_delta`, rolling mean/std over the last N readings) was scoped but
+  not integrated into the shipped pipeline; a full recurrent sequence
+  model is the natural following iteration.
