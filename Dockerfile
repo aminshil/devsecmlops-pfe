@@ -13,7 +13,8 @@ WORKDIR /app
 # --no-cache-dir keeps the image small
 COPY requirements-api.txt .
 RUN pip install --no-cache-dir --upgrade pip setuptools>=70.0.0 wheel>=0.46.2 && \
-    pip install --no-cache-dir -r requirements-api.txt
+    pip install --no-cache-dir -r requirements-api.txt && \
+    pip install --no-cache-dir boto3
 
 # ── Copy application code ──
 COPY api/ ./api/
@@ -23,6 +24,11 @@ COPY ml-model/root_cause.py ./ml-model/root_cause.py
 # ── Copy the ONE shipped model artifact ──
 COPY models/telecom_serving_model.pkl     ./models/
 COPY models/telecom_serving_baselines.json ./models/
+
+# v2 model artifacts (RandomForest, 124MB) fetched from MinIO at startup
+# instead of baked in -- see docker-entrypoint.sh
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 COPY models/dependency_graph.json ./models/
 
 # ── Runtime config (override at run/deploy time with -e MODEL_NAME=...) ──
@@ -37,9 +43,10 @@ USER appuser
 EXPOSE 8000
 
 # ── Healthcheck: same /health endpoint K8s liveness probe will use ──
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD python -c "import urllib.request,sys; \
 sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)" \
   || exit 1
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]
