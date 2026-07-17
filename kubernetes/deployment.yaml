@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: devsecmlops-api:2.10.0
+          image: devsecmlops-api:2.10.2
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
