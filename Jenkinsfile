@@ -21,8 +21,8 @@ pipeline {
         stage('1b. Unit tests (pytest)') {
             steps {
                 sh '''
-                    pip install --quiet -r requirements-api.txt
-                    pip install --quiet -r requirements-dev.txt
+                    python3 -m pip install --quiet -r requirements-api.txt
+                    python3 -m pip install --quiet -r requirements-dev.txt
                     python3 -m pytest tests/ -v --tb=short
                 '''
             }

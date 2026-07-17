@@ -100,3 +100,40 @@ the VM — there is no service listening on the host's own `localhost`.
 
 Run `hostname -I` on the VM to confirm the current IP — it can change
 across VM restarts depending on the VMware network configuration.
+
+---
+
+## "Jenkins pytest stage fails: pip/venv not found"
+
+**Root cause:** the official `jenkins/jenkins:lts` Docker image is minimal
+by design -- it has `python3` but no `pip`, `pip3`, `venv`, or
+`ensurepip`. This is NOT the same environment as the VM itself (which
+has a full Python setup) -- Jenkins builds run inside its own isolated
+container.
+
+**Fix (one-time per container, does not survive container recreation):**
+
+```bash
+docker exec -u root jenkins apt-get update
+docker exec -u root jenkins apt-get install -y python3-pip
+```
+
+**Jenkinsfile pytest stage uses `python3 -m pip`, not bare `pip`/`pip3`**
+-- more robust against PATH differences across environments:
+
+```groovy
+sh '''
+    python3 -m pip install --quiet -r requirements-api.txt
+    python3 -m pip install --quiet -r requirements-dev.txt
+    python3 -m pytest tests/ -v --tb=short
+'''
+```
+
+**If Jenkins' container ever gets recreated** (not just restarted --
+recreated via `docker rm`+`docker run`, or a full environment rebuild),
+this apt-get fix must be redone, since it wasn't baked into a custom
+image. A more permanent fix would be a custom `Dockerfile` extending
+`jenkins/jenkins:lts` with `python3-pip` pre-installed, built once and
+used going forward -- not done here since the base image already had
+the toolchain needed for SonarQube/Docker/Trivy stages, and this was
+a late-discovered gap.
