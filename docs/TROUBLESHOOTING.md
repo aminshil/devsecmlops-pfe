@@ -137,3 +137,14 @@ image. A more permanent fix would be a custom `Dockerfile` extending
 used going forward -- not done here since the base image already had
 the toolchain needed for SonarQube/Docker/Trivy stages, and this was
 a late-discovered gap.
+
+**Third layer (Debian 13/trixie PEP 668):** even with pip installed,
+`pip install` refuses to run outside a venv by default
+("externally-managed-environment"). Since the Jenkins container is
+isolated and ephemeral per build, `--break-system-packages` is the
+correct override here (not a virtual env, which we already ruled out
+due to missing ensurepip):
+
+```groovy
+python3 -m pip install --quiet --break-system-packages -r requirements-api.txt
+```
