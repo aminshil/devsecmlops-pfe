@@ -331,6 +331,37 @@ but would need trend-aware features (rate of change, rolling statistics)
 rather than single-timestamp z-scores to detect well -- consistent with
 the sequence-aware future-work direction noted in the Roadmap.
 
+**A fifth experiment tested a concrete step toward that sequence-aware
+direction: rolling/trend features.** Per-machine rolling mean, rolling
+std, and delta (rate of change) over the last 10 readings (5 minutes)
+were added for cpu/ram/load_avg, on top of the existing z-scored
+features, and RandomForest was retrained on the same 5-day pilot split
+used for the cascade-folding experiments above.
+
+| Metric | Baseline (z-score only) | With rolling features |
+|---|---|---|
+| F1 | 0.708 | **0.729** |
+| Precision | 0.939 | **0.978** |
+| Recall | 0.568 | 0.581 |
+
+A real, honest improvement -- precision rose meaningfully and F1 by
+2.1 points. memory_leak recall (the original motivation) improved
+only modestly (0.573 -> 0.606); cpu_spike recall dropped in this run
+(0.751), suggesting the added features shift the model's attention
+across categories rather than uniformly helping. Threshold tuning on
+top of this model (varying the P(normal) cutoff for flagging an
+anomaly) was also tested and did not improve on the default 0.5
+threshold in this configuration.
+
+Not integrated into the production pipeline: the F1 gain is real but
+modest, training cost increases (~25%), and the feature-engineering
+change would need to be threaded through the live serving path
+(anomaly_bridge.py would need to maintain a rolling window per machine
+in memory, not just the current single-reading snapshot /predict
+takes today) -- a larger architectural change than the gain currently
+justifies. Documented here as a validated, ready-to-implement next
+step rather than a speculative one.
+
 **Real-world validation on SMD (Server Machine Dataset):** the same
 per-machine, per-time-window z-score methodology was applied unmodified to
 SMD — 28 real servers, 708K rows, 4.16% anomaly rate, the public benchmark
