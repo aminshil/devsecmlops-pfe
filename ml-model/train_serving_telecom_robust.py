@@ -104,6 +104,6 @@ mlflow.log_artifact(str(MODELS / "telecom_serving_baselines.json"))
 print(f"\nSaved: {MODELS / 'telecom_serving_model.pkl'}")
 print(f"Saved: {MODELS / 'telecom_serving_baselines.json'}")
 print(f"Machines in artifact: {n_machine}  |  window baselines: {n_window}")
-print(f"Logged to MLflow: http://localhost:5001")
+print("Logged to MLflow: http://localhost:5001")
 
 mlflow.end_run()

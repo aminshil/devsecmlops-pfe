@@ -142,42 +142,42 @@ def run():
     df_tr = add_window_column(df_tr)
     df_te = add_window_column(df_te)
     baselines = build_baselines(df_tr, features)
-    Xz_tr = apply_zscore(df_tr, baselines, features)
-    Xz_te = apply_zscore(df_te, baselines, features)
-    Xr_tr, Xr_te = df_tr[features].copy(), df_te[features].copy()
+    xz_tr = apply_zscore(df_tr, baselines, features)
+    xz_te = apply_zscore(df_te, baselines, features)
+    xr_tr, xr_te = df_tr[features].copy(), df_te[features].copy()
 
     if args.time and "timestamp" in df.columns:
-        for Xset, dfset in [(Xz_tr, df_tr), (Xz_te, df_te), (Xr_tr, df_tr), (Xr_te, df_te)]:
+        for xset, dfset in [(xz_tr, df_tr), (xz_te, df_te), (xr_tr, df_tr), (xr_te, df_te)]:
             tf = add_time_features(dfset)
-            for c in tf.columns: Xset[c] = tf[c].values
-        console.print(f"  [dim]+4 time features -> {Xz_tr.shape[1]} cols[/dim]")
+            for c in tf.columns: xset[c] = tf[c].values
+        console.print(f"  [dim]+4 time features -> {xz_tr.shape[1]} cols[/dim]")
 
     rows = {}
 
-    z_pred = (Xz_te[features].abs() > 3).any(axis=1).astype(int).values
-    rows["z-threshold (|z|>3)"] = metrics(y_te, z_pred, Xz_te[features].abs().max(axis=1).values)
+    z_pred = (xz_te[features].abs() > 3).any(axis=1).astype(int).values
+    rows["z-threshold (|z|>3)"] = metrics(y_te, z_pred, xz_te[features].abs().max(axis=1).values)
 
-    m = IsolationForest(contamination=args.contamination, n_estimators=args.n_estimators, random_state=args.seed, n_jobs=-1).fit(Xr_tr)
-    rows["IsolationForest (raw)"] = metrics(y_te, (m.predict(Xr_te) == -1).astype(int), -m.score_samples(Xr_te))
+    m = IsolationForest(contamination=args.contamination, n_estimators=args.n_estimators, random_state=args.seed, n_jobs=-1).fit(xr_tr)
+    rows["IsolationForest (raw)"] = metrics(y_te, (m.predict(xr_te) == -1).astype(int), -m.score_samples(xr_te))
 
-    m = IsolationForest(contamination=args.contamination, n_estimators=args.n_estimators, random_state=args.seed, n_jobs=-1).fit(Xz_tr)
-    rows["IsolationForest (z-scored)"] = metrics(y_te, (m.predict(Xz_te) == -1).astype(int), -m.score_samples(Xz_te))
+    m = IsolationForest(contamination=args.contamination, n_estimators=args.n_estimators, random_state=args.seed, n_jobs=-1).fit(xz_tr)
+    rows["IsolationForest (z-scored)"] = metrics(y_te, (m.predict(xz_te) == -1).astype(int), -m.score_samples(xz_te))
 
-    fit = Xz_tr.sample(n=min(args.ocsvm_cap, len(Xz_tr)), random_state=args.seed)
+    fit = xz_tr.sample(n=min(args.ocsvm_cap, len(xz_tr)), random_state=args.seed)
     t = time.time()
     m = OneClassSVM(nu=min(args.contamination, 0.5), kernel="rbf", gamma="scale").fit(fit)
-    rows["OneClassSVM (z-scored)"] = metrics(y_te, (m.predict(Xz_te) == -1).astype(int), -m.score_samples(Xz_te))
+    rows["OneClassSVM (z-scored)"] = metrics(y_te, (m.predict(xz_te) == -1).astype(int), -m.score_samples(xz_te))
     console.print(f"  [dim]OCSVM on {len(fit)} rows, {time.time()-t:.1f}s[/dim]")
 
-    fit = Xz_tr.sample(n=min(args.lof_cap, len(Xz_tr)), random_state=args.seed)
+    fit = xz_tr.sample(n=min(args.lof_cap, len(xz_tr)), random_state=args.seed)
     m = LocalOutlierFactor(n_neighbors=20, novelty=True, contamination=args.contamination).fit(fit)
-    rows["LocalOutlierFactor (z-scored)"] = metrics(y_te, (m.predict(Xz_te) == -1).astype(int), -m.score_samples(Xz_te))
+    rows["LocalOutlierFactor (z-scored)"] = metrics(y_te, (m.predict(xz_te) == -1).astype(int), -m.score_samples(xz_te))
 
     t = time.time()
     ae = MLPRegressor(hidden_layer_sizes=(16, 4, 16), activation="relu", solver="adam",
                       max_iter=300, early_stopping=True, n_iter_no_change=10, random_state=args.seed)
-    ae.fit(Xz_tr, Xz_tr)
-    err = ((Xz_te.values - ae.predict(Xz_te)) ** 2).mean(axis=1)
+    ae.fit(xz_tr, xz_tr)
+    err = ((xz_te.values - ae.predict(xz_te)) ** 2).mean(axis=1)
     thr = np.quantile(err, 1 - args.contamination)
     rows["Autoencoder (z-scored)"] = metrics(y_te, (err > thr).astype(int), err)
     console.print(f"  [dim]Autoencoder trained in {time.time()-t:.1f}s (slowest, CPU-bound)[/dim]\n")

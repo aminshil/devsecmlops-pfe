@@ -101,8 +101,7 @@ def inject_anomaly(
         df,
         start,
         length,
-        anomaly,
-        rng
+        anomaly
 ):
 
     end = min(
@@ -385,8 +384,7 @@ def generate_machine(
             df,
             start,
             length,
-            anomaly,
-            rng
+            anomaly
         )
 
 

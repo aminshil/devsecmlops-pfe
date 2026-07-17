@@ -192,7 +192,10 @@ def list_machines():
     return {"machines": result, "total": len(result)}
 
 
-@app.post("/predict")
+@app.post(
+    "/predict",
+    responses={400: {"description": "Invalid input: missing metric, bad hour/timestamp"}},
+)
 def predict(reading: Reading):
     window = _resolve_window(reading)
 
@@ -261,7 +264,10 @@ def predict(reading: Reading):
     }
 
 
-@app.post("/root-cause")
+@app.post(
+    "/root-cause",
+    responses={400: {"description": "Invalid input: empty anomalies dict"}},
+)
 def root_cause(batch: AnomalyBatch):
     """
     Given a set of currently-anomalous machines (from /predict results),
