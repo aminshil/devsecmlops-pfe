@@ -112,7 +112,7 @@ def main():
     joblib.dump(model, MODELS / "serving_model.pkl")
     save_baselines(baselines, MODELS / "serving_baselines.json")
 
-    print(f"\nFleet sample (first 6):")
+    print("\nFleet sample (first 6):")
     for name, profile in fleet[:6]:
         mu = baselines[name]
         print(f"  {name:<10} ({profile:<6})  cpu mu={mu['cpu'][0]:>5.1f}  "

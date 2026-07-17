@@ -144,12 +144,12 @@ def main() -> None:
     if metrics_test["roc_auc"] is not None:
         print(f"ROC-AUC:   {metrics_test['roc_auc']:.3f}")
     cm = metrics_test["confusion_matrix"]
-    print(f"\nConfusion matrix (rows=true, cols=pred):")
-    print(f"               pred normal   pred anomaly")
+    print("\nConfusion matrix (rows=true, cols=pred):")
+    print("               pred normal   pred anomaly")
     print(f"  true normal      {cm[0][0]:>7}      {cm[0][1]:>7}")
     print(f"  true anomaly     {cm[1][0]:>7}      {cm[1][1]:>7}")
 
-    print(f"\nClassification report (test):")
+    print("\nClassification report (test):")
     y_pred_test = predict_binary(model, X_test)
     print(classification_report(y_test, y_pred_test, target_names=["normal", "anomaly"]))
 

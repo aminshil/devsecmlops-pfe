@@ -41,10 +41,10 @@ pred = (model.predict(apply_zscore(df_te, baselines, features)) == -1).astype(in
 f1 = f1_score(df_te["label"], pred)
 prec = precision_score(df_te["label"], pred)
 rec = recall_score(df_te["label"], pred)
-print(f"\nVariant A (windowed) SMD model:")
+print("\nVariant A (windowed) SMD model:")
 print(f"  F1={f1:.3f}  Precision={prec:.3f}  Recall={rec:.3f}")
 
 MODELS.mkdir(parents=True, exist_ok=True)
 joblib.dump(model, MODELS / "smd_serving_model_windowed.pkl")
 save_baselines(baselines, MODELS / "smd_serving_baselines_windowed.json")
-print(f"\nSaved: smd_serving_model_windowed.pkl, smd_serving_baselines_windowed.json")
+print("\nSaved: smd_serving_model_windowed.pkl, smd_serving_baselines_windowed.json")

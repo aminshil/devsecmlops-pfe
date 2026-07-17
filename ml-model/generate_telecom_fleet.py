@@ -181,12 +181,12 @@ def main():
         type_counts[pname] = type_counts.get(pname, 0) + 1
 
     print(f"\n{'='*55}")
-    print(f"  Tunisie Telecom Fleet Generator (6 features)")
+    print("  Tunisie Telecom Fleet Generator (6 features)")
     print(f"{'='*55}")
     print(f"  Machines : {len(fleet)}")
     print(f"  Days     : {args.days}  ({n_minutes:,} min/machine)")
     print(f"  Features : {', '.join(METRICS)}")
-    print(f"  Network gear (router/firewall/dns/voip): no disk (SNMP-only)")
+    print("  Network gear (router/firewall/dns/voip): no disk (SNMP-only)")
     for pname in PROFILES:
         if pname in type_counts:
             print(f"    {pname:<12} {type_counts[pname]:>3} machines")
@@ -197,7 +197,7 @@ def main():
             tmp = generate_machine(name, pname, profile, n_minutes, args.anomaly_ratio, rng)
             router_masks[name] = tmp["label"].values
 
-    print(f"\n  Generating", end="", flush=True)
+    print("\n  Generating", end="", flush=True)
     frames, router_names = [], list(router_masks.keys())
     for idx, (name, pname, profile) in enumerate(fleet):
         corr = None
@@ -214,7 +214,7 @@ def main():
     print(f"\n  Total rows    : {len(df):,}")
     print(f"  Machines      : {df['machine'].nunique()}")
     print(f"  Anomaly ratio : {df['label'].mean()*100:.2f}%")
-    print(f"\n  Anomaly ratio by machine type:")
+    print("\n  Anomaly ratio by machine type:")
     for t in sorted(df["type"].unique()):
         r = df[df["type"] == t]["label"].mean()
         n = df[df["type"] == t]["machine"].nunique()

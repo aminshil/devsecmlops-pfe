@@ -112,7 +112,7 @@ if __name__ == "__main__":
     }
 
     print(f"Demo: {router} anomalous, {len(dependents)} of its dependents also anomalous,")
-    print(f"plus one unrelated machine with a higher raw score.\n")
+    print("plus one unrelated machine with a higher raw score.\n")
 
     ranked = score_root_causes(demo_anomalies, graph)
     print(f"{'Rank':<5}{'Machine':<15}{'Own score':<12}{'Downstream':<12}{'RC score':<10}{'Role'}")

@@ -57,7 +57,7 @@ def main() -> None:
     print(f"  {len(X):,} rows x {len(features)} features")
     print(f"  True anomaly ratio: {y.mean()*100:.2f}%")
 
-    X_train, X_test, y_train, y_test = train_test_split(
+    X_train, X_test, _, y_test = train_test_split(
         X, y, test_size=args.test_size, random_state=args.seed, stratify=y,
     )
     print(f"  Train: {len(X_train):,}  Test: {len(X_test):,}\n")
