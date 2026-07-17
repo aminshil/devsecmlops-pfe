@@ -60,7 +60,13 @@ def demo(machine, hour, reading, label=None):
         mu, sd = stats[f]
         z      = (raw - mu) / sd
         z_vals.append(z)
-        color  = "red" if abs(z) >= 3 else ("yellow" if abs(z) >= 2 else "green")
+        abs_z = abs(z)
+        if abs_z >= 3:
+            color = "red"
+        elif abs_z >= 2:
+            color = "yellow"
+        else:
+            color = "green"
         tbl.add_row(f, f"{raw:.1f}", f"{mu:.2f}", f"{sd:.2f}",
                     f"[{color}]{z:+.2f}[/{color}]")
     console.print(tbl)
