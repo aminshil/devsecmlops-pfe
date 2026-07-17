@@ -21,8 +21,6 @@ pipeline {
         stage('1b. Unit tests (pytest)') {
             steps {
                 sh '''
-                    python3 -m venv .ci-venv
-                    . .ci-venv/bin/activate
                     pip install --quiet -r requirements-api.txt
                     pip install --quiet -r requirements-dev.txt
                     python3 -m pytest tests/ -v --tb=short
