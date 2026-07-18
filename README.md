@@ -839,6 +839,25 @@ screenshots/              defense evidence PNGs
 
 ---
 
+## Testing
+
+**Unit tests (pytest):** 15 tests covering the production-critical code paths, in `tests/`:
+
+- `tests/test_preprocess.py` (8 tests): baseline construction, the 4-level fallback chain (machine+window -> machine -> type -> global), z-score correctness, STD_FLOOR division-by-zero protection.
+- `tests/test_api.py` (7 tests): /health, /machines, /predict happy path, /predict missing-metric 400 response, unknown-machine global fallback, extreme-value anomaly sanity check, /root-cause ranking.
+
+Run: `pip install -r requirements-dev.txt && python -m pytest tests/ -v`.
+
+Wired into Jenkins as stage 1b (fail-fast), running before the SonarQube, Docker build, and Trivy stages -- a broken commit stops the pipeline before wasting time on downstream stages.
+
+**Live K8s validation:** `scripts/live_k8s_demo_test.py` sends 33,600 real HTTP requests (200 machines x 6 checks/day x 14 days) through the NodePort service into the deployed pods. Reports F1/Precision/Recall, per-cause recall, cause-naming accuracy, latency percentiles, and daily detection breakdown. Same script used for both the v2 and v3 comparison runs -- byte-identical reproducibility across repeated runs confirms the deployed model is fully deterministic.
+
+Demo dataset is regenerable in seconds via `python scripts/make_two_week_demo_dataset.py` (586MB, not committed).
+
+**Troubleshooting:** infrastructure incidents encountered during setup and their fixes (Docker networking staleness, Jenkins container missing venv/pip/PEP 668 gotchas, K8s pod restart behavior after daemon restart, etc.) are documented in `docs/TROUBLESHOOTING.md`.
+
+---
+
 ## Reproducing locally
 
 ```bash
