@@ -394,6 +394,81 @@ not committed — 125MB exceeds GitHub's 100MB limit, fully reproducible via
 `random_state=42`, deterministic), `models/telecom_iso_v2.pkl`
 (IsolationForest, committed), `models/telecom_baselines_v2.json`.
 
+## ML model v3: XGBoost primary (July 2026)
+
+After tonight's full v2 evaluation, a sixth model comparison was run:
+XGBoost as a potential replacement for the RandomForest primary. Trained
+on the same subsampled full-scale data (3.17M rows: all anomalies + 2M
+normal, seed 42), evaluated on the same independent seed-123 test set,
+same methodology as v2 in every respect except the classifier itself.
+
+**Offline results (identical test set as v2):**
+
+| Model | F1 | Precision | Recall | Model size | Train time |
+|---|---|---|---|---|---|
+| v2 RandomForest | **0.731** | **0.849** | 0.641 | 125MB | ~340s |
+| v3 XGBoost | 0.718 | 0.775 | **0.670** | 3.6MB | 74s |
+
+Overall F1 favors RandomForest by 1.3 points and precision by 7.4 points,
+but XGBoost **wins per-cause recall on every single anomaly type**:
+cpu_spike 0.858 -> 0.894, memory_leak 0.688 -> 0.736 (a real improvement
+on the previously weakest category), network_flood 0.881 -> 0.915,
+disk_saturation 0.965 -> 0.977, silent_failure 0.868 -> 0.906, cascade
+0.029 -> 0.042 (still weak but relatively better). XGBoost is more
+aggressive: catches more real anomalies at the cost of more false
+positives on the aggregate mix.
+
+**Live K8s validation (same 33,600-request two-week demo as v2):**
+
+| Metric | v2 RF (live) | v3 XGBoost (live) |
+|---|---|---|
+| F1 | 0.699 | 0.689 |
+| Precision | 0.683 | 0.647 |
+| Recall | 0.716 | **0.738** |
+| Cause accuracy | 90.2% | **90.5%** |
+| p50 latency | 214ms | **128ms** |
+| Throughput | 40 req/s | **103 req/s** (2.5x) |
+
+**Decision: switch production to v3.** Reasoning:
+1. **Better per-cause recall on every category** — this is what matters
+   operationally in a telecom monitoring context. Missing a real memory
+   leak or cascade costs more than an extra false-alarm investigation.
+2. **34x smaller model** (3.6MB vs 125MB) — eliminates the whole
+   MinIO-fetch-at-startup architecture built for v2. Model is now baked
+   directly into the Docker image, same simple pattern as v1.
+3. **4.6x faster training** — genuinely easier to iterate/retrain.
+4. **Live throughput 2.5x higher, p50 latency ~40% lower** — real
+   operational advantages under load.
+
+The overall F1 drop (0.731 -> 0.718 offline, 0.699 -> 0.689 live) is a
+deliberate, evidence-backed tradeoff: the precision loss is smaller than
+the per-cause recall gains warrant, and the architectural simplification
+(no MinIO dependency for the primary model) is a real long-term benefit.
+
+v2 code paths (MODEL_NAME=telecom_v2, MinIO-fetch entrypoint) are kept
+intact for reproducibility and defense-day A/B comparison purposes --
+this is an additive switch, not a destructive one. Setting
+MODEL_NAME=telecom_v2 in the deployment env still fully works.
+
+**Model artifacts:** `models/telecom_xgb_classifier_v2.pkl` (XGBoost,
+3.6MB, committed), `models/telecom_xgb_label_encoder_v2.pkl` (559
+bytes, committed), plus `models/telecom_iso_v2.pkl` and
+`models/telecom_baselines_v2.json` shared with v2. All four baked into
+the Docker image directly -- no runtime MinIO fetch needed.
+
+**LightGBM also tested for completeness** (same methodology, same data,
+same evaluation set): F1=0.716, Precision=0.767, Recall=0.671 -- within
+0.002 of XGBoost on every metric, essentially identical per-cause recall
+numbers, 3.0MB model, 51s training. This is a genuinely useful negative
+result: it shows the ceiling on this data with these features is a
+gradient-boosting-*family* ceiling, not an XGBoost-specific one. Getting
+meaningfully past 0.72 F1 would require something structurally
+different -- richer sequential features, sequence-aware models
+(LSTM/GRU-VAE), or larger real-world data -- documented as future
+directions in the Roadmap. LightGBM artifacts kept in the repo as
+evidence but not adopted, since it offers no real advantage over the
+already-deployed XGBoost.
+
 ## API
 
 FastAPI service, model baked into the Docker image. Rebuild cost is

@@ -17,31 +17,26 @@ spec:
     spec:
       containers:
         - name: api
-          image: devsecmlops-api:2.10.2
+          image: devsecmlops-api:2.11.0
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
           env:
             - name: MODEL_NAME
-              value: "telecom_v2"
-            - name: MINIO_ENDPOINT
-              value: "http://host.minikube.internal:9001"
-            - name: MINIO_ACCESS_KEY
-              value: "admin"
-            - name: MINIO_SECRET_KEY
-              value: "minioadmin123"
-            - name: MINIO_BUCKET
-              value: "model-artifacts"
+              value: "telecom_v3"
+          # v3: XGBoost primary model baked into the image (3.6MB) --
+          # no MinIO fetch needed, so MinIO env vars removed. Lower
+          # resource footprint reflects XGBoost's much smaller size.
           resources:
-            requests: { cpu: "200m", memory: "512Mi" }
-            limits:   { cpu: "1000m", memory: "1Gi" }
+            requests: { cpu: "200m", memory: "256Mi" }
+            limits:   { cpu: "1000m", memory: "512Mi" }
           livenessProbe:
             httpGet: { path: /health, port: 8000 }
-            initialDelaySeconds: 45
+            initialDelaySeconds: 15
             periodSeconds: 15
           readinessProbe:
             httpGet: { path: /health, port: 8000 }
-            initialDelaySeconds: 30
+            initialDelaySeconds: 10
             periodSeconds: 10
           securityContext:
             runAsNonRoot: true

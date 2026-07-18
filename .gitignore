@@ -26,6 +26,10 @@ mlruns/
 # --- Allow the shipped serving artifacts (baked into Docker image) ---
 !models/telecom_serving_model.pkl
 !models/telecom_iso_v2.pkl
+!models/telecom_xgb_classifier_v2.pkl
+!models/telecom_xgb_label_encoder_v2.pkl
+!models/telecom_lgbm_classifier_v2.pkl
+!models/telecom_lgbm_label_encoder_v2.pkl
 !models/telecom_serving_baselines.json
 
 # Screenshots — defense evidence, tracked in git

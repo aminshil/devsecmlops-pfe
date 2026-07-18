@@ -25,6 +25,13 @@ COPY ml-model/root_cause.py ./ml-model/root_cause.py
 COPY models/telecom_serving_model.pkl     ./models/
 COPY models/telecom_serving_baselines.json ./models/
 
+# v3 artifacts (all small enough to bake in directly -- no MinIO fetch needed,
+# unlike v2 whose 124MB RandomForest requires runtime download):
+COPY models/telecom_xgb_classifier_v2.pkl    ./models/
+COPY models/telecom_xgb_label_encoder_v2.pkl ./models/
+COPY models/telecom_iso_v2.pkl               ./models/
+COPY models/telecom_baselines_v2.json        ./models/
+
 # v2 model artifacts (RandomForest, 124MB) fetched from MinIO at startup
 # instead of baked in -- see docker-entrypoint.sh
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

@@ -52,6 +52,7 @@ ARTIFACTS = {
 # v2: dual-model (RandomForest cause classifier + IsolationForest safety net),
 # trained on labeled anomaly_type data. See ml-model/train tonight's session.
 IS_V2 = MODEL_NAME == "telecom_v2"
+IS_V3 = MODEL_NAME == "telecom_v3"
 
 if IS_V2:
     RF_PATH  = MODELS_DIR / "telecom_rf_classifier_v2.pkl"
@@ -63,6 +64,23 @@ if IS_V2:
     rf_model  = joblib.load(RF_PATH)
     iso_model = joblib.load(ISO_PATH)
     model = rf_model  # kept for any code that references `model` generically
+    with open(BASELINES_PATH) as f:
+        baselines = json.load(f)
+elif IS_V3:
+    # v3: XGBoost cause classifier (better per-cause recall, 34x smaller than
+    # RF, baked directly into the image -- no MinIO fetch dependency needed)
+    # + IsolationForest safety net (same as v2, unchanged).
+    XGB_PATH = MODELS_DIR / "telecom_xgb_classifier_v2.pkl"
+    LE_PATH  = MODELS_DIR / "telecom_xgb_label_encoder_v2.pkl"
+    ISO_PATH = MODELS_DIR / "telecom_iso_v2.pkl"
+    BASELINES_PATH = MODELS_DIR / "telecom_baselines_v2.json"
+    for path in (XGB_PATH, LE_PATH, ISO_PATH, BASELINES_PATH):
+        if not path.exists():
+            raise RuntimeError(f"v3 artifact not found: {path}")
+    xgb_model = joblib.load(XGB_PATH)
+    xgb_label_encoder = joblib.load(LE_PATH)
+    iso_model = joblib.load(ISO_PATH)
+    model = xgb_model
     with open(BASELINES_PATH) as f:
         baselines = json.load(f)
 else:
@@ -242,6 +260,42 @@ def predict(reading: Reading):
             "is_anomaly":     int(is_anomaly),
             "likely_cause":   likely_cause,
             "rf_vote":        {"is_anomaly": int(rf_is_anomaly), "cause": cause},
+            "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
+            "z_scores":       z_scores,
+            "machine_known":  reading.machine in baselines,
+            "baseline_used":  baseline_used,
+        }
+
+    if IS_V3:
+        # XGBoost: predicts numeric class index, decoded back to string cause via
+        # LabelEncoder (normal | cpu_spike | memory_leak | network_flood |
+        # disk_saturation | silent_failure). Better per-cause recall than the RF
+        # primary in v2, especially on memory_leak. 34x smaller model (3.6MB vs
+        # 124MB), baked into the image directly -- no MinIO fetch needed.
+        xgb_class_idx = int(xgb_model.predict(X.values)[0])
+        cause = str(xgb_label_encoder.inverse_transform([xgb_class_idx])[0])
+        xgb_is_anomaly = cause != "normal"
+
+        # IsolationForest: unchanged safety net for novel patterns.
+        iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
+        iso_score = float(-iso_model.score_samples(X)[0])
+
+        is_anomaly = xgb_is_anomaly or iso_is_anomaly
+        if xgb_is_anomaly:
+            likely_cause = cause
+        elif iso_is_anomaly:
+            likely_cause = "unknown (flagged by safety-net model only)"
+        else:
+            likely_cause = None
+
+        return {
+            "machine":        reading.machine,
+            "machine_type":   machine_type or "unknown",
+            "model":          MODEL_NAME,
+            "window":         window or "not-supplied",
+            "is_anomaly":     int(is_anomaly),
+            "likely_cause":   likely_cause,
+            "xgb_vote":       {"is_anomaly": int(xgb_is_anomaly), "cause": cause},
             "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
             "z_scores":       z_scores,
             "machine_known":  reading.machine in baselines,
