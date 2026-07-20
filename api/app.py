@@ -51,6 +51,17 @@ PREDICT_THRESHOLD = float(os.environ.get("PREDICT_THRESHOLD", "0.85"))
 sys.path.insert(0, str(ROOT / "ml-model"))
 from root_cause import score_root_causes, load_graph
 
+# Feedback loop: prediction logging + operator verdicts (v2.12.0).
+# See README 'Feedback loop and online learning' section for design.
+from api.feedback_db import (
+    init_db as init_feedback_db,
+    insert_prediction,
+    update_verdict,
+    recent_predictions,
+    verdict_stats,
+    VALID_VERDICTS,
+)
+
 ARTIFACTS = {
     "telecom": ("telecom_serving_model.pkl", "telecom_serving_baselines.json"),
     "smd":     ("smd_serving_model.pkl",     "smd_serving_baselines.json"),
@@ -164,15 +175,25 @@ def _get_stats(machine: str, window: str | None, machine_type: str | None):
 
 app = FastAPI(
     title=f"DevSecMLOps — Anomaly Detector [{MODEL_NAME}]",
-    version="2.4.0",
+    version="2.12.0",
     description=(
         "Per-machine per-time-window z-score + Isolation Forest anomaly detection. "
         "Trained on a 200-machine synthetic Tunisie Telecom fleet "
         "(11 types, 4 time windows: night/morning/afternoon/evening). "
         "Fallback chain: machine+window -> machine -> type -> global. "
-        "Includes dependency-graph-based root cause ranking for cascading failures."
+        "Includes dependency-graph-based root cause ranking for cascading failures. "
+        "v2.12.0 adds a feedback loop: every /predict call is logged to a "
+        "persistent SQLite DB, operators submit verdicts via /feedback/{id}, "
+        "and the retrain pipeline uses accumulated feedback to improve the "
+        "model over time. See README section 'Feedback loop and online learning'."
     ),
 )
+
+
+@app.on_event("startup")
+def _init_feedback_db_on_startup():
+    """Ensure the feedback DB and its table exist before serving traffic."""
+    init_feedback_db()
 
 
 class Reading(BaseModel):
@@ -306,7 +327,22 @@ def predict(reading: Reading):
         else:
             likely_cause = None
 
+        prediction_id = insert_prediction(
+            machine=reading.machine,
+            machine_type=machine_type,
+            window=window,
+            features=z_scores,
+            raw_metrics=reading.metrics,
+            model_version=MODEL_NAME,
+            predict_threshold=PREDICT_THRESHOLD,
+            xgb_p_normal=p_normal,
+            xgb_cause=cause,
+            iso_score=round(iso_score, 4),
+            final_is_anomaly=int(is_anomaly),
+            final_cause=likely_cause,
+        )
         return {
+            "prediction_id":  prediction_id,
             "machine":        reading.machine,
             "machine_type":   machine_type or "unknown",
             "model":          MODEL_NAME,
@@ -361,3 +397,78 @@ def root_cause(batch: AnomalyBatch):
         "ranked": ranked,
         "likely_root_causes": [r["machine"] for r in ranked if r["role"] == "likely_root_cause"],
     }
+
+
+# -----------------------------------------------------------------------------
+# Feedback loop endpoints (v2.12.0)
+# See README "Feedback loop and online learning" section for the full design.
+# -----------------------------------------------------------------------------
+
+class FeedbackIn(BaseModel):
+    """Operator verdict on a prior prediction, submitted by prediction_id."""
+    verdict: str
+    notes: str | None = None
+
+
+@app.post(
+    "/feedback/{prediction_id}",
+    responses={
+        404: {"description": "prediction_id not found in the feedback DB"},
+        400: {"description": "Invalid verdict value"},
+    },
+)
+def submit_feedback(prediction_id: str, feedback: FeedbackIn):
+    """
+    Submit an operator verdict for a prior prediction.
+
+    verdict must be one of:
+      - true_positive   (model correctly flagged an anomaly)
+      - false_positive  (model wrongly flagged; it was fine)
+      - true_negative   (model said normal, and it was)
+      - false_negative  (model missed a real anomaly)
+
+    Idempotent: submitting a second verdict for the same prediction_id
+    overwrites the first with the newer timestamp.
+    """
+    try:
+        row = update_verdict(prediction_id, feedback.verdict, feedback.notes)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"prediction_id {prediction_id!r} not found")
+    return {
+        "prediction_id":     row["id"],
+        "operator_verdict":  row["operator_verdict"],
+        "verdict_timestamp": row["verdict_timestamp"],
+        "verdict_notes":     row["verdict_notes"],
+        "original_prediction": {
+            "machine":          row["machine"],
+            "model_version":    row["model_version"],
+            "final_is_anomaly": row["final_is_anomaly"],
+            "final_cause":      row["final_cause"],
+        },
+    }
+
+
+@app.get("/predictions/recent")
+def get_recent_predictions(limit: int = 100):
+    """
+    Return the N most recent predictions from the feedback DB.
+    Defaults to 100, capped at 1000. Useful for inspecting accumulated
+    data and for feeding the retrain pipeline.
+    """
+    return {
+        "count": limit,
+        "predictions": recent_predictions(limit=limit),
+    }
+
+
+@app.get("/feedback/stats")
+def get_feedback_stats():
+    """
+    Return counts of each verdict type across the whole DB.
+    Predictions with no operator verdict yet are grouped under '_pending'.
+    Useful for monitoring how much labeled data has been collected for
+    the retrain pipeline.
+    """
+    return verdict_stats()
