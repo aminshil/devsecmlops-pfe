@@ -17,13 +17,15 @@ spec:
     spec:
       containers:
         - name: api
-          image: devsecmlops-api:2.11.0
+          image: devsecmlops-api:2.11.1
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
           env:
             - name: MODEL_NAME
               value: "telecom_v3"
+            - name: PREDICT_THRESHOLD
+              value: "0.85"
           # v3: XGBoost primary model baked into the image (3.6MB) --
           # no MinIO fetch needed, so MinIO env vars removed. Lower
           # resource footprint reflects XGBoost's much smaller size.

@@ -40,6 +40,14 @@ ROOT       = Path(__file__).resolve().parent.parent
 MODELS_DIR = ROOT / "models"
 MODEL_NAME = os.environ.get("MODEL_NAME", "telecom").lower()
 
+# v3 threshold tuning: flag as anomaly if P(normal) < PREDICT_THRESHOLD.
+# Default 0.5 = original argmax behavior. Higher = more aggressive detection
+# (more anomalies caught, more false positives). 0.85 chosen for production
+# to match operational priority: catch as many real incidents as possible,
+# accept increased false-alarm investigation cost. See README "Engineering
+# decisions" section for the full recall/precision sweep.
+PREDICT_THRESHOLD = float(os.environ.get("PREDICT_THRESHOLD", "0.85"))
+
 sys.path.insert(0, str(ROOT / "ml-model"))
 from root_cause import score_root_causes, load_graph
 
@@ -272,9 +280,19 @@ def predict(reading: Reading):
         # disk_saturation | silent_failure). Better per-cause recall than the RF
         # primary in v2, especially on memory_leak. 34x smaller model (3.6MB vs
         # 124MB), baked into the image directly -- no MinIO fetch needed.
-        xgb_class_idx = int(xgb_model.predict(X.values)[0])
-        cause = str(xgb_label_encoder.inverse_transform([xgb_class_idx])[0])
-        xgb_is_anomaly = cause != "normal"
+        # Threshold-tuned prediction (see PREDICT_THRESHOLD at top of file).
+        # Flag as anomaly if P(normal) < threshold, i.e. not confident it's normal.
+        xgb_proba = xgb_model.predict_proba(X.values)[0]
+        classes = list(xgb_label_encoder.classes_)
+        normal_idx = classes.index("normal")
+        p_normal = float(xgb_proba[normal_idx])
+        xgb_is_anomaly = p_normal < PREDICT_THRESHOLD
+        # Reported cause: if not normal, pick the most probable non-normal class
+        if xgb_is_anomaly:
+            non_normal_scores = [(classes[i], xgb_proba[i]) for i in range(len(classes)) if i != normal_idx]
+            cause = max(non_normal_scores, key=lambda x: x[1])[0]
+        else:
+            cause = "normal"
 
         # IsolationForest: unchanged safety net for novel patterns.
         iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
