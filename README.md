@@ -599,6 +599,133 @@ directions in the Roadmap. LightGBM artifacts kept in the repo as
 evidence but not adopted, since it offers no real advantage over the
 already-deployed XGBoost.
 
+## Feedback loop and online learning (v2.12.0)
+
+The core limitation of every model version up to v2.11.1 is that the model is **static**: once trained on the synthetic seed-42 data, it never improves regardless of what happens in production. If the model flags 500 false alarms in a month and operators mark them all as fake, the model keeps making the same 500 false alarms next month.
+
+This section documents the feedback loop that changes that -- an infrastructure for the model to learn over time from real operator judgments about its predictions.
+
+### Architecture
+
+Every prediction the API makes gets stored in a persistent database. Operators can submit verdicts on those predictions (true positive, false positive, true negative, false negative). A retrain pipeline periodically combines this labeled feedback with the original training data to produce an improved model, with guardrails that prevent deploying a worse model.
+
+Four independent pieces:
+
+1. **Prediction logging** -- extended `/predict` writes every call to a SQLite database and returns a `prediction_id` in the response.
+2. **Feedback endpoint** -- `POST /feedback/{prediction_id}` accepts operator verdicts and updates the row.
+3. **Query endpoints** -- `GET /predictions/recent` and `GET /feedback/stats` for inspecting accumulated data.
+4. **Retrain pipeline** -- `scripts/retrain_from_feedback.py` combines feedback with original training data, retrains, evaluates, and only promotes the new model if guardrails pass.
+
+### Data model
+
+Single SQLite table `predictions` in `/app/data/predictions.db` (inside the container, mounted from a Kubernetes PersistentVolumeClaim so data survives pod restarts and rolling updates):
+
+| Column               | Type      | Nullable | Notes                                                        |
+|----------------------|-----------|----------|--------------------------------------------------------------|
+| id                   | TEXT      | no       | UUIDv4, primary key                                          |
+| timestamp            | TEXT      | no       | ISO-8601, when the /predict call happened                    |
+| machine              | TEXT      | no       | e.g. web-01                                                  |
+| machine_type         | TEXT      | yes      | e.g. web, db, router                                         |
+| window               | TEXT      | yes      | night / morning / afternoon / evening                        |
+| features_json        | TEXT      | no       | JSON dict of the 6 z-scored feature values                   |
+| raw_metrics_json     | TEXT      | no       | JSON dict of the original cpu/ram/network/etc values         |
+| model_version        | TEXT      | no       | e.g. telecom_v3                                              |
+| predict_threshold    | REAL      | no       | e.g. 0.85                                                    |
+| xgb_p_normal         | REAL      | yes      | Raw probability the model gave for the 'normal' class        |
+| xgb_cause            | TEXT      | yes      | Predicted cause (normal / cpu_spike / memory_leak / etc)     |
+| iso_score            | REAL      | yes      | IsolationForest anomaly score                                |
+| final_is_anomaly     | INTEGER   | no       | 0 or 1, what the API actually returned                       |
+| final_cause          | TEXT      | yes      | The cause name returned to the caller (or NULL)              |
+| operator_verdict     | TEXT      | yes      | true_positive / false_positive / true_negative / false_negative |
+| verdict_timestamp    | TEXT      | yes      | ISO-8601, when the operator submitted feedback               |
+| verdict_notes        | TEXT      | yes      | Free-text operator comment                                   |
+
+Verdict semantics:
+
+- `true_positive`: model flagged an anomaly, and it was real
+- `false_positive`: model flagged an anomaly, but it was actually fine
+- `true_negative`: model said normal, and it really was normal (rarely submitted, since normals are the default assumption)
+- `false_negative`: model missed a real anomaly (operator caught it separately, submits feedback referencing the prediction_id of what should have been flagged)
+
+### API endpoints
+
+**Modified: `POST /predict`** -- same request schema as before, but response now includes `prediction_id` (UUIDv4). On every call, writes a new row to the DB with all fields except the three verdict columns (which start NULL).
+
+**New: `POST /feedback/{prediction_id}`** -- request body `{"verdict": "...", "notes": "optional string"}`. Returns 200 with the updated row, 404 if prediction_id not found, 400 if verdict value is invalid. Idempotent: submitting feedback twice overwrites the previous verdict with the newer timestamp.
+
+**New: `GET /predictions/recent?limit=N`** -- returns the N most recent predictions from the DB (default 100, max 1000).
+
+**New: `GET /feedback/stats`** -- returns counts of each verdict type across the whole DB. Useful for monitoring how much labeled data has accumulated.
+
+### Storage
+
+Kubernetes PersistentVolumeClaim (`feedback-pvc`) mounted at `/app/data` inside the container. Uses Minikube's default `standard` storage class, size 1Gi. Chosen over ephemeral in-memory storage because:
+
+- Survives pod restarts (real production behavior)
+- Survives rolling updates (v2.12.0 -> v2.13.0 does not lose accumulated feedback)
+- Simpler than an external DB for a single-VM demo (no separate PostgreSQL container to manage)
+
+### Retrain pipeline
+
+`scripts/retrain_from_feedback.py`:
+
+1. Load original training data (`data/telecom_fleet_v2_labeled.csv`, seed 42) -- 17.28M rows.
+2. Load feedback DB, filter to rows with `operator_verdict IS NOT NULL`.
+3. Convert feedback rows to training-format rows:
+   - Features from `raw_metrics_json`
+   - Label from verdict: `true_positive`/`false_negative` -> anomaly, `true_negative`/`false_positive` -> normal
+   - `anomaly_type` from `final_cause` for `true_positive`, `unknown_feedback` for `false_negative` (operator noted a miss)
+4. Combine: original training data + feedback rows, with `sample_weight=5` on feedback rows so recent labeled data has more influence than raw quantity would give.
+5. Subsample as before (all anomalies + 2M normal + all feedback rows).
+6. Retrain XGBoost with the same hyperparameters as v3.
+7. Evaluate on the independent seed-123 test set.
+8. Guardrail: only save the new model if BOTH aggregate F1 is at least equal to the current v3 (F1=0.718 offline), AND per-cause recall does not drop by more than 5 percentage points on any category.
+9. If guardrail passes, save as `models/telecom_xgb_classifier_v2.pkl` (overwriting), log the retrain run to MLflow with feedback-row count, diff-metrics, and provenance.
+10. If guardrail fails, log the attempted retrain to MLflow with reason for skip, do not deploy the failed model.
+
+Trigger: manual for v2.12.0 (`python scripts/retrain_from_feedback.py`), Jenkins-scheduled weekly job as v2.13.0 future work.
+
+### Deployment cycle after retrain
+
+Retrain produces a new `telecom_xgb_classifier_v2.pkl` locally. The full deploy cycle:
+
+1. `docker build -t devsecmlops-api:2.12.X .` (rebuilds image with new model baked in)
+2. `minikube image load devsecmlops-api:2.12.X`
+3. `kubectl set image deployment/anomaly-api api=devsecmlops-api:2.12.X -n ml-serving`
+4. K8s rolling update, health-check driven, no downtime
+
+Manual for v2.12.0. Automation as a Jenkins job is deferred.
+
+### Rollback story
+
+If a retrain produces a bad model that gets deployed anyway (guardrail misses a real problem):
+
+1. Docker image tags are immutable -- previous v2.11.X images still exist locally
+2. `kubectl set image deployment/anomaly-api api=devsecmlops-api:2.11.1 -n ml-serving`
+3. K8s rolling update reverts, no data loss (the PersistentVolumeClaim preserves the feedback DB)
+4. Retrain again with a revised guardrail
+
+### Explicitly deferred to future versions
+
+- Operator UI / dashboard -- feedback submitted via `curl` commands or the FastAPI Swagger UI at `/docs`
+- Automated Jenkins retrain schedule
+- Multi-model A/B routing (each pod currently runs one model version at a time)
+- Feedback pruning / TTL policy (old feedback stays forever, fine for a demo)
+- Feedback UI for the actual telecom NOC (out of scope, would be an entire separate project)
+
+### Operator workflow via Swagger UI
+
+The FastAPI application exposes an interactive Swagger UI at `/docs` where operators can:
+
+1. Fire a `/predict` call with test metrics, observe the returned `prediction_id`
+2. Later, submit `/feedback/{prediction_id}` with their real-world verdict
+3. Check `/predictions/recent` to see accumulated data
+4. Check `/feedback/stats` to monitor how much labeled data has been collected
+
+This is the intended operator UX for v2.12.0 -- no dedicated frontend, just the standard OpenAPI-generated interface. A production deployment would need a proper dashboard, but the API contract is designed so building one later is straightforward.
+
+---
+
 ## API
 
 FastAPI service, model baked into the Docker image. Rebuild cost is
