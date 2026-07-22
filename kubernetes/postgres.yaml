@@ -1,0 +1,116 @@
+# PostgreSQL for the feedback loop (v2.12.0).
+# See README "Feedback loop and online learning" section.
+#
+# Deployed as a StatefulSet (not Deployment) because:
+#   - Stable network identity (postgres-0.postgres) needed for API to reach it
+#   - Persistent storage per-pod, tied to pod identity (not reassignable)
+#   - Ordered startup: pod-0 must exist before any client tries to connect
+#
+# Chosen over SQLite because:
+#   - Multiple API pods can safely write concurrently (client-server DB,
+#     proper multi-writer support, no file locking issues)
+#   - Survives node failures in a multi-node cluster
+#   - Standard production database, not a demo compromise
+#
+# Credentials come from a Kubernetes Secret, not hardcoded env vars.
+# In real production this Secret itself would be sourced from a real
+# secrets manager (Vault, AWS Secrets Manager, Sealed Secrets), but
+# a plain Secret is a strict improvement over the plain-text
+# credentials the v2 MinIO deployment used earlier in this project.
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  namespace: ml-serving
+type: Opaque
+stringData:
+  POSTGRES_USER: feedback
+  POSTGRES_PASSWORD: feedback-dev-password
+  POSTGRES_DB: feedback
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: ml-serving
+spec:
+  clusterIP: None            # Headless service -> pods addressable as postgres-0.postgres
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: ml-serving
+spec:
+  serviceName: postgres
+  replicas: 1              # Single-writer for this demo. Multi-primary Postgres
+                           # (e.g. via Patroni or Citus) is real production work,
+                           # documented as future scope in the README.
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgres-credentials
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - feedback
+                - -d
+                - feedback
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - feedback
+                - -d
+                - feedback
+            initialDelaySeconds: 30
+            periodSeconds: 15
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 2Gi
+        storageClassName: standard

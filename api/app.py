@@ -213,7 +213,7 @@ def health():
     return {
         "status":          "ok",
         "model":           MODEL_NAME,
-        "version":         "2.4.0",
+        "version":         "2.12.0",
         "n_machines":      len(machines_known),
         "n_features":      len(FEATURES),
         "features":        FEATURES,

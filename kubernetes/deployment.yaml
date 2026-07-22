@@ -15,9 +15,25 @@ spec:
       labels:
         app: anomaly-api
     spec:
+      # Feedback loop (v2.12.0): wait for PostgreSQL to accept connections
+      # before starting the API. Prevents crash-loops on cold cluster boot
+      # where PostgreSQL takes ~30s to initialize while the API can start
+      # in ~5s and would otherwise fail on its first DATABASE_URL query.
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres.ml-serving.svc.cluster.local -U feedback -d feedback; do
+                echo "waiting for postgres..."
+                sleep 2
+              done
+              echo "postgres ready, exiting init container"
       containers:
         - name: api
-          image: devsecmlops-api:2.11.1
+          image: devsecmlops-api:2.12.0
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
@@ -26,6 +42,18 @@ spec:
               value: "telecom_v3"
             - name: PREDICT_THRESHOLD
               value: "0.85"
+            # Feedback loop DB connection (v2.12.0). Points at the PostgreSQL
+            # StatefulSet in the same namespace. Password from Secret.
+            # POSTGRES_PASSWORD must come BEFORE DATABASE_URL: K8s substitutes
+            # $(VAR) references in env var values, but only from vars defined
+            # EARLIER in the same env array. Order matters.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: "postgresql://feedback:$(POSTGRES_PASSWORD)@postgres.ml-serving.svc.cluster.local:5432/feedback"
           # v3: XGBoost primary model baked into the image (3.6MB) --
           # no MinIO fetch needed, so MinIO env vars removed. Lower
           # resource footprint reflects XGBoost's much smaller size.

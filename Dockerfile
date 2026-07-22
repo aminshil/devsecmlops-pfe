@@ -43,6 +43,10 @@ ENV MODEL_NAME=telecom \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
+# ── (v2.12.0 previously created /app/data for the SQLite feedback DB.
+# That was replaced with a proper PostgreSQL StatefulSet in K8s, so no
+# local writable data directory is needed inside the container anymore.) ──
+
 # ── Own /app as appuser and drop privileges ──
 RUN chown -R appuser:appuser /app
 USER appuser
