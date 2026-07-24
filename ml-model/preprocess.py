@@ -182,3 +182,77 @@ def save_baselines(baselines, path):
 def load_baselines(path):
     with open(path) as f:
         return json.load(f)
+
+
+# --- Rolling / trend features (v2.13.0) ---
+#
+# For gradual-onset anomalies like memory leaks, the current single-timestamp
+# z-score approach struggles: an early leak with ram=62 is only mildly elevated.
+# Rolling features capture the pattern of change over recent history:
+#
+#   {col}_rolling_mean  -- avg of last N readings; establishes recent baseline
+#   {col}_rolling_std   -- volatility over last N readings
+#   {col}_delta         -- current - N-readings-ago; the rate of change
+#
+# Applied ONLY to metrics where change-over-time is diagnostic:
+# cpu, ram, load_avg. Not applied to disk_usage (accumulates monotonically),
+# disk_io (already noisy), or network (spikes are the norm).
+#
+# Rolling features are computed per-machine, ordered by timestamp. Because
+# they need history, the first WINDOW-1 rows of each machine are undefined
+# and get filled with 0.0 (which after z-scoring means "no change from
+# baseline" -- the safest default when we lack history).
+
+ROLLING_WINDOW_SIZE = 10  # 10 readings @ 30s = 5 minutes of history
+ROLLING_FEATURE_BASE_COLS = ("cpu", "ram", "load_avg")
+
+
+def rolling_feature_names(base_cols=ROLLING_FEATURE_BASE_COLS):
+    """Return the list of new rolling-feature column names in a stable order."""
+    names = []
+    for col in base_cols:
+        names.append(f"{col}_rolling_mean")
+        names.append(f"{col}_rolling_std")
+        names.append(f"{col}_delta")
+    return names
+
+
+def add_rolling_features(df, machine_col="machine", timestamp_col="timestamp",
+                         base_cols=ROLLING_FEATURE_BASE_COLS,
+                         window=ROLLING_WINDOW_SIZE):
+    """
+    Add rolling mean/std/delta features per machine, ordered by timestamp.
+
+    Returns a copy of the DataFrame with 9 new columns (3 features x 3 base cols).
+    Undefined values (early rows per machine) are filled with 0.0.
+
+    Real cost: O(N * window) with grouping overhead. For 17.28M rows this
+    takes ~30-60 seconds; the returned DataFrame is ~40% larger in memory.
+    """
+    df = df.copy()
+    df = df.sort_values([machine_col, timestamp_col]).reset_index(drop=True)
+
+    for col in base_cols:
+        # rolling_mean: average over the current row + previous (window-1) rows
+        df[f"{col}_rolling_mean"] = (
+            df.groupby(machine_col, sort=False)[col]
+              .rolling(window=window, min_periods=1)
+              .mean()
+              .reset_index(level=0, drop=True)
+        )
+        # rolling_std: volatility of same window; min_periods=2 needed for std
+        df[f"{col}_rolling_std"] = (
+            df.groupby(machine_col, sort=False)[col]
+              .rolling(window=window, min_periods=2)
+              .std()
+              .fillna(0.0)
+              .reset_index(level=0, drop=True)
+        )
+        # delta: current value minus value from (window-1) rows ago
+        df[f"{col}_delta"] = (
+            df.groupby(machine_col, sort=False)[col]
+              .diff(periods=window - 1)
+              .fillna(0.0)
+        )
+
+    return df

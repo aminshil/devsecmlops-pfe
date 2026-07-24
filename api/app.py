@@ -102,6 +102,22 @@ elif IS_V3:
     model = xgb_model
     with open(BASELINES_PATH) as f:
         baselines = json.load(f)
+
+    # v4 rolling features model (optional, loaded if the artifacts exist).
+    # When the /predict caller provides a 'history' field, we use v4's
+    # 15-feature model instead of v3's 6-feature one. See README section
+    # 'Rolling features and gradual-onset detection (v4)'.
+    XGB_V4_PATH = MODELS_DIR / "telecom_xgb_v4_rolling.pkl"
+    LE_V4_PATH  = MODELS_DIR / "telecom_xgb_v4_rolling_encoder.pkl"
+    if XGB_V4_PATH.exists() and LE_V4_PATH.exists():
+        xgb_v4_model = joblib.load(XGB_V4_PATH)
+        xgb_v4_label_encoder = joblib.load(LE_V4_PATH)
+        HAS_V4 = True
+    else:
+        xgb_v4_model = None
+        xgb_v4_label_encoder = None
+        HAS_V4 = False
+
 else:
     if MODEL_NAME not in ARTIFACTS:
         raise RuntimeError(
@@ -202,6 +218,13 @@ class Reading(BaseModel):
     machine_type: str | None = None   # optional hint for unknown machines
     hour: int | None = None           # 0-23, picks the time window
     timestamp: str | None = None      # ISO string, alternative to hour
+    # v4 rolling features (optional). When present, the caller supplies the
+    # recent history of cpu/ram/load_avg so the API can compute rolling
+    # mean/std/delta and use the 15-feature v4 model. When absent, the API
+    # falls back to the 6-feature v3 model. See README 'Rolling features'.
+    # Format: {"cpu": [v1..v10], "ram": [v1..v10], "load_avg": [v1..v10]}
+    # where the LAST value in each list is the most recent (current) reading.
+    history: dict[str, list[float]] | None = None
 
 
 class AnomalyBatch(BaseModel):
@@ -237,6 +260,47 @@ def list_machines():
             entry["type"] = mdata["__type__"]
         result.append(entry)
     return {"machines": result, "total": len(result)}
+
+
+def _compute_rolling_features(history: dict) -> list[float] | None:
+    """
+    Compute the 9 v4 rolling features from a caller-supplied history dict.
+
+    history format: {"cpu": [...], "ram": [...], "load_avg": [...]}
+    where each list is up to 10 recent readings, LAST value = most recent.
+
+    Returns a 9-element list in the exact order the v4 model expects:
+      [cpu_rolling_mean, cpu_rolling_std, cpu_delta,
+       ram_rolling_mean, ram_rolling_std, ram_delta,
+       load_avg_rolling_mean, load_avg_rolling_std, load_avg_delta]
+
+    Matches ml-model/preprocess.add_rolling_features exactly:
+      - rolling_mean: mean of the window
+      - rolling_std:  sample std (ddof=1) of the window; 0.0 if < 2 values
+      - delta:        last value - first value in the window
+        (training used diff(periods=window-1), i.e. current minus the
+        value window-1 steps back; with a full 10-value window that is
+        history[-1] - history[0])
+
+    Returns None if history is malformed (missing keys / empty lists),
+    signalling the caller to fall back to the v3 model.
+    """
+    import statistics
+
+    required = ("cpu", "ram", "load_avg")
+    if not all(k in history and history[k] for k in required):
+        return None
+
+    feats = []
+    for col in required:
+        vals = list(history[col])
+        if not vals:
+            return None
+        rolling_mean = sum(vals) / len(vals)
+        rolling_std = statistics.stdev(vals) if len(vals) >= 2 else 0.0
+        delta = vals[-1] - vals[0]
+        feats.extend([rolling_mean, rolling_std, delta])
+    return feats
 
 
 @app.post(
@@ -296,6 +360,72 @@ def predict(reading: Reading):
         }
 
     if IS_V3:
+        # v4 rolling-features path: if the caller supplied history AND the v4
+        # model is loaded, compute the 9 rolling features, build a 15-feature
+        # vector, and use the v4 model. This gives much better gradual-onset
+        # detection (memory_leak recall 0.736 -> 0.909 offline). Falls through
+        # to the standard v3 6-feature path when history is absent or malformed.
+        if HAS_V4 and reading.history is not None:
+            rolling_feats = _compute_rolling_features(reading.history)
+            if rolling_feats is not None:
+                X_v4 = pd.DataFrame(
+                    [list(X.to_numpy()[0]) + rolling_feats],
+                    columns=list(FEATURES) + [
+                        "cpu_rolling_mean", "cpu_rolling_std", "cpu_delta",
+                        "ram_rolling_mean", "ram_rolling_std", "ram_delta",
+                        "load_avg_rolling_mean", "load_avg_rolling_std", "load_avg_delta",
+                    ],
+                )
+                v4_proba = xgb_v4_model.predict_proba(X_v4.values)[0]
+                v4_classes = list(xgb_v4_label_encoder.classes_)
+                v4_normal_idx = v4_classes.index("normal")
+                v4_p_normal = float(v4_proba[v4_normal_idx])
+                v4_is_anomaly = v4_p_normal < PREDICT_THRESHOLD
+                if v4_is_anomaly:
+                    v4_non_normal = [(v4_classes[i], v4_proba[i]) for i in range(len(v4_classes)) if i != v4_normal_idx]
+                    v4_cause = max(v4_non_normal, key=lambda x: x[1])[0]
+                else:
+                    v4_cause = "normal"
+                # IsolationForest safety net still runs on the base 6 features
+                iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
+                iso_score = float(-iso_model.score_samples(X)[0])
+                is_anomaly = v4_is_anomaly or iso_is_anomaly
+                if v4_is_anomaly:
+                    likely_cause = v4_cause
+                elif iso_is_anomaly:
+                    likely_cause = "unknown (flagged by safety-net model only)"
+                else:
+                    likely_cause = None
+                prediction_id = insert_prediction(
+                    machine=reading.machine,
+                    machine_type=machine_type,
+                    window=window,
+                    features=z_scores,
+                    raw_metrics=reading.metrics,
+                    model_version="telecom_v4_rolling",
+                    predict_threshold=PREDICT_THRESHOLD,
+                    xgb_p_normal=v4_p_normal,
+                    xgb_cause=v4_cause,
+                    iso_score=round(iso_score, 4),
+                    final_is_anomaly=int(is_anomaly),
+                    final_cause=likely_cause,
+                )
+                return {
+                    "prediction_id":  prediction_id,
+                    "machine":        reading.machine,
+                    "machine_type":   machine_type or "unknown",
+                    "model":          "telecom_v4_rolling",
+                    "window":         window or "not-supplied",
+                    "is_anomaly":     int(is_anomaly),
+                    "likely_cause":   likely_cause,
+                    "xgb_vote":       {"is_anomaly": int(v4_is_anomaly), "cause": v4_cause},
+                    "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
+                    "z_scores":       z_scores,
+                    "rolling_features_used": True,
+                    "machine_known":  reading.machine in baselines,
+                    "baseline_used":  baseline_used,
+                }
+
         # XGBoost: predicts numeric class index, decoded back to string cause via
         # LabelEncoder (normal | cpu_spike | memory_leak | network_flood |
         # disk_saturation | silent_failure). Better per-cause recall than the RF
