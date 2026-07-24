@@ -1,0 +1,46 @@
+{
+  "current_production_model": {
+    "path": "models/telecom_xgb_classifier_v2.pkl",
+    "docker_image_tag": "devsecmlops-api:2.12.0",
+    "trained_at": "2026-07-15T00:00:00Z",
+    "source": "initial_v3_training",
+    "training_rows": 3165947,
+    "feedback_rows_used": 0,
+    "evaluation": {
+      "offline_f1": 0.718,
+      "offline_precision": 0.775,
+      "offline_recall": 0.67,
+      "per_cause_recall": {
+        "cpu_spike": 0.894,
+        "memory_leak": 0.736,
+        "network_flood": 0.915,
+        "disk_saturation": 0.977,
+        "silent_failure": 0.906,
+        "cascade": 0.042
+      }
+    }
+  },
+  "retrain_history": [
+    {
+      "attempted_at": "2026-07-22T12:45:06.004068+00:00",
+      "history_path": "models/history/telecom_xgb_v3_20260722T124505Z.pkl",
+      "feedback_rows_used": 500,
+      "guardrail_passed": false,
+      "guardrail_reason": "F1 dropped: 0.718 -> 0.709",
+      "metrics": {
+        "f1": 0.7094050403868517,
+        "precision": 0.7432111169752886,
+        "recall": 0.6785405996432066,
+        "per_cause_recall": {
+          "cpu_spike": 0.9147578162967763,
+          "memory_leak": 0.7468055964909239,
+          "network_flood": 0.929690838765519,
+          "disk_saturation": 0.9753222786481135,
+          "silent_failure": 0.9192240437776935,
+          "cascade": 0.04143017378848077
+        }
+      },
+      "promoted_to_production": false
+    }
+  ]
+}
