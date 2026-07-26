@@ -29,6 +29,10 @@ COPY models/telecom_serving_baselines.json ./models/
 # unlike v2 whose 124MB RandomForest requires runtime download):
 COPY models/telecom_xgb_classifier_v2.pkl    ./models/
 COPY models/telecom_xgb_label_encoder_v2.pkl ./models/
+# v4 rolling-features model (15 features). Loaded alongside v3; used when
+# the /predict caller supplies a 'history' field. See README v4 section.
+COPY models/telecom_xgb_v4_rolling.pkl         ./models/
+COPY models/telecom_xgb_v4_rolling_encoder.pkl ./models/
 COPY models/telecom_iso_v2.pkl               ./models/
 COPY models/telecom_baselines_v2.json        ./models/
 
