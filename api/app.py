@@ -48,6 +48,10 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "telecom").lower()
 # decisions" section for the full recall/precision sweep.
 PREDICT_THRESHOLD = float(os.environ.get("PREDICT_THRESHOLD", "0.85"))
 
+# Reported cause when only the IsolationForest safety net flags an anomaly
+# (the supervised classifier said normal). Defined once to avoid duplication.
+SAFETY_NET_CAUSE = "unknown (flagged by safety-net model only)"
+
 sys.path.insert(0, str(ROOT / "ml-model"))
 from root_cause import score_root_causes, load_graph
 
@@ -337,6 +341,184 @@ def _compute_rolling_features(history: dict) -> list[float] | None:
     return feats
 
 
+
+def _predict_v2(reading, X, z_scores, window, machine_type, baseline_used):
+    # RandomForest: predicted cause (normal | cpu_spike | memory_leak | ...)
+    cause = str(rf_model.predict(X)[0])
+    rf_is_anomaly = cause != "normal"
+    
+    # IsolationForest: independent unsupervised vote (safety net for
+    # patterns the classifier wasn't trained to recognize, e.g. cascade)
+    iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
+    iso_score = float(-iso_model.score_samples(X)[0])
+    
+    is_anomaly = rf_is_anomaly or iso_is_anomaly
+    if rf_is_anomaly:
+        likely_cause = cause
+    elif iso_is_anomaly:
+        likely_cause = SAFETY_NET_CAUSE
+    else:
+        likely_cause = None
+    
+    return {
+        "machine":        reading.machine,
+        "machine_type":   machine_type or "unknown",
+        "model":          MODEL_NAME,
+        "window":         window or "not-supplied",
+        "is_anomaly":     int(is_anomaly),
+        "likely_cause":   likely_cause,
+        "rf_vote":        {"is_anomaly": int(rf_is_anomaly), "cause": cause},
+        "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
+        "z_scores":       z_scores,
+        "machine_known":  reading.machine in baselines,
+        "baseline_used":  baseline_used,
+    }
+    
+
+def _predict_v3_v4(reading, X, z_scores, window, machine_type, baseline_used):
+    # v4 rolling-features path: if the caller supplied history AND the v4
+    # model is loaded, compute the 9 rolling features, build a 15-feature
+    # vector, and use the v4 model. This gives much better gradual-onset
+    # detection (memory_leak recall 0.736 -> 0.909 offline). Falls through
+    # to the standard v3 6-feature path when history is absent or malformed.
+    if HAS_V4 and reading.history is not None:
+        rolling_feats = _compute_rolling_features(reading.history)
+        if rolling_feats is not None:
+            x_v4_df = pd.DataFrame(
+                [list(X.to_numpy()[0]) + rolling_feats],
+                columns=list(FEATURES) + [
+                    "cpu_rolling_mean", "cpu_rolling_std", "cpu_delta",
+                    "ram_rolling_mean", "ram_rolling_std", "ram_delta",
+                    "load_avg_rolling_mean", "load_avg_rolling_std", "load_avg_delta",
+                ],
+            )
+            v4_proba = xgb_v4_model.predict_proba(x_v4_df.to_numpy())[0]
+            v4_classes = list(xgb_v4_label_encoder.classes_)
+            v4_normal_idx = v4_classes.index("normal")
+            v4_p_normal = float(v4_proba[v4_normal_idx])
+            v4_is_anomaly = v4_p_normal < PREDICT_THRESHOLD
+            if v4_is_anomaly:
+                v4_non_normal = [(v4_classes[i], v4_proba[i]) for i in range(len(v4_classes)) if i != v4_normal_idx]
+                v4_cause = max(v4_non_normal, key=lambda x: x[1])[0]
+            else:
+                v4_cause = "normal"
+            # IsolationForest safety net still runs on the base 6 features
+            iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
+            iso_score = float(-iso_model.score_samples(X)[0])
+            is_anomaly = v4_is_anomaly or iso_is_anomaly
+            if v4_is_anomaly:
+                likely_cause = v4_cause
+            elif iso_is_anomaly:
+                likely_cause = SAFETY_NET_CAUSE
+            else:
+                likely_cause = None
+            prediction_id = _safe_insert_prediction(
+                machine=reading.machine,
+                machine_type=machine_type,
+                window=window,
+                features=z_scores,
+                raw_metrics=reading.metrics,
+                model_version="telecom_v4_rolling",
+                predict_threshold=PREDICT_THRESHOLD,
+                xgb_p_normal=v4_p_normal,
+                xgb_cause=v4_cause,
+                iso_score=round(iso_score, 4),
+                final_is_anomaly=int(is_anomaly),
+                final_cause=likely_cause,
+            )
+            return {
+                "prediction_id":  prediction_id,
+                "machine":        reading.machine,
+                "machine_type":   machine_type or "unknown",
+                "model":          "telecom_v4_rolling",
+                "window":         window or "not-supplied",
+                "is_anomaly":     int(is_anomaly),
+                "likely_cause":   likely_cause,
+                "xgb_vote":       {"is_anomaly": int(v4_is_anomaly), "cause": v4_cause},
+                "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
+                "z_scores":       z_scores,
+                "rolling_features_used": True,
+                "machine_known":  reading.machine in baselines,
+                "baseline_used":  baseline_used,
+            }
+    
+    # XGBoost: predicts numeric class index, decoded back to string cause via
+    # LabelEncoder (normal | cpu_spike | memory_leak | network_flood |
+    # disk_saturation | silent_failure). Better per-cause recall than the RF
+    # primary in v2, especially on memory_leak. 34x smaller model (3.6MB vs
+    # 124MB), baked into the image directly -- no MinIO fetch needed.
+    # Threshold-tuned prediction (see PREDICT_THRESHOLD at top of file).
+    # Flag as anomaly if P(normal) < threshold, i.e. not confident it's normal.
+    xgb_proba = xgb_model.predict_proba(X.to_numpy())[0]
+    classes = list(xgb_label_encoder.classes_)
+    normal_idx = classes.index("normal")
+    p_normal = float(xgb_proba[normal_idx])
+    xgb_is_anomaly = p_normal < PREDICT_THRESHOLD
+    # Reported cause: if not normal, pick the most probable non-normal class
+    if xgb_is_anomaly:
+        non_normal_scores = [(classes[i], xgb_proba[i]) for i in range(len(classes)) if i != normal_idx]
+        cause = max(non_normal_scores, key=lambda x: x[1])[0]
+    else:
+        cause = "normal"
+    
+    # IsolationForest: unchanged safety net for novel patterns.
+    iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
+    iso_score = float(-iso_model.score_samples(X)[0])
+    
+    is_anomaly = xgb_is_anomaly or iso_is_anomaly
+    if xgb_is_anomaly:
+        likely_cause = cause
+    elif iso_is_anomaly:
+        likely_cause = SAFETY_NET_CAUSE
+    else:
+        likely_cause = None
+    
+    prediction_id = _safe_insert_prediction(
+        machine=reading.machine,
+        machine_type=machine_type,
+        window=window,
+        features=z_scores,
+        raw_metrics=reading.metrics,
+        model_version=MODEL_NAME,
+        predict_threshold=PREDICT_THRESHOLD,
+        xgb_p_normal=p_normal,
+        xgb_cause=cause,
+        iso_score=round(iso_score, 4),
+        final_is_anomaly=int(is_anomaly),
+        final_cause=likely_cause,
+    )
+    return {
+        "prediction_id":  prediction_id,
+        "machine":        reading.machine,
+        "machine_type":   machine_type or "unknown",
+        "model":          MODEL_NAME,
+        "window":         window or "not-supplied",
+        "is_anomaly":     int(is_anomaly),
+        "likely_cause":   likely_cause,
+        "xgb_vote":       {"is_anomaly": int(xgb_is_anomaly), "cause": cause},
+        "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
+        "z_scores":       z_scores,
+        "machine_known":  reading.machine in baselines,
+        "baseline_used":  baseline_used,
+    }
+    
+
+def _predict_fallback(reading, X, z_scores, window, machine_type, baseline_used):
+    is_anomaly = int(model.predict(X)[0] == -1)
+    score      = float(-model.score_samples(X)[0])
+    
+    return {
+        "machine":        reading.machine,
+        "machine_type":   machine_type or "unknown",
+        "model":          MODEL_NAME,
+        "window":         window or "not-supplied",
+        "is_anomaly":     is_anomaly,
+        "anomaly_score":  round(score, 4),
+        "z_scores":       z_scores,
+        "machine_known":  reading.machine in baselines,
+        "baseline_used":  baseline_used,   # machine+window | machine | type | global
+    }
+
 @app.post(
     "/predict",
     responses={400: {"description": "Invalid input: missing metric, bad hour/timestamp"}},
@@ -362,178 +544,10 @@ def predict(reading: Reading):
     z_scores = {c: round(float(v), 2) for c, v in zip(FEATURES, X.to_numpy()[0])}
 
     if IS_V2:
-        # RandomForest: predicted cause (normal | cpu_spike | memory_leak | ...)
-        cause = str(rf_model.predict(X)[0])
-        rf_is_anomaly = cause != "normal"
-
-        # IsolationForest: independent unsupervised vote (safety net for
-        # patterns the classifier wasn't trained to recognize, e.g. cascade)
-        iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
-        iso_score = float(-iso_model.score_samples(X)[0])
-
-        is_anomaly = rf_is_anomaly or iso_is_anomaly
-        if rf_is_anomaly:
-            likely_cause = cause
-        elif iso_is_anomaly:
-            likely_cause = "unknown (flagged by safety-net model only)"
-        else:
-            likely_cause = None
-
-        return {
-            "machine":        reading.machine,
-            "machine_type":   machine_type or "unknown",
-            "model":          MODEL_NAME,
-            "window":         window or "not-supplied",
-            "is_anomaly":     int(is_anomaly),
-            "likely_cause":   likely_cause,
-            "rf_vote":        {"is_anomaly": int(rf_is_anomaly), "cause": cause},
-            "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
-            "z_scores":       z_scores,
-            "machine_known":  reading.machine in baselines,
-            "baseline_used":  baseline_used,
-        }
-
+        return _predict_v2(reading, X, z_scores, window, machine_type, baseline_used)
     if IS_V3:
-        # v4 rolling-features path: if the caller supplied history AND the v4
-        # model is loaded, compute the 9 rolling features, build a 15-feature
-        # vector, and use the v4 model. This gives much better gradual-onset
-        # detection (memory_leak recall 0.736 -> 0.909 offline). Falls through
-        # to the standard v3 6-feature path when history is absent or malformed.
-        if HAS_V4 and reading.history is not None:
-            rolling_feats = _compute_rolling_features(reading.history)
-            if rolling_feats is not None:
-                X_v4 = pd.DataFrame(
-                    [list(X.to_numpy()[0]) + rolling_feats],
-                    columns=list(FEATURES) + [
-                        "cpu_rolling_mean", "cpu_rolling_std", "cpu_delta",
-                        "ram_rolling_mean", "ram_rolling_std", "ram_delta",
-                        "load_avg_rolling_mean", "load_avg_rolling_std", "load_avg_delta",
-                    ],
-                )
-                v4_proba = xgb_v4_model.predict_proba(X_v4.values)[0]
-                v4_classes = list(xgb_v4_label_encoder.classes_)
-                v4_normal_idx = v4_classes.index("normal")
-                v4_p_normal = float(v4_proba[v4_normal_idx])
-                v4_is_anomaly = v4_p_normal < PREDICT_THRESHOLD
-                if v4_is_anomaly:
-                    v4_non_normal = [(v4_classes[i], v4_proba[i]) for i in range(len(v4_classes)) if i != v4_normal_idx]
-                    v4_cause = max(v4_non_normal, key=lambda x: x[1])[0]
-                else:
-                    v4_cause = "normal"
-                # IsolationForest safety net still runs on the base 6 features
-                iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
-                iso_score = float(-iso_model.score_samples(X)[0])
-                is_anomaly = v4_is_anomaly or iso_is_anomaly
-                if v4_is_anomaly:
-                    likely_cause = v4_cause
-                elif iso_is_anomaly:
-                    likely_cause = "unknown (flagged by safety-net model only)"
-                else:
-                    likely_cause = None
-                prediction_id = _safe_insert_prediction(
-                    machine=reading.machine,
-                    machine_type=machine_type,
-                    window=window,
-                    features=z_scores,
-                    raw_metrics=reading.metrics,
-                    model_version="telecom_v4_rolling",
-                    predict_threshold=PREDICT_THRESHOLD,
-                    xgb_p_normal=v4_p_normal,
-                    xgb_cause=v4_cause,
-                    iso_score=round(iso_score, 4),
-                    final_is_anomaly=int(is_anomaly),
-                    final_cause=likely_cause,
-                )
-                return {
-                    "prediction_id":  prediction_id,
-                    "machine":        reading.machine,
-                    "machine_type":   machine_type or "unknown",
-                    "model":          "telecom_v4_rolling",
-                    "window":         window or "not-supplied",
-                    "is_anomaly":     int(is_anomaly),
-                    "likely_cause":   likely_cause,
-                    "xgb_vote":       {"is_anomaly": int(v4_is_anomaly), "cause": v4_cause},
-                    "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
-                    "z_scores":       z_scores,
-                    "rolling_features_used": True,
-                    "machine_known":  reading.machine in baselines,
-                    "baseline_used":  baseline_used,
-                }
-
-        # XGBoost: predicts numeric class index, decoded back to string cause via
-        # LabelEncoder (normal | cpu_spike | memory_leak | network_flood |
-        # disk_saturation | silent_failure). Better per-cause recall than the RF
-        # primary in v2, especially on memory_leak. 34x smaller model (3.6MB vs
-        # 124MB), baked into the image directly -- no MinIO fetch needed.
-        # Threshold-tuned prediction (see PREDICT_THRESHOLD at top of file).
-        # Flag as anomaly if P(normal) < threshold, i.e. not confident it's normal.
-        xgb_proba = xgb_model.predict_proba(X.values)[0]
-        classes = list(xgb_label_encoder.classes_)
-        normal_idx = classes.index("normal")
-        p_normal = float(xgb_proba[normal_idx])
-        xgb_is_anomaly = p_normal < PREDICT_THRESHOLD
-        # Reported cause: if not normal, pick the most probable non-normal class
-        if xgb_is_anomaly:
-            non_normal_scores = [(classes[i], xgb_proba[i]) for i in range(len(classes)) if i != normal_idx]
-            cause = max(non_normal_scores, key=lambda x: x[1])[0]
-        else:
-            cause = "normal"
-
-        # IsolationForest: unchanged safety net for novel patterns.
-        iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
-        iso_score = float(-iso_model.score_samples(X)[0])
-
-        is_anomaly = xgb_is_anomaly or iso_is_anomaly
-        if xgb_is_anomaly:
-            likely_cause = cause
-        elif iso_is_anomaly:
-            likely_cause = "unknown (flagged by safety-net model only)"
-        else:
-            likely_cause = None
-
-        prediction_id = _safe_insert_prediction(
-            machine=reading.machine,
-            machine_type=machine_type,
-            window=window,
-            features=z_scores,
-            raw_metrics=reading.metrics,
-            model_version=MODEL_NAME,
-            predict_threshold=PREDICT_THRESHOLD,
-            xgb_p_normal=p_normal,
-            xgb_cause=cause,
-            iso_score=round(iso_score, 4),
-            final_is_anomaly=int(is_anomaly),
-            final_cause=likely_cause,
-        )
-        return {
-            "prediction_id":  prediction_id,
-            "machine":        reading.machine,
-            "machine_type":   machine_type or "unknown",
-            "model":          MODEL_NAME,
-            "window":         window or "not-supplied",
-            "is_anomaly":     int(is_anomaly),
-            "likely_cause":   likely_cause,
-            "xgb_vote":       {"is_anomaly": int(xgb_is_anomaly), "cause": cause},
-            "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
-            "z_scores":       z_scores,
-            "machine_known":  reading.machine in baselines,
-            "baseline_used":  baseline_used,
-        }
-
-    is_anomaly = int(model.predict(X)[0] == -1)
-    score      = float(-model.score_samples(X)[0])
-
-    return {
-        "machine":        reading.machine,
-        "machine_type":   machine_type or "unknown",
-        "model":          MODEL_NAME,
-        "window":         window or "not-supplied",
-        "is_anomaly":     is_anomaly,
-        "anomaly_score":  round(score, 4),
-        "z_scores":       z_scores,
-        "machine_known":  reading.machine in baselines,
-        "baseline_used":  baseline_used,   # machine+window | machine | type | global
-    }
+        return _predict_v3_v4(reading, X, z_scores, window, machine_type, baseline_used)
+    return _predict_fallback(reading, X, z_scores, window, machine_type, baseline_used)
 
 
 @app.post(

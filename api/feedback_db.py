@@ -26,10 +26,30 @@ import psycopg
 from psycopg.rows import dict_row
 
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://feedback:feedback-dev-password@postgres.ml-serving.svc.cluster.local:5432/feedback",
-)
+def _build_database_url() -> str:
+    """
+    Build the PostgreSQL connection URL from environment variables.
+
+    Priority:
+      1. DATABASE_URL, if set explicitly (full connection string)
+      2. Otherwise assemble from POSTGRES_{USER,PASSWORD,HOST,PORT,DB},
+         each with a non-secret default EXCEPT the password, which has
+         no default -- it must come from the environment (injected from
+         a Kubernetes Secret in production). No credential is hardcoded
+         in source.
+    """
+    explicit = os.environ.get("DATABASE_URL")
+    if explicit:
+        return explicit
+    user = os.environ.get("POSTGRES_USER", "feedback")
+    password = os.environ.get("POSTGRES_PASSWORD", "")
+    host = os.environ.get("POSTGRES_HOST", "postgres.ml-serving.svc.cluster.local")
+    port = os.environ.get("POSTGRES_PORT", "5432")
+    db = os.environ.get("POSTGRES_DB", "feedback")
+    return f"postgresql://{user}:{password}@{host}:{port}/{db}"
+
+
+DATABASE_URL = _build_database_url()
 
 VALID_VERDICTS = {"true_positive", "false_positive", "true_negative", "false_negative"}
 
