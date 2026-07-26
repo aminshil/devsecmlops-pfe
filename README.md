@@ -599,6 +599,64 @@ directions in the Roadmap. LightGBM artifacts kept in the repo as
 evidence but not adopted, since it offers no real advantage over the
 already-deployed XGBoost.
 
+## Rolling features and gradual-onset detection (v4)
+
+The v3 model looks at ONE reading in isolation: is this cpu/ram/etc snapshot anomalous right now? This works for sudden spikes but struggles with **gradual-onset** anomalies -- a memory leak where ram climbs slowly from 60% to 95% over several minutes. At any single moment the reading looks only mildly elevated; the anomaly is in the *trend*, not the *value*.
+
+v4 adds 9 rolling/trend features on top of the 6 z-scored base features (15 total), computed per machine over the last 10 readings (5 minutes at 30-second resolution):
+
+- `{cpu,ram,load_avg}_rolling_mean` -- recent baseline
+- `{cpu,ram,load_avg}_rolling_std` -- recent volatility
+- `{cpu,ram,load_avg}_delta` -- rate of change (current minus 10-readings-ago)
+
+Applied only to metrics where change-over-time is diagnostic. disk_usage (accumulates monotonically), disk_io (already noisy), and network (spikes are normal) are excluded.
+
+### Offline results (full-scale, same seed-123 test set as v3)
+
+| Model | F1 | Precision | Recall |
+|---|---|---|---|
+| v3 (6 features) | 0.718 | 0.775 | 0.670 |
+| **v4 (15 features)** | **0.816** | **0.931** | **0.726** |
+
++0.098 F1, +0.156 precision, +0.056 recall -- a large, real improvement. Per-cause recall improved on every category except cascade (which stays limited by the 40%-consistent label noise documented in the Engineering Decisions section): cpu_spike 0.894 -> 0.982, memory_leak 0.736 -> 0.909 (the +17-point gradual-onset win), network_flood 0.915 -> 0.976, disk_saturation 0.977 -> 0.994, silent_failure 0.906 -> 0.978.
+
+### Live K8s results (33,600-request two-week demo, threshold 0.85)
+
+| Config | F1 | Precision | Recall | Cause acc |
+|---|---|---|---|---|
+| v3 @ 0.85 | 0.576 | 0.452 | 0.793 | 90.0% |
+| **v4 @ 0.85** | **0.690** | **0.597** | **0.817** | **91.9%** |
+
+v4 beats v3 on every live metric, zero errors on 33,600 requests. memory_leak recall live: 77.9% -> 95.4%. (Offline v4 F1 is 0.816 at the default 0.5 threshold; live uses 0.85 for recall priority, which trades precision for recall -- hence higher live recall, lower live F1. Same intentional tradeoff as v3.)
+
+### Serving architecture: client supplies history (stateless API)
+
+Rolling features need the last 10 readings, but the API is stateless (each /predict is independent, two replicas share no state). Rather than add per-machine buffers in the pods (needs Redis / cross-replica sync) or query Prometheus on every call (couples API to Prometheus, doubles latency), v4 uses the pattern real monitoring systems use: **the client supplies the history**.
+
+The /predict request gains an optional `history` field:
+
+```json
+{
+  "machine": "web-01",
+  "metrics": {"cpu": 45, "ram": 95, ...},
+  "history": {
+    "cpu":      [40, 42, 44, 45, 45, 46, 45, 44, 45, 45],
+    "ram":      [60, 64, 70, 76, 82, 86, 90, 92, 94, 95],
+    "load_avg": [1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.0, 2.0, 2.0, 2.0]
+  }
+}
+```
+
+**Hybrid routing**: when `history` is present and the v4 model is loaded, the API computes the 9 rolling features and uses the 15-feature v4 model (response shows `model: telecom_v4_rolling`, `rolling_features_used: true`). When `history` is absent or malformed, it falls back to the 6-feature v3 model. Same endpoint, two modes, backward compatible. The IsolationForest safety net runs on the base 6 features in both paths.
+
+The serving-side rolling-feature computation is verified BYTE-IDENTICAL to the training-time function (`ml-model/preprocess.add_rolling_features`) on the same input -- a mismatch would feed the model garbage features, so this equivalence is explicitly tested.
+
+In production, the natural client is `anomaly_bridge.py`, which already polls Prometheus every 30 seconds for all 200 machines -- extending it to also fetch the last 10 readings and compute history is a natural step (documented as follow-up work). For the live load test, `scripts/live_k8s_demo_test_v4.py` builds each request's history from the dataset directly.
+
+### Why v4 is additive, not a replacement
+
+v3 remains fully functional and is the fallback whenever history isn't available. This means the system degrades gracefully: a client that can't supply history still gets v3-quality predictions rather than an error. Both models are baked into the image; the routing is per-request.
+
 ## Feedback loop and online learning (v2.12.0)
 
 The core limitation of every model version up to v2.11.1 is that the model is **static**: once trained on the synthetic seed-42 data, it never improves regardless of what happens in production. If the model flags 500 false alarms in a month and operators mark them all as fake, the model keeps making the same 500 false alarms next month.
