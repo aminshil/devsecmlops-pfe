@@ -375,72 +375,87 @@ def _predict_v2(reading, X, z_scores, window, machine_type, baseline_used):
     }
     
 
+def _predict_v4(reading, X, z_scores, window, machine_type, baseline_used):
+    """
+    v4 rolling-features prediction. Returns a response dict, or None if the
+    v4 path doesn't apply (v4 not loaded, no history, or malformed history)
+    -- in which case the caller falls through to the v3 path.
+
+    Guard clauses keep this flat: bail out early rather than nesting the
+    whole body inside two ifs.
+    """
+    if not HAS_V4 or reading.history is None:
+        return None
+    rolling_feats = _compute_rolling_features(reading.history)
+    if rolling_feats is None:
+        return None
+
+    x_v4_df = pd.DataFrame(
+        [list(X.to_numpy()[0]) + rolling_feats],
+        columns=list(FEATURES) + [
+            "cpu_rolling_mean", "cpu_rolling_std", "cpu_delta",
+            "ram_rolling_mean", "ram_rolling_std", "ram_delta",
+            "load_avg_rolling_mean", "load_avg_rolling_std", "load_avg_delta",
+        ],
+    )
+    v4_proba = xgb_v4_model.predict_proba(x_v4_df.to_numpy())[0]
+    v4_classes = list(xgb_v4_label_encoder.classes_)
+    v4_normal_idx = v4_classes.index("normal")
+    v4_p_normal = float(v4_proba[v4_normal_idx])
+    v4_is_anomaly = v4_p_normal < PREDICT_THRESHOLD
+    if v4_is_anomaly:
+        v4_non_normal = [(v4_classes[i], v4_proba[i]) for i in range(len(v4_classes)) if i != v4_normal_idx]
+        v4_cause = max(v4_non_normal, key=lambda x: x[1])[0]
+    else:
+        v4_cause = "normal"
+    # IsolationForest safety net still runs on the base 6 features
+    iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
+    iso_score = float(-iso_model.score_samples(X)[0])
+    is_anomaly = v4_is_anomaly or iso_is_anomaly
+    if v4_is_anomaly:
+        likely_cause = v4_cause
+    elif iso_is_anomaly:
+        likely_cause = SAFETY_NET_CAUSE
+    else:
+        likely_cause = None
+    prediction_id = _safe_insert_prediction(
+        machine=reading.machine,
+        machine_type=machine_type,
+        window=window,
+        features=z_scores,
+        raw_metrics=reading.metrics,
+        model_version="telecom_v4_rolling",
+        predict_threshold=PREDICT_THRESHOLD,
+        xgb_p_normal=v4_p_normal,
+        xgb_cause=v4_cause,
+        iso_score=round(iso_score, 4),
+        final_is_anomaly=int(is_anomaly),
+        final_cause=likely_cause,
+    )
+    return {
+        "prediction_id":  prediction_id,
+        "machine":        reading.machine,
+        "machine_type":   machine_type or "unknown",
+        "model":          "telecom_v4_rolling",
+        "window":         window or "not-supplied",
+        "is_anomaly":     int(is_anomaly),
+        "likely_cause":   likely_cause,
+        "xgb_vote":       {"is_anomaly": int(v4_is_anomaly), "cause": v4_cause},
+        "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
+        "z_scores":       z_scores,
+        "rolling_features_used": True,
+        "machine_known":  reading.machine in baselines,
+        "baseline_used":  baseline_used,
+    }
+
+
 def _predict_v3_v4(reading, X, z_scores, window, machine_type, baseline_used):
-    # v4 rolling-features path: if the caller supplied history AND the v4
-    # model is loaded, compute the 9 rolling features, build a 15-feature
-    # vector, and use the v4 model. This gives much better gradual-onset
-    # detection (memory_leak recall 0.736 -> 0.909 offline). Falls through
-    # to the standard v3 6-feature path when history is absent or malformed.
-    if HAS_V4 and reading.history is not None:
-        rolling_feats = _compute_rolling_features(reading.history)
-        if rolling_feats is not None:
-            x_v4_df = pd.DataFrame(
-                [list(X.to_numpy()[0]) + rolling_feats],
-                columns=list(FEATURES) + [
-                    "cpu_rolling_mean", "cpu_rolling_std", "cpu_delta",
-                    "ram_rolling_mean", "ram_rolling_std", "ram_delta",
-                    "load_avg_rolling_mean", "load_avg_rolling_std", "load_avg_delta",
-                ],
-            )
-            v4_proba = xgb_v4_model.predict_proba(x_v4_df.to_numpy())[0]
-            v4_classes = list(xgb_v4_label_encoder.classes_)
-            v4_normal_idx = v4_classes.index("normal")
-            v4_p_normal = float(v4_proba[v4_normal_idx])
-            v4_is_anomaly = v4_p_normal < PREDICT_THRESHOLD
-            if v4_is_anomaly:
-                v4_non_normal = [(v4_classes[i], v4_proba[i]) for i in range(len(v4_classes)) if i != v4_normal_idx]
-                v4_cause = max(v4_non_normal, key=lambda x: x[1])[0]
-            else:
-                v4_cause = "normal"
-            # IsolationForest safety net still runs on the base 6 features
-            iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
-            iso_score = float(-iso_model.score_samples(X)[0])
-            is_anomaly = v4_is_anomaly or iso_is_anomaly
-            if v4_is_anomaly:
-                likely_cause = v4_cause
-            elif iso_is_anomaly:
-                likely_cause = SAFETY_NET_CAUSE
-            else:
-                likely_cause = None
-            prediction_id = _safe_insert_prediction(
-                machine=reading.machine,
-                machine_type=machine_type,
-                window=window,
-                features=z_scores,
-                raw_metrics=reading.metrics,
-                model_version="telecom_v4_rolling",
-                predict_threshold=PREDICT_THRESHOLD,
-                xgb_p_normal=v4_p_normal,
-                xgb_cause=v4_cause,
-                iso_score=round(iso_score, 4),
-                final_is_anomaly=int(is_anomaly),
-                final_cause=likely_cause,
-            )
-            return {
-                "prediction_id":  prediction_id,
-                "machine":        reading.machine,
-                "machine_type":   machine_type or "unknown",
-                "model":          "telecom_v4_rolling",
-                "window":         window or "not-supplied",
-                "is_anomaly":     int(is_anomaly),
-                "likely_cause":   likely_cause,
-                "xgb_vote":       {"is_anomaly": int(v4_is_anomaly), "cause": v4_cause},
-                "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
-                "z_scores":       z_scores,
-                "rolling_features_used": True,
-                "machine_known":  reading.machine in baselines,
-                "baseline_used":  baseline_used,
-            }
+    # Try the v4 rolling-features path first; if it doesn't apply (no v4,
+    # no history, or malformed history) it returns None and we fall through
+    # to the standard v3 6-feature path below.
+    v4_result = _predict_v4(reading, X, z_scores, window, machine_type, baseline_used)
+    if v4_result is not None:
+        return v4_result
     
     # XGBoost: predicts numeric class index, decoded back to string cause via
     # LabelEncoder (normal | cpu_spike | memory_leak | network_flood |
