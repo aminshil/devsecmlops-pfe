@@ -206,10 +206,44 @@ app = FastAPI(
 )
 
 
+# Global flag: is the feedback DB available? Set at startup, checked before
+# every write. The model-serving path (/health, /predict predictions) is the
+# critical function -- the feedback DB is secondary. If the DB is unreachable
+# the API still serves predictions; feedback logging just becomes best-effort.
+FEEDBACK_DB_AVAILABLE = False
+
+
+def _safe_insert_prediction(**kwargs):
+    """Best-effort prediction logging: never let a DB failure break /predict."""
+    global FEEDBACK_DB_AVAILABLE
+    if not FEEDBACK_DB_AVAILABLE:
+        return None
+    try:
+        return insert_prediction(**kwargs)
+    except Exception as e:
+        print(f"WARNING: feedback DB write failed ({e}). Prediction served without logging.")
+        FEEDBACK_DB_AVAILABLE = False
+        return None
+
+
 @app.on_event("startup")
 def _init_feedback_db_on_startup():
-    """Ensure the feedback DB and its table exist before serving traffic."""
-    init_feedback_db()
+    """
+    Try to initialize the feedback DB. Non-fatal: if the DB is unreachable
+    (e.g. PostgreSQL not yet up, or running the container standalone without
+    a DB, as in CI smoke tests), log a warning and continue. The API will
+    still serve predictions; prediction logging is skipped until the DB
+    becomes reachable.
+    """
+    global FEEDBACK_DB_AVAILABLE
+    try:
+        init_feedback_db()
+        FEEDBACK_DB_AVAILABLE = True
+        print("Feedback DB initialized -- prediction logging enabled")
+    except Exception as e:
+        FEEDBACK_DB_AVAILABLE = False
+        print(f"WARNING: feedback DB unreachable at startup ({e}). "
+              f"Serving predictions without feedback logging.")
 
 
 class Reading(BaseModel):
@@ -396,7 +430,7 @@ def predict(reading: Reading):
                     likely_cause = "unknown (flagged by safety-net model only)"
                 else:
                     likely_cause = None
-                prediction_id = insert_prediction(
+                prediction_id = _safe_insert_prediction(
                     machine=reading.machine,
                     machine_type=machine_type,
                     window=window,
@@ -457,7 +491,7 @@ def predict(reading: Reading):
         else:
             likely_cause = None
 
-        prediction_id = insert_prediction(
+        prediction_id = _safe_insert_prediction(
             machine=reading.machine,
             machine_type=machine_type,
             window=window,
