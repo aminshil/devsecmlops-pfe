@@ -14,11 +14,27 @@ victims when multiple machines alert at once.
 A production-deployed anomaly detection platform for a simulated 200-machine
 telecom fleet, built end-to-end across seven infrastructure layers (L0-L5,
 with L6 as documented future work). Currently serving live in Kubernetes at
-version 2.11.0 (XGBoost primary + IsolationForest safety net), verified
-through a 33,600-request two-week load test with zero errors, F1=0.689 on
-natural (unstratified) production traffic, 90.5% cause-naming accuracy,
-and per-cause recall dominance over the previous RandomForest baseline on
-every anomaly type.
+version 2.13.0 (v4 rolling-features XGBoost primary + IsolationForest safety
+net, with a hybrid v3/v4 serving path), verified through a 33,600-request
+two-week load test with zero errors.
+
+**Headline result -- v4 rolling/trend features (gradual-onset detection):**
+adding 9 per-machine rolling features (mean/std/delta over the last 10
+readings) on top of the 6 z-scored base features lifted offline F1 from
+0.718 (v3) to 0.816, and live memory_leak recall from 77.9% to 95.4% -- the
+model now catches a memory leak while RAM is still climbing, not only once
+it is already critical.
+
+**Feedback loop + retrain pipeline:** every /predict call is logged to a
+PostgreSQL database (StatefulSet, survives pod kills and rolling updates);
+operators submit verdicts via /feedback/{id}; and a guardrailed retrain
+pipeline (scripts/retrain_from_feedback.py) combines feedback with the
+original training data and only promotes a new model if it does not regress.
+
+**Full DevSecMLOps quality loop closed:** the 9-stage Jenkins pipeline caught
+6 real SonarQube issues (including a hardcoded-credential Blocker and a
+cognitive-complexity violation); all were fixed and the Quality Gate now
+passes with 0 new issues.
 
 What makes this project genuinely defensible, beyond the final metrics:
 
@@ -31,10 +47,12 @@ What makes this project genuinely defensible, beyond the final metrics:
   published unsupervised sequence models -- confirming the pipeline
   generalizes and isn't overfit to synthetic data.
 - **Full DevSecMLOps stack operational**: pytest (15 tests, fail-fast in
-  Jenkins) -> SonarQube (custom Quality Gate, 91% of findings resolved,
-  remainder Accepted with reasoning) -> Docker build -> Trivy CVE scan
-  (0 HIGH/CRITICAL) -> local registry push -> K8s rolling deploy. Every
-  stage verified end-to-end with real console evidence.
+  Jenkins) -> SonarQube (custom Quality Gate, all flagged issues resolved,
+  gate passing with 0 new issues) -> Docker build -> container smoke test
+  -> Trivy CVE scan (0 HIGH/CRITICAL) -> local registry push -> K8s rolling
+  deploy. Every stage verified end-to-end with real console evidence. The
+  pipeline caught real issues this cycle (a hardcoded-credential Blocker, a
+  cognitive-complexity violation) that were then fixed and re-verified green.
 - **Honest engineering choices documented, not hidden**: the 18-subsection
   "Engineering decisions and rationale" section below explains every
   non-obvious choice from first principles, with concrete numbers.
@@ -55,17 +73,20 @@ intact as documented history and fallback options.
 
 | Layer | Component | Status |
 |-------|-----------|--------|
-| L0 | ML model — Isolation Forest, per-machine per-time-window z-score | ✅ Done |
-| L1 | FastAPI serving layer + root cause analysis endpoint | ✅ Done |
+| L0 | ML model — v4 rolling-features XGBoost + IsolationForest safety net, per-machine per-time-window z-score | ✅ Done |
+| L1 | FastAPI serving layer (hybrid v3/v4 /predict) + root cause analysis + feedback loop endpoints | ✅ Done |
 | L2 | Docker + local registry | ✅ Done |
-| L3 | Jenkins CI/CD (7 stages, real SonarQube SAST, Trivy) | ✅ Done |
-| L4 | Kubernetes (Minikube) | ✅ Done |
+| L3 | Jenkins CI/CD (9 stages, real SonarQube SAST, container smoke test, Trivy) | ✅ Done |
+| L4 | Kubernetes (Minikube): anomaly-api + PostgreSQL StatefulSet for the feedback loop | ✅ Done |
 | L5 | Monitoring (Prometheus, Grafana, real-data replay, K8s monitoring) | ✅ Done |
 | L6 | Ansible (infrastructure as code) | 📋 Planned |
 
-**Current model:** F1 = 0.663 · Precision = 0.660 · Recall = 0.667 · ROC-AUC = 0.926
-on a 200-machine synthetic Tunisie Telecom fleet, 6.75% anomaly rate, 6 features,
-30-second sampling resolution.
+**Current model (v4, offline, seed-123 test set):** F1 = 0.816 · Precision = 0.931 ·
+Recall = 0.726 on a 200-machine synthetic Tunisie Telecom fleet, 6 base features +
+9 rolling features, 30-second sampling resolution. Live in Kubernetes at threshold
+0.85 (recall priority): F1 = 0.690, Recall = 0.817, memory_leak recall 95.4%, zero
+errors over a 33,600-request two-week demo. The v3 6-feature model (F1 = 0.718
+offline) remains the fallback whenever request history is unavailable.
 
 **Full version history:** see [GitHub Releases](https://github.com/aminshil/devsecmlops-pfe/releases)
 — tagged releases from v0.1.0 (initial POC) through v2.8.0, each with
@@ -182,9 +203,25 @@ Overall F1 favors RandomForest by 1.3 points, but XGBoost wins per-cause recall 
 
 Same methodology as XGBoost: F1 = 0.716, Precision = 0.767, Recall = 0.671, per-cause recall within 0.001-0.002 of XGBoost on every category. Essentially identical performance, 3.0MB model (marginally smaller), 51s training (marginally faster). Kept as evidence because the negative result is genuinely useful: **it confirms the ceiling on this data with these features is a gradient-boosting-family ceiling, not an XGBoost-specific one**. Meaningfully passing F1 = 0.72 would require something structurally different (sequence-aware models, richer temporal features, or larger real-world data), not another gradient booster.
 
-### 12. Why rolling/trend features were tested and not integrated
+### 12. Why rolling/trend features WERE integrated as v4 (updated)
 
-Per-machine rolling mean, rolling std, and delta features (10-reading window, cpu/ram/load_avg) tested on the 5-day pilot: F1 0.708 -> 0.729, precision 0.939 -> 0.978, memory_leak recall 0.573 -> 0.606. Real, honest improvement. Not integrated into production because it requires `anomaly_bridge.py` to maintain a per-machine rolling window in memory -- a stateful serving path change, not a stateless single-reading /predict call. Documented as a validated, ready-to-implement next step rather than speculative future work.
+Per-machine rolling mean, rolling std, and delta features (10-reading window,
+cpu/ram/load_avg) were first tested on a 5-day pilot (F1 0.708 -> 0.729) and
+initially left out of production because they seemed to require a stateful
+serving path. That concern was resolved and the features were fully
+integrated as the v4 model. At full scale the gain was far larger than the
+pilot suggested: offline F1 0.718 -> 0.816, memory_leak recall 0.736 -> 0.909;
+live memory_leak recall 77.9% -> 95.4%.
+
+The stateful-serving problem was solved WITHOUT server-side state by having
+the **client supply the recent history** in the /predict request (the pattern
+Datadog/New Relic use). The API stays stateless: when `history` is present it
+computes the 9 rolling features and uses the 15-feature v4 model; when absent
+it falls back to the 6-feature v3 model. See the "Rolling features and
+gradual-onset detection (v4)" section for the full design, and Decision #19
+for the stateless-serving rationale. This entry is kept (rather than deleted)
+to record that the original "not integrated" decision was later revisited and
+reversed on stronger full-scale evidence.
 
 ### 13. Why SMD real-world validation matters
 
@@ -209,6 +246,73 @@ Image tag = exact model version. Immutable, reproducible, no runtime dependency 
 ### 18. Why v2 code paths were kept alive after v3 switch
 
 Setting `MODEL_NAME=telecom_v2` in the K8s deployment env still fully works. The v2 loading block, MinIO fetch entrypoint, and RandomForest artifact all remain functional. Reason: **additive changes are safer than destructive ones**, and defense-day A/B comparison ("here's v2 running with RandomForest, here's v3 running with XGBoost, watch them differ on the same input") is a real, tangible demonstration that would be lost if v2 were deleted.
+
+### 19. Why PREDICT_THRESHOLD = 0.85 (recall priority)
+
+v3/v4 flag an anomaly when P(normal) < PREDICT_THRESHOLD. The default 0.5
+(plain argmax) was raised to 0.85 in production after an offline threshold
+sweep. Rationale is operational, not statistical: in telecom monitoring a
+**missed** incident (a memory leak that crashes a node) costs far more than a
+false alarm (5 minutes of an engineer's time). 0.85 catches materially more
+real anomalies at the cost of more false positives -- the right trade for a
+NOC. This is why live F1 (0.690 at 0.85) is lower than offline F1 (0.816 at
+0.5) while live recall (0.817) is higher than offline recall (0.726): the
+threshold deliberately trades precision for recall. Configurable via the
+PREDICT_THRESHOLD env var without code changes.
+
+### 20. Why the client supplies rolling history (stateless v4 serving)
+
+v4 needs the last 10 readings per machine to compute rolling features. Three
+ways to get them: (a) keep per-machine buffers inside the API pods -- but with
+2+ replicas sharing no state, buffers would be inconsistent and would need
+Redis or sticky routing; (b) have the API query Prometheus on every /predict
+-- couples the API to Prometheus and doubles latency; (c) have the CLIENT send
+the history in the request. We chose (c): it matches how real monitoring
+systems work (Datadog/New Relic clients compute and ship features), keeps the
+API stateless and horizontally scalable, and makes v4 backward compatible
+(history absent -> v3 fallback). The serving-side rolling computation is
+verified byte-identical to the training-time function.
+
+### 21. Why the feedback DB was rebuilt from SQLite to PostgreSQL
+
+The feedback loop was first built on SQLite (single file on a PVC). That was
+rebuilt to PostgreSQL (StatefulSet + headless Service + Secret + PVC) for
+genuine production-readiness: multiple API replicas can write concurrently
+without file-lock contention (verified: 20 parallel writes in 0.45s), data
+survives a hard pod kill (verified: StatefulSet recreates, PVC persists), and
+it is a standard client-server DB rather than a shared-file compromise. A real
+bug surfaced during the rebuild and is worth recording: the column originally
+named `window` is a PostgreSQL reserved keyword (SQLite accepted it), so it was
+renamed to `time_window`; and the K8s env ordering matters -- POSTGRES_PASSWORD
+must be declared before DATABASE_URL for `$(VAR)` substitution to resolve.
+
+### 22. Why feedback logging is best-effort, not fail-loud (graceful degradation)
+
+Model serving (/health, /predict) is the critical function; the feedback log is
+secondary. Originally the API called the DB on startup and on every /predict,
+so an unreachable database crashed the whole app -- which also broke the CI
+smoke test (the container runs standalone with no PostgreSQL). Fixed with a
+FEEDBACK_DB_AVAILABLE flag and a _safe_insert_prediction wrapper: if the DB is
+down, the API logs a warning and keeps serving predictions (prediction_id comes
+back null, logging is skipped). More robust in production AND makes the smoke
+test pass -- a monitoring API should never stop detecting anomalies because its
+feedback log is offline.
+
+### 23. Why the retrain guardrail is strict, and what 500 rows proved
+
+The retrain pipeline only promotes a new model if aggregate F1 does not drop
+AND per-cause recall drops by no more than 5 points on any category. Tested
+end-to-end with 500 simulated operator verdicts: the retrained model scored
+F1 0.709 vs the current 0.718, and the guardrail correctly REJECTED it. This
+is the designed behavior, and it exposed a real, honest finding: 500 feedback
+rows against 3.17M training rows is ~0.02% of the signal -- too little to move
+the model regardless of sample-weight (weight 5 vs 100 gave essentially
+identical results). Meaningful improvement needs thousands of real verdicts
+accumulated over weeks/months; the pipeline is production-ready and the
+guardrail protects production in the meantime. (A z-score evaluation bug was
+also found and fixed while verifying this: a quick eval script that skipped
+add_window_column + apply_zscore mis-scored the baseline; the canonical
+F1=0.718 was confirmed once the correct preprocess path was used.)
 
 ---
 
@@ -669,14 +773,20 @@ Every prediction the API makes gets stored in a persistent database. Operators c
 
 Four independent pieces:
 
-1. **Prediction logging** -- extended `/predict` writes every call to a SQLite database and returns a `prediction_id` in the response.
+1. **Prediction logging** -- extended `/predict` writes every call to a PostgreSQL database and returns a `prediction_id` in the response.
 2. **Feedback endpoint** -- `POST /feedback/{prediction_id}` accepts operator verdicts and updates the row.
 3. **Query endpoints** -- `GET /predictions/recent` and `GET /feedback/stats` for inspecting accumulated data.
 4. **Retrain pipeline** -- `scripts/retrain_from_feedback.py` combines feedback with original training data, retrains, evaluates, and only promotes the new model if guardrails pass.
 
 ### Data model
 
-Single SQLite table `predictions` in `/app/data/predictions.db` (inside the container, mounted from a Kubernetes PersistentVolumeClaim so data survives pod restarts and rolling updates):
+Single PostgreSQL table `predictions`, served by a dedicated PostgreSQL
+StatefulSet in the `ml-serving` namespace (data survives pod restarts and
+rolling updates via the StatefulSet's PVC). The API reaches it over
+DATABASE_URL; credentials come from a Kubernetes Secret, never hardcoded.
+(This replaced an earlier SQLite implementation -- see Engineering Decision
+#21 for why, and for the reserved-keyword bug that forced the `window` ->
+`time_window` column rename.):
 
 | Column               | Type      | Nullable | Notes                                                        |
 |----------------------|-----------|----------|--------------------------------------------------------------|
@@ -684,14 +794,14 @@ Single SQLite table `predictions` in `/app/data/predictions.db` (inside the cont
 | timestamp            | TEXT      | no       | ISO-8601, when the /predict call happened                    |
 | machine              | TEXT      | no       | e.g. web-01                                                  |
 | machine_type         | TEXT      | yes      | e.g. web, db, router                                         |
-| window               | TEXT      | yes      | night / morning / afternoon / evening                        |
+| time_window          | TEXT      | yes      | night / morning / afternoon / evening (named `time_window`: `window` is a PostgreSQL reserved keyword) |
 | features_json        | TEXT      | no       | JSON dict of the 6 z-scored feature values                   |
 | raw_metrics_json     | TEXT      | no       | JSON dict of the original cpu/ram/network/etc values         |
 | model_version        | TEXT      | no       | e.g. telecom_v3                                              |
-| predict_threshold    | REAL      | no       | e.g. 0.85                                                    |
-| xgb_p_normal         | REAL      | yes      | Raw probability the model gave for the 'normal' class        |
+| predict_threshold    | DOUBLE PRECISION | no | e.g. 0.85                                                 |
+| xgb_p_normal         | DOUBLE PRECISION | yes | Raw probability the model gave for the 'normal' class     |
 | xgb_cause            | TEXT      | yes      | Predicted cause (normal / cpu_spike / memory_leak / etc)     |
-| iso_score            | REAL      | yes      | IsolationForest anomaly score                                |
+| iso_score            | DOUBLE PRECISION | yes | IsolationForest anomaly score                             |
 | final_is_anomaly     | INTEGER   | no       | 0 or 1, what the API actually returned                       |
 | final_cause          | TEXT      | yes      | The cause name returned to the caller (or NULL)              |
 | operator_verdict     | TEXT      | yes      | true_positive / false_positive / true_negative / false_negative |
@@ -717,11 +827,28 @@ Verdict semantics:
 
 ### Storage
 
-Kubernetes PersistentVolumeClaim (`feedback-pvc`) mounted at `/app/data` inside the container. Uses Minikube's default `standard` storage class, size 1Gi. Chosen over ephemeral in-memory storage because:
+A PostgreSQL StatefulSet (`postgres`, image `postgres:16-alpine`) in the
+`ml-serving` namespace, backed by a 2Gi `volumeClaimTemplate` on Minikube's
+default `standard` storage class. A headless Service gives the StatefulSet a
+stable network identity; a Secret (`postgres-credentials`) holds the
+credentials, injected into both PostgreSQL and the API via env vars. The API
+Deployment has an initContainer that blocks startup with `pg_isready` until
+PostgreSQL is accepting connections, preventing crash-loops on cold cluster
+boot. Chosen over the earlier SQLite-on-a-PVC approach because:
 
-- Survives pod restarts (real production behavior)
-- Survives rolling updates (v2.12.0 -> v2.13.0 does not lose accumulated feedback)
-- Simpler than an external DB for a single-VM demo (no separate PostgreSQL container to manage)
+- **Concurrent multi-writer safety**: 2+ API replicas write simultaneously
+  without file-lock contention (verified: 20 parallel writes in 0.45s). SQLite
+  on a shared file would serialize or corrupt under this.
+- **Survives a hard pod kill**: verified by deleting `postgres-0` -- the
+  StatefulSet recreates it and the PVC preserves all rows.
+- **Survives rolling updates**: v2.11.1 -> v2.12.0 -> v2.13.0 kept all
+  accumulated feedback.
+- **Standard client-server DB**, the real production pattern, not a
+  shared-file compromise.
+
+Feedback logging is best-effort (see Engineering Decision #22): if PostgreSQL
+is unreachable, the API keeps serving predictions and simply skips logging
+rather than failing the request.
 
 ### Retrain pipeline
 
@@ -852,34 +979,51 @@ clean `likely_root_causes` list for direct use in an alert summary.
 - Local registry (`registry:2`, port 5000) for Jenkins to push to
 
 ```bash
-docker build -t devsecmlops-api:2.11.0 .
-docker run -p 8000:8000 devsecmlops-api:2.11.0
+docker build -t devsecmlops-api:2.13.0 .
+docker run -p 8000:8000 devsecmlops-api:2.13.0
 ```
 
 ---
 
 ## CI/CD (L3)
 
-7-stage Jenkins pipeline, triggered from `git push` (private repo, PAT
+9-stage Jenkins pipeline, triggered from `git push` (private repo, PAT
 credential):
 
 1. Checkout
-2. SAST — real `sonar-scanner` against `api/` and `ml-model/`, webhook-driven
-   quality gate (`waitForQualityGate`, SonarQube pushes the result to
-   Jenkins rather than Jenkins polling)
-3. Docker build (tagged with build number)
-4. Container smoke test
-5. Trivy CVE scan (HIGH/CRITICAL)
-6. Push to local registry
-7. Deploy placeholder (pull-back verification; real K8s deploy is L4)
+2. Unit tests (pytest) -- 15 tests, fail-fast: a broken commit stops the
+   pipeline here before any downstream stage runs
+3. SAST -- real `sonar-scanner` against `api/` and `ml-model/`
+4. Quality Gate (`waitForQualityGate`, webhook-driven; advisory, does not
+   abort the pipeline)
+5. Docker build (tagged `${VERSION}-b${BUILD_NUMBER}`)
+6. Container smoke test -- runs the image standalone and curls `/health`
+7. Trivy CVE scan (HIGH/CRITICAL)
+8. Push to local registry
+9. Deploy placeholder (pull-back verification; real K8s deploy is L4)
 
-Security fixes verified through this pipeline, not just manually: 2 HIGH
-CVEs (CVE-2026-24049 wheel, CVE-2026-23949 jaraco.context, both transitive
-setuptools dependencies) found by Trivy, fixed by pinning
-`setuptools>=70.0.0 wheel>=0.46.2`, confirmed clean (0 findings) both
-manually and via an automated pipeline run. 4 SonarQube reliability issues
-(`DataFrame.values`, `np.where` usage, dict comprehension patterns) found
-and fixed, Reliability rating D → A.
+**Security + quality fixes verified through this pipeline, not just manually:**
+
+- 2 HIGH CVEs (CVE-2026-24049 wheel, CVE-2026-23949 jaraco.context, transitive
+  setuptools deps) found by Trivy, fixed by pinning `setuptools>=70.0.0
+  wheel>=0.46.2`, confirmed clean (0 findings) via an automated run.
+- A later cycle: SonarQube flagged 6 issues on the v4 + feedback-loop code --
+  a **hardcoded PostgreSQL password (Blocker)**, a **cognitive-complexity
+  violation** on `predict()` (45 vs 15 allowed), a duplicated literal, a
+  naming issue, and two `DataFrame.values` reliability warnings. All were
+  fixed: the password moved to env-var/Secret sourcing with no default in
+  source; `predict()` was split into `_predict_v2` / `_predict_v4` /
+  `_predict_v3_v4` / `_predict_fallback` helpers (guard clauses to flatten
+  nesting); the literal became a constant; `.values` -> `.to_numpy()`. The
+  refactor initially introduced 1 new complexity issue (the extracted
+  `_predict_v3_v4` was still 24), which was then cleared by pulling the v4
+  path into its own helper. Quality Gate now **passes with 0 new issues**,
+  behavior verified byte-identical (all 15 tests pass, live v3/v4 responses
+  unchanged).
+- **Smoke-test robustness fix:** the feedback DB (v2.12.0+) originally crashed
+  the container on startup when no PostgreSQL was reachable -- which broke the
+  standalone smoke test. Made non-fatal (Engineering Decision #22), so the
+  container serves `/health` and `/predict` even with the DB down.
 
 Requires: SonarQube Scanner plugin, `sonarqube-token` credential (Secret
 text), `sonar-scanner` CLI installed in the Jenkins container, a dedicated
@@ -895,7 +1039,7 @@ Minikube, single-node, Docker driver. Single namespace: `ml-serving`
 outside the cluster, not in a K8s namespace -- see MLOps section below
 for why.
 
-- **Deployment:** 2 replicas of `devsecmlops-api:2.11.0`
+- **Deployment:** 2 replicas of `devsecmlops-api:2.13.0`
 - **Service:** NodePort 30080
 - **HorizontalPodAutoscaler:** 2–5 replicas, target 70% CPU
 - **Security:** non-root `securityContext` (`runAsUser: 1000`,
@@ -933,7 +1077,7 @@ Docker container):
 
 ```
 $ curl http://$(minikube ip):30080/health
-status=ok version=2.11.0 n_features=6 machines=200 root_cause=True
+status=ok version=2.13.0 n_features=6 machines=200 root_cause=True
 
 $ curl -X POST http://$(minikube ip):30080/predict ... (disk saturation)
 machine=db-01 is_anomaly=1 score=0.6232 disk_usage_z=4.93 load_avg_z=5.31
@@ -950,12 +1094,13 @@ likely_root_causes=['router-01']
 ```bash
 minikube start --driver=docker --force
 minikube addons enable metrics-server
-minikube image load devsecmlops-api:2.11.0
+minikube image load devsecmlops-api:2.13.0
 kubectl apply -f kubernetes/namespace.yaml
+kubectl apply -f kubernetes/postgres.yaml     # PostgreSQL StatefulSet for the feedback loop
 kubectl apply -f kubernetes/deployment.yaml
 kubectl apply -f kubernetes/service.yaml
 kubectl apply -f kubernetes/hpa.yaml
-kubectl get pods -n ml-serving
+kubectl get pods -n ml-serving   # wait for postgres-0 + both anomaly-api pods = 1/1 Running
 kubectl top pods -n ml-serving
 ```
 
@@ -1108,10 +1253,12 @@ mlflow server --host 0.0.0.0 --port 5001 \
 
 ```
 api/
-  app.py                       FastAPI service, includes /root-cause
+  app.py                       FastAPI service: hybrid v3/v4 /predict,
+                               /root-cause, feedback loop endpoints
+  feedback_db.py               PostgreSQL feedback DB helper (psycopg 3)
 
 ml-model/
-  preprocess.py                baseline construction + z-score + 4-level fallback
+  preprocess.py                baseline construction + z-score + 4-level fallback + v4 rolling features
   train_serving_telecom.py     final trainer (production artifact)
   generate_telecom_fleet.py    synthetic 200-machine fleet generator (6 features)
   build_dependency_graph.py    extracts the router→machine dependency graph
@@ -1121,8 +1268,16 @@ ml-model/
   zscore_demo.py               worked example / defense demo (3 parts)
 
 models/
-  telecom_serving_model.pkl        shipped Isolation Forest
+  telecom_serving_model.pkl        shipped Isolation Forest (v1)
   telecom_serving_baselines.json   800 window + 200 machine + 11 type + global
+  telecom_xgb_classifier_v2.pkl    v3 XGBoost primary (6 features, 3.6MB)
+  telecom_xgb_label_encoder_v2.pkl v3 label encoder
+  telecom_xgb_v4_rolling.pkl       v4 XGBoost (15 features incl. rolling, 3.9MB)
+  telecom_xgb_v4_rolling_encoder.pkl  v4 label encoder
+  telecom_iso_v2.pkl               IsolationForest safety net (v2/v3/v4)
+  telecom_baselines_v2.json        per-machine per-window baselines (v2+)
+  manifest.json                    which model is production + retrain history
+  history/                         every retrained model, timestamped (evidence trail)
   dependency_graph.json            router → machine relationships
   results/                         benchmark JSON evidence files
 
@@ -1131,9 +1286,9 @@ data/                    generated fleet CSV (not committed — regenerate local
 Dockerfile                API image, model + dependency graph baked in
 .dockerignore             excludes venv/, data/, old models
 requirements-api.txt      serving-only deps, pinned versions
-Jenkinsfile               7-stage CI/CD pipeline
+Jenkinsfile               9-stage CI/CD pipeline
 
-kubernetes/               K8s manifests (namespace, deployment, service, HPA)
+kubernetes/               K8s manifests (namespace, postgres StatefulSet, deployment, service, HPA)
 monitoring/
   prometheus.yml               scrape config: node-exporter, replay,
                                 anomaly-bridge, k8s-exporter
@@ -1146,6 +1301,9 @@ docs/
   machine_roster.txt           all 200 machines: name, type, role
 
 scripts/
+  retrain_from_feedback.py     guardrailed retrain from PostgreSQL feedback
+  live_k8s_demo_test.py        33,600-request live load test (v3, no history)
+  live_k8s_demo_test_v4.py     33,600-request live load test (v4, sends history)
   full_verification.sh         one-shot health check across all 6 layers
   capture_all_screenshots.sh   defense screenshot automation
 
@@ -1198,8 +1356,8 @@ python ml-model/zscore_demo.py
 MODEL_NAME=telecom uvicorn api.app:app --host 0.0.0.0 --port 8000
 
 # Or containerized
-docker build -t devsecmlops-api:2.11.0 .
-docker run -p 8000:8000 devsecmlops-api:2.11.0
+docker build -t devsecmlops-api:2.13.0 .
+docker run -p 8000:8000 devsecmlops-api:2.13.0
 
 # Test endpoints
 curl localhost:8000/health

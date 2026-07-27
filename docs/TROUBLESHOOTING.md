@@ -54,6 +54,109 @@ daemon restart rather than debugging individual services one at a time.
 
 ---
 
+## "Minikube API server unreachable" — `dial tcp 192.168.49.2:8443: i/o timeout`
+
+**Symptom:** `kubectl` commands hang, then fail with
+`Unable to connect to the server: dial tcp 192.168.49.2:8443: i/o timeout`
+(sometimes `connect: no route to host`, or an SSH handshake failure from
+`minikube` itself). `docker ps` shows the `minikube` container as `Up` for
+hours, so the container is alive — but the Kubernetes API inside it is
+unreachable. This recurred roughly every 30-90 minutes during long sessions,
+and reliably after the VM was paused and resumed.
+
+**Root cause:** containers-inside-a-container-inside-a-VM. Minikube (Docker
+driver) runs the whole K8s cluster inside one Docker container; the pods run
+as containers inside *that*. When the outer Docker daemon's networking goes
+stale (VM pause/resume, memory pressure, or a `docker restart`), the network
+path between the host, the minikube container, and the K8s API server inside
+it drifts out of sync. The container stays "Up" but its internal API is
+cut off.
+
+**Fix (this worked reliably all session, less disruptive than a delete):**
+
+```bash
+sudo systemctl restart docker
+sleep 10
+minikube start --force        # DO NOT Ctrl+C the "Updating running docker
+                              # container" step -- it can take 1-4 minutes
+sleep 30
+kubectl get pods --all-namespaces   # verify the API is actually reachable
+```
+
+After this, the K8s pods self-heal (their RESTARTS counter increments once --
+that is normal, not a fault). The `--restart=always` Docker containers
+(minio/sonarqube/jenkins/registry) come back on the daemon restart on their
+own; **Minikube does not** and must be started manually with the command
+above.
+
+**Nuclear option (only if `minikube start --force` itself stalls):**
+
+```bash
+minikube delete
+minikube start --force
+# then re-apply manifests and reload the image:
+kubectl apply -f kubernetes/namespace.yaml
+kubectl apply -f kubernetes/postgres.yaml
+kubectl apply -f kubernetes/deployment.yaml
+kubectl apply -f kubernetes/service.yaml
+kubectl apply -f kubernetes/hpa.yaml
+minikube image load devsecmlops-api:2.13.0
+```
+
+The feedback PostgreSQL data is lost on a `minikube delete` (the PVC is
+destroyed with the cluster) -- acceptable for a demo, but do not `delete` if
+you need to preserve accumulated feedback.
+
+**Permanent routine for pausing/resuming the VM (prevents most occurrences):**
+
+```bash
+# BEFORE pausing the VM:
+minikube stop
+
+# AFTER resuming the VM (or on a cold boot):
+sudo systemctl restart docker
+sleep 10
+minikube start --force
+sleep 30
+kubectl get pods -n ml-serving
+```
+
+Cleanly stopping Minikube before the VM freezes avoids the stale-networking
+state on resume. This is the single most effective preventive step.
+
+**Related, when port-forwarding to PostgreSQL for local testing:**
+`kubectl port-forward -n ml-serving svc/postgres 5432:5432` dies frequently
+(especially when a long process runs against it, or when the cluster stalls).
+Just restart it; kill stragglers first with
+`pkill -f "port-forward.*postgres"` if the port is already bound.
+
+---
+
+## "Retrain rejected / feedback made no difference to the model"
+
+**Symptom:** `scripts/retrain_from_feedback.py` runs cleanly but the guardrail
+REJECTS the retrained model (exit code 2), or the retrained model's metrics
+are essentially identical to the current one no matter what `sample_weight`
+is used.
+
+**This is expected behavior, not a bug**, when the feedback set is small.
+With ~500 verdicts against 3.17M training rows (~0.02% of the signal), the
+feedback simply cannot move the model measurably -- verified by testing weight
+5 vs weight 100 and getting near-identical results. The guardrail correctly
+refusing to promote a non-improving (or slightly-worse) model is exactly what
+it is for. Meaningful improvement needs thousands of real operator verdicts
+accumulated over weeks/months. See Engineering Decision #23.
+
+**Gotcha that CAN cause a false result:** any quick evaluation script must use
+`add_window_column` + `apply_zscore` from `ml-model/preprocess.py` for the
+z-scoring. A simplified inline z-score (skipping the per-machine per-window
+baseline) mis-scores the test set and produces wrong absolute F1 numbers. The
+canonical v3 baseline is F1=0.718 on the seed-123 test set -- if a script
+reports something materially different for the current production model, the
+z-score path is probably wrong, not the model.
+
+---
+
 ## "MLflow UI doesn't load in the browser" (`localhost:5001`)
 
 **Root cause:** MLflow is NOT a Docker container in this setup — it's a
