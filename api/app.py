@@ -48,6 +48,15 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "telecom").lower()
 # decisions" section for the full recall/precision sweep.
 PREDICT_THRESHOLD = float(os.environ.get("PREDICT_THRESHOLD", "0.85"))
 
+# Per-class thresholds (v4, optional). When PER_CLASS_THRESHOLDS is set to a
+# JSON map like {"cpu_spike":0.65,"memory_leak":0.7,...}, the v4 path flags an
+# anomaly if ANY non-normal class probability >= that class's own threshold,
+# instead of the single P(normal) < PREDICT_THRESHOLD rule. This lets weak
+# causes (cascade) use a low bar and clean causes a high one -- tuned on a
+# held-out validation split (see README). Absent => single-threshold behavior.
+_pct_raw = os.environ.get("PER_CLASS_THRESHOLDS", "")
+PER_CLASS_THRESHOLDS = json.loads(_pct_raw) if _pct_raw.strip() else None
+
 # Reported cause when only the IsolationForest safety net flags an anomaly
 # (the supervised classifier said normal). Defined once to avoid duplication.
 SAFETY_NET_CAUSE = "unknown (flagged by safety-net model only)"
@@ -402,12 +411,25 @@ def _predict_v4(reading, X, z_scores, window, machine_type, baseline_used):
     v4_classes = list(xgb_v4_label_encoder.classes_)
     v4_normal_idx = v4_classes.index("normal")
     v4_p_normal = float(v4_proba[v4_normal_idx])
-    v4_is_anomaly = v4_p_normal < PREDICT_THRESHOLD
-    if v4_is_anomaly:
-        v4_non_normal = [(v4_classes[i], v4_proba[i]) for i in range(len(v4_classes)) if i != v4_normal_idx]
-        v4_cause = max(v4_non_normal, key=lambda x: x[1])[0]
+    v4_non_normal = [(v4_classes[i], v4_proba[i]) for i in range(len(v4_classes)) if i != v4_normal_idx]
+    if PER_CLASS_THRESHOLDS is not None:
+        # Per-class mode: anomaly if ANY non-normal class prob >= its own threshold.
+        # Reported cause = the class that most exceeds its threshold (by margin).
+        exceed = [(cls, prob, prob - PER_CLASS_THRESHOLDS.get(cls, 1.01))
+                  for cls, prob in v4_non_normal
+                  if prob >= PER_CLASS_THRESHOLDS.get(cls, 1.01)]
+        v4_is_anomaly = len(exceed) > 0
+        if v4_is_anomaly:
+            v4_cause = max(exceed, key=lambda x: x[2])[0]
+        else:
+            v4_cause = "normal"
     else:
-        v4_cause = "normal"
+        # Single-threshold mode: anomaly if P(normal) < PREDICT_THRESHOLD.
+        v4_is_anomaly = v4_p_normal < PREDICT_THRESHOLD
+        if v4_is_anomaly:
+            v4_cause = max(v4_non_normal, key=lambda x: x[1])[0]
+        else:
+            v4_cause = "normal"
     # IsolationForest safety net still runs on the base 6 features
     iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
     iso_score = float(-iso_model.score_samples(X)[0])
