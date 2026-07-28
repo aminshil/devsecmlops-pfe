@@ -14,7 +14,7 @@ victims when multiple machines alert at once.
 A production-deployed anomaly detection platform for a simulated 200-machine
 telecom fleet, built end-to-end across seven infrastructure layers (L0-L5,
 with L6 as documented future work). Currently serving live in Kubernetes at
-version 2.13.0 (v4 rolling-features XGBoost primary + IsolationForest safety
+version 2.14.0 (v4 rolling-features XGBoost primary + IsolationForest safety
 net, with a hybrid v3/v4 serving path), verified through a 33,600-request
 two-week load test with zero errors.
 
