@@ -89,7 +89,7 @@ errors over a 33,600-request two-week demo. The v3 6-feature model (F1 = 0.718
 offline) remains the fallback whenever request history is unavailable.
 
 **Full version history:** see [GitHub Releases](https://github.com/aminshil/devsecmlops-pfe/releases)
-— tagged releases from v0.1.0 (initial POC) through v2.8.0, each with
+— tagged releases from v0.1.0 (initial POC) through v2.14.1, each with
 detailed release notes covering what changed and why.
 
 ---
@@ -1085,8 +1085,8 @@ clean `likely_root_causes` list for direct use in an alert summary.
 - Local registry (`registry:2`, port 5000) for Jenkins to push to
 
 ```bash
-docker build -t devsecmlops-api:2.13.0 .
-docker run -p 8000:8000 devsecmlops-api:2.13.0
+docker build -t devsecmlops-api:2.14.1 .
+docker run -p 8000:8000 devsecmlops-api:2.14.1
 ```
 
 ---
@@ -1145,7 +1145,7 @@ Minikube, single-node, Docker driver. Single namespace: `ml-serving`
 outside the cluster, not in a K8s namespace -- see MLOps section below
 for why.
 
-- **Deployment:** 2 replicas of `devsecmlops-api:2.13.0`
+- **Deployment:** 2 replicas of `devsecmlops-api:2.14.1`
 - **Service:** NodePort 30080
 - **HorizontalPodAutoscaler:** 2–5 replicas, target 70% CPU
 - **Security:** non-root `securityContext` (`runAsUser: 1000`,
@@ -1200,7 +1200,7 @@ likely_root_causes=['router-01']
 ```bash
 minikube start --driver=docker --force
 minikube addons enable metrics-server
-minikube image load devsecmlops-api:2.13.0
+minikube image load devsecmlops-api:2.14.1
 kubectl apply -f kubernetes/namespace.yaml
 kubectl apply -f kubernetes/postgres.yaml     # PostgreSQL StatefulSet for the feedback loop
 kubectl apply -f kubernetes/deployment.yaml
@@ -1222,8 +1222,8 @@ model and the root-cause endpoint.
 
 `monitoring/replay_exporter.py` replays the ACTUAL evaluation dataset
 (`data/telecom_fleet.csv`, the exact 200-machine, 30-day, 30-second-
-resolution data the model was trained and validated against — F1=0.663,
-ROC-AUC=0.926) through Prometheus, cycling continuously. This was a
+resolution data the model was trained and validated against) through
+Prometheus, cycling continuously. This was a
 deliberate upgrade from an earlier random-noise simulator
 (`fleet_simulator.py`, superseded): the live demo now uses data provably
 identical to what the model was evaluated on, not freshly generated
@@ -1264,6 +1264,22 @@ correctly tagged dependents as `downstream_effect`, and correctly
 separated unrelated background noise as `isolated`. Across the full
 session, all 8 routers in the fleet independently triggered and were
 correctly detected at least once.
+
+**A second bug found and fixed (API-contract drift).** The bridge
+originally read the anomaly score from a top-level `anomaly_score` field
+in the `/predict` response — correct for the original v1/v2
+IsolationForest API, which returned exactly that field. When the serving
+layer evolved to the hybrid v3/v4 model, the score moved into a nested
+`iso_vote.score` field and the top-level `anomaly_score` was removed. The
+bridge was never updated, so against the current API every prediction
+raised `KeyError('anomaly_score')` and the bridge silently reported zero
+detections even though the model itself was working perfectly. Fixed by
+reading `iso_vote.score` (falling back to `1.0` when XGBoost flags an
+anomaly but the IsolationForest returns no score). This is a textbook
+example of API-contract drift between two components that evolve on
+different schedules — the kind of silent failure that only surfaces when
+you actually run the full stack end-to-end, which is exactly why the live
+monitoring integration is valuable beyond the dashboard itself.
 
 ### Kubernetes monitoring
 
@@ -1462,8 +1478,8 @@ python ml-model/zscore_demo.py
 MODEL_NAME=telecom uvicorn api.app:app --host 0.0.0.0 --port 8000
 
 # Or containerized
-docker build -t devsecmlops-api:2.13.0 .
-docker run -p 8000:8000 devsecmlops-api:2.13.0
+docker build -t devsecmlops-api:2.14.1 .
+docker run -p 8000:8000 devsecmlops-api:2.14.1
 
 # Test endpoints
 curl localhost:8000/health
