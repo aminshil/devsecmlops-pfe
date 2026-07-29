@@ -384,6 +384,29 @@ def _predict_v2(reading, X, z_scores, window, machine_type, baseline_used):
     }
     
 
+def _decide_v4_anomaly(v4_p_normal, v4_non_normal):
+    """
+    Decide (is_anomaly, cause) for the v4 path from the class probabilities.
+
+    Per-class mode (PER_CLASS_THRESHOLDS set): anomaly if ANY non-normal class
+    clears its own threshold; cause = the class exceeding its bar by the
+    largest margin. Single-threshold mode: anomaly if P(normal) 
+    PREDICT_THRESHOLD; cause = the top non-normal class. Extracted from
+    _predict_v4 to keep that function's cognitive complexity under the limit.
+    """
+    if PER_CLASS_THRESHOLDS is not None:
+        exceed = [(cls, prob, prob - PER_CLASS_THRESHOLDS.get(cls, 1.01))
+                  for cls, prob in v4_non_normal
+                  if prob >= PER_CLASS_THRESHOLDS.get(cls, 1.01)]
+        if exceed:
+            return True, max(exceed, key=lambda x: x[2])[0]
+        return False, "normal"
+    # Single-threshold mode
+    if v4_p_normal < PREDICT_THRESHOLD:
+        return True, max(v4_non_normal, key=lambda x: x[1])[0]
+    return False, "normal"
+
+
 def _predict_v4(reading, X, z_scores, window, machine_type, baseline_used):
     """
     v4 rolling-features prediction. Returns a response dict, or None if the
@@ -412,24 +435,7 @@ def _predict_v4(reading, X, z_scores, window, machine_type, baseline_used):
     v4_normal_idx = v4_classes.index("normal")
     v4_p_normal = float(v4_proba[v4_normal_idx])
     v4_non_normal = [(v4_classes[i], v4_proba[i]) for i in range(len(v4_classes)) if i != v4_normal_idx]
-    if PER_CLASS_THRESHOLDS is not None:
-        # Per-class mode: anomaly if ANY non-normal class prob >= its own threshold.
-        # Reported cause = the class that most exceeds its threshold (by margin).
-        exceed = [(cls, prob, prob - PER_CLASS_THRESHOLDS.get(cls, 1.01))
-                  for cls, prob in v4_non_normal
-                  if prob >= PER_CLASS_THRESHOLDS.get(cls, 1.01)]
-        v4_is_anomaly = len(exceed) > 0
-        if v4_is_anomaly:
-            v4_cause = max(exceed, key=lambda x: x[2])[0]
-        else:
-            v4_cause = "normal"
-    else:
-        # Single-threshold mode: anomaly if P(normal) < PREDICT_THRESHOLD.
-        v4_is_anomaly = v4_p_normal < PREDICT_THRESHOLD
-        if v4_is_anomaly:
-            v4_cause = max(v4_non_normal, key=lambda x: x[1])[0]
-        else:
-            v4_cause = "normal"
+    v4_is_anomaly, v4_cause = _decide_v4_anomaly(v4_p_normal, v4_non_normal)
     # IsolationForest safety net still runs on the base 6 features
     iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
     iso_score = float(-iso_model.score_samples(X)[0])
