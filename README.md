@@ -821,6 +821,52 @@ This is the complete search space for this data and architecture — beating
 LSTM/GRU), documented as future work. The experiment is reproducible via
 `scripts/master_comparison.py`.
 
+### Live serving validation: offline metrics vs the real API
+
+The master-comparison numbers above are **offline, XGBoost-only** — the model
+scored directly on the test matrix. To check they hold through the *actual
+serving path*, the real FastAPI app was run locally and sent **8,000 live HTTP
+requests per configuration** (each with rolling history, so ~99% took the v4
+path), scoring the responses exactly as production would. This exercises
+z-scoring, rolling-feature computation, hybrid routing, the threshold logic,
+AND the IsolationForest safety net's OR-gate — the full dual model, not just
+XGBoost.
+
+| Config (live, 8,000 requests) | F1 | Precision | Recall | mem_leak | cascade |
+|---|---|---|---|---|---|
+| v4 single @0.85 | 0.696 | 0.607 | 0.816 | 0.938 | 0.246 |
+| v4 single @0.50 | 0.750 | 0.713 | 0.792 | 0.887 | 0.198 |
+| v4 per-class (F1-optimal) | 0.750 | 0.720 | 0.783 | 0.825 | 0.214 |
+
+**The key finding — offline advantage compresses live.** Per-class's offline
+edge (0.823 vs 0.816 single@0.5) **washes out live**: per-class and single@0.50
+tie at F1 ≈ 0.750, because the live system also runs the **IsolationForest
+safety net as an OR-gate** that fires independently of the XGBoost thresholds.
+The safety net adds roughly the same false positives regardless of the
+threshold strategy, so it compresses the margin between strategies. Per-class
+keeps a slight precision edge (0.720 vs 0.713); single@0.50 keeps a slight
+recall edge.
+
+**What this means, honestly:**
+
+- **Per-class is the best *model-level* threshold strategy** (offline F1 0.823,
+  precision 0.953) — the right answer if you're evaluating the classifier.
+- **Live, the system's F1 ceiling is ~0.750** (balanced) or ~0.816 recall (at
+  threshold 0.85) — set by the dual-model architecture, not the threshold
+  choice. The safety net trades some precision for the cascade coverage that
+  XGBoost structurally cannot provide.
+- **The offline↔live gap is not a bug** — it is the honest, expected difference
+  between "how good is the classifier" (offline, XGBoost-only) and "how good is
+  the deployed system" (live, dual-model at the recall-priority threshold).
+  Both numbers are correct; they answer different questions.
+
+This is why production runs v4 at threshold 0.85 (recall priority) as the
+default, and documents per-class as the best-tuned model-level configuration
+rather than claiming its offline F1 as a live production number. The
+send-predictions harness (`/tmp/send_predictions_test.py` in the session
+notes; not committed) is a thin HTTP client — the serving code it exercises is
+`api/app.py`, already covered by the committed pytest suite.
+
 ## Feedback loop and online learning (v2.12.0)
 
 The core limitation of every model version up to v2.11.1 is that the model is **static**: once trained on the synthetic seed-42 data, it never improves regardless of what happens in production. If the model flags 500 false alarms in a month and operators mark them all as fake, the model keeps making the same 500 false alarms next month.
