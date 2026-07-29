@@ -91,7 +91,12 @@ def run_cycle():
         try:
             result = predict(name, entry["metrics"], hour)
             if result["is_anomaly"]:
-                anomalies[name] = result["anomaly_score"]
+                # Current hybrid API returns iso_vote.score, not a top-level anomaly_score.
+                iso = result.get("iso_vote", {})
+                score = iso.get("score")
+                if score is None:
+                    score = 1.0  # xgb flagged but iso gave no score
+                anomalies[name] = round(float(score), 4)
         except Exception as e:
             print(f"  [error predicting {name}] {e}")
 
