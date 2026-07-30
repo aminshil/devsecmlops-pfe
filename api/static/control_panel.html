@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DevSecMLOps — Control Panel</title>
+<style>
+  :root{
+    --bg:#0a0e16; --panel:#121a28; --panel2:#1a2536; --line:#26344a; --line2:#33455f;
+    --ink:#e8eef8; --dim:#93a4bd; --faint:#5f7189;
+    --teal:#36e0ac; --tealdim:#1c9c78; --violet:#8f7cf7; --amber:#f2b134;
+    --red:#ff6b6b; --blue:#4aa3ff; --green:#5ad17a; --pink:#f26fb3;
+    --mono:'SFMono-Regular',ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
+    --sans:'Segoe UI',system-ui,-apple-system,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.55}
+  .wrap{max-width:1200px;margin:0 auto;padding:0 20px}
+  code{font-family:var(--mono);font-size:.85em;background:var(--panel2);border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:var(--teal)}
+  button{font-family:var(--sans);cursor:pointer}
+  h1,h2,h3{letter-spacing:-.3px;margin:0}
+  header{border-bottom:1px solid var(--line);background:linear-gradient(180deg,rgba(54,224,172,.05),transparent);padding:20px 0}
+  .htop{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .htop .logo{font-size:20px;font-weight:700}
+  .htop .logo b{color:var(--teal)}
+  .htop .ver{font-family:var(--mono);font-size:11px;color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:3px 8px}
+  .htop .links{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+  .htop .links a{font-family:var(--mono);font-size:11px;color:var(--dim);text-decoration:none;border:1px solid var(--line);border-radius:5px;padding:5px 10px;background:var(--panel)}
+  .htop .links a:hover{color:var(--teal);border-color:var(--tealdim)}
+  .tabs{display:flex;gap:4px;margin:20px 0 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .tabs button{background:none;border:none;color:var(--dim);font-size:14px;padding:11px 18px;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tabs button.on{color:var(--teal);border-bottom-color:var(--teal);font-weight:600}
+  .tabpage{display:none;padding:22px 0 50px}
+  .tabpage.on{display:block}
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:1fr 1fr}
+  @media(max-width:900px){.g2{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px}
+  .card h3{font-size:15px;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+  .card .sub{color:var(--faint);font-size:12.5px;margin-bottom:16px}
+  label{display:block;font-size:12px;color:var(--dim);margin:10px 0 4px;font-family:var(--mono)}
+  input,select{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:7px;color:var(--ink);padding:9px 11px;font-family:var(--mono);font-size:13px}
+  input:focus,select:focus{outline:none;border-color:var(--tealdim)}
+  .row6{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  @media(max-width:560px){.row6{grid-template-columns:1fr 1fr}}
+  .btn{background:var(--teal);color:#04140e;border:none;border-radius:8px;padding:11px 18px;font-size:14px;font-weight:700;margin-top:16px}
+  .btn:hover{filter:brightness(1.1)}
+  .btn.sec{background:var(--panel2);color:var(--ink);border:1px solid var(--line)}
+  .btn.violet{background:var(--violet);color:#0a0416}
+  .btn.small{padding:6px 12px;font-size:12px;margin-top:0}
+  .btnrow{display:flex;gap:10px;flex-wrap:wrap}
+  .result{margin-top:16px;background:#0c1119;border:1px solid var(--line);border-radius:9px;overflow:hidden;display:none}
+  .result.show{display:block}
+  .verdict{padding:14px 16px;font-weight:700;font-size:15px;display:flex;align-items:center;gap:10px}
+  .verdict.anom{background:rgba(255,107,107,.12);color:var(--red);border-bottom:1px solid var(--line)}
+  .verdict.norm{background:rgba(54,224,172,.1);color:var(--teal);border-bottom:1px solid var(--line)}
+  .dot{width:10px;height:10px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor}
+  .rbody{padding:14px 16px}
+  .kv{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(38,52,74,.5);font-size:13px}
+  .kv:last-child{border-bottom:none}
+  .kv .k{color:var(--faint);font-family:var(--mono);font-size:11.5px}
+  .kv .v{font-family:var(--mono);font-weight:600}
+  .zgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+  @media(max-width:560px){.zgrid{grid-template-columns:1fr 1fr}}
+  .zchip{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:8px 10px}
+  .zchip .zn{font-family:var(--mono);font-size:10px;color:var(--faint);text-transform:uppercase}
+  .zchip .zv{font-family:var(--mono);font-size:16px;font-weight:700}
+  .zchip.hi{border-color:var(--red)}.zchip.hi .zv{color:var(--red)}
+  .zchip.mid{border-color:var(--amber)}.zchip.mid .zv{color:var(--amber)}
+  .zchip.lo .zv{color:var(--teal)}
+  .statgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:12px 14px}
+  .stat .sn{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .stat .sv{font-size:20px;font-weight:700;margin-top:3px}
+  .stat .sd{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+  .up{background:var(--green)!important}.down{background:var(--red)!important}
+  .sv.small{font-size:13px;font-family:var(--mono)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:10px}
+  th,td{padding:7px 9px;text-align:left;border-bottom:1px solid var(--line)}
+  th{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;color:var(--faint)}
+  td.mono{font-family:var(--mono)}
+  .tag{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:20px;font-weight:700}
+  .tag.rc{background:rgba(255,107,107,.15);color:var(--red)}
+  .tag.de{background:rgba(242,177,52,.15);color:var(--amber)}
+  .tag.iso{background:rgba(147,164,189,.15);color:var(--dim)}
+  .tag.anom{background:rgba(255,107,107,.15);color:var(--red)}
+  .tag.norm{background:rgba(54,224,172,.12);color:var(--teal)}
+  .log{background:#0c1119;border:1px solid var(--line);border-radius:9px;padding:12px;font-family:var(--mono);font-size:12px;color:var(--dim);max-height:200px;overflow-y:auto;margin-top:12px}
+  .log div{padding:2px 0}
+  .log .ok{color:var(--teal)}.log .err{color:var(--red)}.log .info{color:var(--blue)}
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid var(--line);border-top-color:var(--teal);border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .hint{color:var(--faint);font-size:11.5px;font-family:var(--mono);margin-top:6px}
+  .preset{display:inline-block;font-family:var(--mono);font-size:11px;color:var(--blue);cursor:pointer;border:1px solid var(--line);border-radius:5px;padding:4px 9px;margin:3px 3px 0 0;background:var(--panel2)}
+  .preset:hover{border-color:var(--blue)}
+  .summary{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+  .sumcard{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:14px}
+  .sumcard .st{font-family:var(--mono);font-size:11px;color:var(--teal);text-transform:uppercase;margin-bottom:6px}
+  .sumcard .sl{font-size:12.5px;color:var(--dim);margin:3px 0}
+  .sumcard .sl b{color:var(--ink)}
+</style>
+</head>
+<body>
+<header><div class="wrap htop">
+  <div class="logo"><b>DevSecMLOps</b> Control Panel</div>
+  <span class="ver" id="verChip">v—</span>
+  <div class="links">
+    <a href="#" id="grafanaLink" target="_blank">Grafana</a>
+    <a href="#" id="promLink" target="_blank">Prometheus</a>
+    <a href="/docs" target="_blank">API Docs</a>
+  </div>
+</div></header>
+<div class="wrap">
+  <div class="tabs">
+    <button class="on" onclick="tab('status',this)">Status</button>
+    <button onclick="tab('operator',this)">Operator</button>
+    <button onclick="tab('rootcause',this)">Root Cause</button>
+    <button onclick="tab('demo',this)">Demo</button>
+    <button onclick="tab('infra',this)">Infrastructure</button>
+    <button onclick="tab('summary',this)">Project</button>
+  </div>
+
+  <div class="tabpage on" id="status">
+    <div class="card" style="margin-bottom:16px">
+      <h3>Platform layers <button class="btn sec small" style="margin-left:auto" onclick="refreshStatus()">↻ Refresh</button></h3>
+      <div class="sub">Live health of every layer (L0–L5). Auto-refreshes every 10s. <span id="upcount"></span></div>
+      <div class="statgrid" id="statusGrid"><div class="stat"><div class="sn">loading…</div><div class="sv"><span class="spin"></span></div></div></div>
+    </div>
+    <div class="card">
+      <h3>Live fleet</h3>
+      <div class="sub">Current detection state from the monitoring pipeline (via Prometheus).</div>
+      <div class="statgrid" id="fleetGrid"></div>
+    </div>
+  </div>
+
+  <div class="tabpage" id="operator">
+    <div class="grid g2">
+      <div class="card">
+        <h3>Analyze a reading</h3>
+        <div class="sub">Submit one machine's 6 metrics → anomaly + likely cause + z-scores.</div>
+        <label>Machine</label>
+        <input id="op_machine" value="web-01" list="machinelist">
+        <datalist id="machinelist"></datalist>
+        <label>Hour of day (0–23)</label>
+        <input id="op_hour" type="number" min="0" max="23" value="14">
+        <label>Metrics</label>
+        <div class="row6">
+          <div><label style="margin:0">cpu</label><input id="op_cpu" type="number" value="30"></div>
+          <div><label style="margin:0">ram</label><input id="op_ram" type="number" value="50"></div>
+          <div><label style="margin:0">network</label><input id="op_network" type="number" value="40"></div>
+          <div><label style="margin:0">disk_io</label><input id="op_disk_io" type="number" value="25"></div>
+          <div><label style="margin:0">disk_usage</label><input id="op_disk_usage" type="number" value="42"></div>
+          <div><label style="margin:0">load_avg</label><input id="op_load_avg" type="number" step="0.1" value="1.2"></div>
+        </div>
+        <label>Quick presets</label>
+        <div>
+          <span class="preset" onclick="preset('normal')">Normal</span>
+          <span class="preset" onclick="preset('memleak')">Memory leak (v4)</span>
+          <span class="preset" onclick="preset('disk')">Disk saturation</span>
+          <span class="preset" onclick="preset('cpu')">CPU spike</span>
+        </div>
+        <label style="margin-top:14px"><input type="checkbox" id="op_history" style="width:auto;display:inline;margin-right:6px">Include rolling history (v4 model)</label>
+        <button class="btn" onclick="doPredict()">Analyze</button>
+      </div>
+      <div class="card">
+        <h3>Result</h3>
+        <div class="sub">Model verdict, cause, and per-feature z-scores.</div>
+        <div class="result" id="op_result">
+          <div class="verdict" id="op_verdict"></div>
+          <div class="rbody" id="op_rbody"></div>
+        </div>
+        <div id="op_placeholder" style="color:var(--faint);font-family:var(--mono);font-size:13px;padding:30px 0;text-align:center">← Submit a reading</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabpage" id="rootcause">
+    <div class="card">
+      <h3>Root cause analysis</h3>
+      <div class="sub">When several machines alert together, the dependency graph separates the true culprit (a router) from downstream victims.</div>
+      <div class="btnrow">
+        <button class="btn violet" onclick="injectCascade()">Simulate a router cascade</button>
+        <button class="btn sec" onclick="clearRC()">Clear</button>
+      </div>
+      <div class="hint">Sends router-06 + its real dependents (web-06, app-06, db-03, cache-05, queue-01) through /root-cause.</div>
+      <div class="result" id="rc_result"><div class="rbody" id="rc_body"></div></div>
+    </div>
+  </div>
+
+  <div class="tabpage" id="demo">
+    <div class="card">
+      <h3>Send test readings &amp; evaluate</h3>
+      <div class="sub">Each test reading is generated as a known anomaly or known normal (ground truth). The model predicts, and we score it right/wrong live.</div>
+      <div class="btnrow">
+        <button class="btn" onclick="sendTestBatch(20)">Send 20 readings</button>
+        <button class="btn sec" onclick="sendTestBatch(5)">Send 5</button>
+        <button class="btn sec" onclick="clearResults()">Clear</button>
+      </div>
+      <div id="scoreBar" style="margin-top:16px"></div>
+      <div id="resultsTable"></div>
+    </div>
+  </div>
+
+  <div class="tabpage" id="infra">
+    <div class="card" style="margin-bottom:16px">
+      <h3>Infrastructure <button class="btn sec small" style="margin-left:auto" onclick="loadInfra()">↻ Refresh</button></h3>
+      <div class="sub">Live Docker containers, images, Kubernetes pods, resource usage, autoscaling, Prometheus targets, and active anomalies.</div>
+      <div id="infra_body"><div class="hint"><span class="spin"></span> loading…</div></div>
+    </div>
+  </div>
+  <div class="tabpage" id="summary">
+    <div class="card">
+      <h3>Project summary</h3>
+      <div class="sub">DevSecMLOps platform — PFE ESPRIT × Tunisie Telecom 2025–2026 · Amine Shil</div>
+      <div class="summary">
+        <div class="sumcard"><div class="st">Model (v4)</div><div class="sl">F1 offline <b>0.816</b></div><div class="sl">Precision <b>0.931</b></div><div class="sl">Recall <b>0.726</b></div><div class="sl">memory_leak <b>95.4%</b> live</div></div>
+        <div class="sumcard"><div class="st">Live (K8s @0.85)</div><div class="sl">F1 <b>0.690</b></div><div class="sl">Recall <b>0.817</b></div><div class="sl">33,600-req test, <b>0 errors</b></div></div>
+        <div class="sumcard"><div class="st">Best config</div><div class="sl">v4 + per-class</div><div class="sl">F1 <b>0.823</b></div><div class="sl">Precision <b>0.953</b></div></div>
+        <div class="sumcard"><div class="st">Architecture</div><div class="sl">XGBoost primary</div><div class="sl">+ IsolationForest net</div><div class="sl">6 base + 9 rolling feat</div></div>
+        <div class="sumcard"><div class="st">Stack</div><div class="sl">Jenkins · SonarQube</div><div class="sl">Docker · K8s · Trivy</div><div class="sl">Prometheus · Grafana</div><div class="sl">MLflow · MinIO</div></div>
+        <div class="sumcard"><div class="st">Quality</div><div class="sl">15 pytest <b>pass</b></div><div class="sl">SonarQube <b>0 issues</b></div><div class="sl">Trivy <b>0 CVEs</b></div><div class="sl">v2.14.1 tagged</div></div>
+        <div class="sumcard"><div class="st">Feedback loop</div><div class="sl">PostgreSQL StatefulSet</div><div class="sl">Guardrailed retrain</div><div class="sl">Operator verdicts</div></div>
+        <div class="sumcard"><div class="st">Fleet</div><div class="sl">200 machines</div><div class="sl">11 types</div><div class="sl">6 anomaly types</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  const API = "";
+  const VM_IP = location.hostname;
+  document.getElementById('grafanaLink').href = `http://${VM_IP}:3000`;
+  document.getElementById('promLink').href = `http://${VM_IP}:9090`;
+
+  function tab(id, btn){
+    document.querySelectorAll('.tabpage').forEach(p=>p.classList.remove('on'));
+    document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));
+    document.getElementById(id).classList.add('on');
+    if(btn) btn.classList.add('on');
+    if(id==='status') refreshStatus();
+    if(id==='infra') loadInfra();
+  }
+
+  const PRESETS = {
+    normal:  {cpu:20, ram:45, network:30, disk_io:20, disk_usage:40, load_avg:1.0, hist:false},
+    memleak: {cpu:45, ram:95, network:30, disk_io:25, disk_usage:42, load_avg:2.0, hist:true},
+    disk:    {cpu:55, ram:60, network:40, disk_io:98, disk_usage:97, load_avg:9.5, hist:false},
+    cpu:     {cpu:99, ram:70, network:50, disk_io:40, disk_usage:45, load_avg:12.0, hist:false},
+  };
+  function preset(name){
+    const p=PRESETS[name];
+    op_cpu.value=p.cpu; op_ram.value=p.ram; op_network.value=p.network;
+    op_disk_io.value=p.disk_io; op_disk_usage.value=p.disk_usage; op_load_avg.value=p.load_avg;
+    op_history.checked=p.hist;
+  }
+
+  async function doPredict(){
+    const metrics={cpu:+op_cpu.value,ram:+op_ram.value,network:+op_network.value,disk_io:+op_disk_io.value,disk_usage:+op_disk_usage.value,load_avg:+op_load_avg.value};
+    const body={machine:op_machine.value,hour:+op_hour.value,metrics};
+    if(op_history.checked){
+      const r=metrics.ram,c=metrics.cpu,l=metrics.load_avg;
+      body.history={cpu:Array.from({length:10},(_,i)=>+(c-(9-i)*0.5).toFixed(1)),ram:Array.from({length:10},(_,i)=>+(r-(9-i)*3.5).toFixed(1)),load_avg:Array.from({length:10},(_,i)=>+(l-(9-i)*0.05).toFixed(2))};
+    }
+    op_placeholder.style.display='none';
+    document.getElementById('op_result').classList.add('show');
+    document.getElementById('op_verdict').className='verdict';
+    document.getElementById('op_verdict').innerHTML='<span class="spin"></span> analyzing…';
+    document.getElementById('op_rbody').innerHTML='';
+    try{
+      const rp=await fetch(`${API}/predict`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const d=await rp.json();
+      if(!rp.ok) throw new Error(d.detail||'error');
+      renderPrediction(d);
+    }catch(e){
+      document.getElementById('op_verdict').className='verdict anom';
+      document.getElementById('op_verdict').innerHTML='error';
+      document.getElementById('op_rbody').innerHTML=`<div style="color:var(--red);font-family:var(--mono);font-size:12px">${e.message}</div>`;
+    }
+  }
+  function renderPrediction(d){
+    const anom=d.is_anomaly===1;
+    const v=document.getElementById('op_verdict');
+    v.className='verdict '+(anom?'anom':'norm');
+    v.innerHTML=`<span class="dot"></span>${anom?'ANOMALY':'NORMAL'} ${anom?'· '+d.likely_cause:''}`;
+    let h=kv('model',d.model)+kv('window',d.window||'—');
+    if(d.xgb_vote) h+=kv('XGBoost',`${d.xgb_vote.is_anomaly?'anomaly':'normal'} (${d.xgb_vote.cause})`);
+    if(d.iso_vote) h+=kv('IsolationForest',`${d.iso_vote.is_anomaly?'anomaly':'normal'} · ${d.iso_vote.score}`);
+    h+=kv('rolling (v4)',d.rolling_features_used?'yes':'no')+kv('baseline',d.baseline_used||'—');
+    if(d.z_scores){
+      h+='<div class="zgrid">';
+      for(const [k,val] of Object.entries(d.z_scores)){
+        const a=Math.abs(val),cls=a>=3?'hi':a>=2?'mid':'lo';
+        h+=`<div class="zchip ${cls}"><div class="zn">${k}</div><div class="zv">${val>0?'+':''}${val}</div></div>`;
+      }
+      h+='</div>';
+    }
+    document.getElementById('op_rbody').innerHTML=h;
+  }
+  function kv(k,v){return `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`;}
+
+  async function injectCascade(){
+    const anomalies={"router-06":0.55,"web-06":0.62,"app-06":0.60,"db-03":0.58,"cache-05":0.59,"queue-01":0.57};
+    document.getElementById('rc_result').classList.add('show');
+    document.getElementById('rc_body').innerHTML='<span class="spin"></span> running /root-cause…';
+    try{
+      const r=await fetch(`${API}/root-cause`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({anomalies})});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.detail||'error');
+      let h=`<div style="margin-bottom:10px">Likely root cause: <span class="tag rc">${(d.likely_root_causes||[]).join(', ')||'none'}</span></div>`;
+      h+='<table><thead><tr><th>Machine</th><th>Role</th><th>Score</th><th>Downstream</th><th>Router</th></tr></thead><tbody>';
+      for(const x of (d.ranked||[])){
+        const rc=x.role==='likely_root_cause'?'rc':x.role==='downstream_effect'?'de':'iso';
+        h+=`<tr><td class="mono">${x.machine}</td><td><span class="tag ${rc}">${x.role}</span></td><td class="mono">${x.own_score}</td><td class="mono">${x.downstream_anomalous_count||0}</td><td class="mono">${x.upstream_router||'—'}</td></tr>`;
+      }
+      h+='</tbody></table>';
+      document.getElementById('rc_body').innerHTML=h;
+    }catch(e){document.getElementById('rc_body').innerHTML=`<div style="color:var(--red);font-family:var(--mono)">${e.message}</div>`;}
+  }
+  function clearRC(){document.getElementById('rc_result').classList.remove('show');}
+
+  async function refreshStatus(){
+    const grid=document.getElementById('statusGrid');
+    try{
+      const r=await fetch(`${API}/ui/status`);const d=await r.json();
+      document.getElementById('upcount').textContent=`(${d.up}/${d.total} up)`;
+      grid.innerHTML=d.layers.map(l=>`<div class="stat"><div class="sn"><span class="sd ${l.up?'up':'down'}"></span>${l.layer} · ${l.name}</div><div class="sv small">${l.detail}</div></div>`).join('');
+    }catch(e){grid.innerHTML='<div class="stat"><div class="sn"><span class="sd down"></span>status</div><div class="sv small">unreachable</div></div>';}
+    try{const h=await(await fetch(`${API}/health`)).json();verChip.textContent='v'+(h.version||'?');}catch(e){}
+    refreshFleet();
+  }
+  async function refreshFleet(){
+    const grid=document.getElementById('fleetGrid');
+    try{
+      const d=await(await fetch(`${API}/ui/metrics`)).json();
+      grid.innerHTML=fleet('Anomalous machines',d.anomaly_count)+fleet('Avg CPU %',d.avg_cpu)+fleet('Avg load',d.avg_load)+fleet('Ground-truth anom',d.ground_truth);
+    }catch(e){grid.innerHTML='<div class="stat"><div class="sn">metrics</div><div class="sv small" style="color:var(--faint)">Prometheus not reachable</div></div>';}
+  }
+  function fleet(n,v){return `<div class="stat"><div class="sn">${n}</div><div class="sv">${v==null?'—':v}</div></div>`;}
+
+  let RESULTS = [];
+  let PAGE = 1;
+  const CAUSE_BY_SPIKE = 'disk_saturation'; // spike readings are disk/cpu heavy
+  async function sendTestBatch(n){
+    const ms=['web-01','app-05','db-01','cache-03','queue-02','edge-02','batch-01','router-01','firewall-01','voip-01'];
+    for(let i=0;i<n;i++){
+      const m=ms[Math.floor(Math.random()*ms.length)];
+      const isAnom=Math.random()<0.5;  // ground truth: half anomalies, half normal
+      const metrics=isAnom
+        ? {cpu:95,ram:92,network:45,disk_io:95,disk_usage:96,load_avg:11}
+        : {cpu:22,ram:46,network:35,disk_io:20,disk_usage:40,load_avg:1.0};
+      const t0=performance.now();
+      try{
+        const d=await(await fetch(`${API}/predict`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({machine:m,hour:14,metrics})})).json();
+        const ms_taken=Math.round(performance.now()-t0);
+        const predicted=d.is_anomaly===1;
+        // verdict: compare ground truth vs prediction
+        let verdict;
+        if(isAnom && predicted) verdict='TP';
+        else if(!isAnom && !predicted) verdict='TN';
+        else if(!isAnom && predicted) verdict='FP';
+        else verdict='FN';
+        RESULTS.unshift({
+          time:new Date().toLocaleTimeString(),
+          machine:m, truth:isAnom?'anomaly':'normal',
+          predicted:predicted?'anomaly':'normal',
+          cause:d.likely_cause||'—', verdict, ms:ms_taken,
+          detail:d
+        });
+      }catch(e){}
+    }
+    PAGE=1;
+    renderResults();
+  }
+  function clearResults(){ RESULTS=[]; renderResults(); }
+  function renderResults(){
+    const sb=document.getElementById('scoreBar');
+    const tbl=document.getElementById('resultsTable');
+    if(!RESULTS.length){ sb.innerHTML=''; tbl.innerHTML='<div class="hint">No tests sent yet. Click "Send" to evaluate the model live.</div>'; return; }
+    const tp=RESULTS.filter(r=>r.verdict==='TP').length;
+    const tn=RESULTS.filter(r=>r.verdict==='TN').length;
+    const fp=RESULTS.filter(r=>r.verdict==='FP').length;
+    const fn=RESULTS.filter(r=>r.verdict==='FN').length;
+    const correct=tp+tn, total=RESULTS.length;
+    const acc=total?Math.round(100*correct/total):0;
+    const prec=(tp+fp)?(tp/(tp+fp)).toFixed(2):'—';
+    const rec=(tp+fn)?(tp/(tp+fn)).toFixed(2):'—';
+    sb.innerHTML=`<div class="statgrid">
+      <div class="stat"><div class="sn">Accuracy</div><div class="sv">${acc}%</div></div>
+      <div class="stat"><div class="sn">Correct</div><div class="sv">${correct}/${total}</div></div>
+      <div class="stat"><div class="sn">Precision</div><div class="sv">${prec}</div></div>
+      <div class="stat"><div class="sn">Recall</div><div class="sv">${rec}</div></div>
+      <div class="stat"><div class="sn">TP / TN</div><div class="sv small">${tp} / ${tn}</div></div>
+      <div class="stat"><div class="sn">FP / FN</div><div class="sv small" style="color:${(fp+fn)?'var(--red)':'var(--dim)'}">${fp} / ${fn}</div></div>
+    </div>`;
+    // pagination
+    const perPage=15;
+    const totalPages=Math.max(1,Math.ceil(RESULTS.length/perPage));
+    if(PAGE>totalPages) PAGE=totalPages;
+    const startI=(PAGE-1)*perPage;
+    const pageRows=RESULTS.slice(startI,startI+perPage);
+    let h='<table><thead><tr><th>Time</th><th>Machine</th><th>Real</th><th>Predicted</th><th>Cause</th><th>Result</th><th>ms</th><th></th></tr></thead><tbody>';
+    pageRows.forEach((r,pi)=>{
+      const i=startI+pi;
+      const ok=(r.verdict==='TP'||r.verdict==='TN');
+      const vtag=ok?'norm':'anom';
+      const vlabel={TP:'✓ true positive',TN:'✓ true negative',FP:'✗ false alarm',FN:'✗ missed'}[r.verdict];
+      h+=`<tr>
+        <td class="mono">${r.time}</td>
+        <td class="mono">${r.machine}</td>
+        <td><span class="tag ${r.truth==='anomaly'?'anom':'norm'}">${r.truth}</span></td>
+        <td><span class="tag ${r.predicted==='anomaly'?'anom':'norm'}">${r.predicted}</span></td>
+        <td class="mono">${r.cause}</td>
+        <td><span class="tag ${vtag}">${vlabel}</span></td>
+        <td class="mono">${r.ms}</td>
+        <td><span class="preset" onclick="toggleDetail(${i})">details</span></td>
+      </tr>
+      <tr id="det-${i}" style="display:none"><td colspan="8" style="background:#0c1119">${detailHtml(r.detail)}</td></tr>`;
+    });
+    h+='</tbody></table>';
+    // pager controls
+    let pager='<div style="display:flex;gap:8px;align-items:center;margin-top:12px;font-family:var(--mono);font-size:12px">';
+    pager+=`<button class="btn sec small" onclick="gotoPage(${PAGE-1})" ${PAGE<=1?'disabled':''}>← prev</button>`;
+    pager+=`<span style="color:var(--dim)">page ${PAGE} / ${totalPages} · ${RESULTS.length} total tests</span>`;
+    pager+=`<button class="btn sec small" onclick="gotoPage(${PAGE+1})" ${PAGE>=totalPages?'disabled':''}>next →</button>`;
+    pager+='</div>';
+    tbl.innerHTML=h+pager;
+  }
+  function gotoPage(p){ const perPage=15; const tp=Math.max(1,Math.ceil(RESULTS.length/perPage)); PAGE=Math.min(Math.max(1,p),tp); renderResults(); }
+  function toggleDetail(i){ const el=document.getElementById('det-'+i); el.style.display=el.style.display==='none'?'table-row':'none'; }
+  function detailHtml(d){
+    if(!d) return '';
+    let h='<div style="padding:10px">';
+    h+=`<div class="kv"><span class="k">model</span><span class="v">${d.model}</span></div>`;
+    if(d.xgb_vote) h+=`<div class="kv"><span class="k">XGBoost</span><span class="v">${d.xgb_vote.is_anomaly?'anomaly':'normal'} (${d.xgb_vote.cause})</span></div>`;
+    if(d.iso_vote) h+=`<div class="kv"><span class="k">IsolationForest</span><span class="v">${d.iso_vote.is_anomaly?'anomaly':'normal'} · ${d.iso_vote.score}</span></div>`;
+    if(d.z_scores){
+      h+='<div class="zgrid">';
+      for(const [k,val] of Object.entries(d.z_scores)){const a=Math.abs(val),cls=a>=3?'hi':a>=2?'mid':'lo';h+=`<div class="zchip ${cls}"><div class="zn">${k}</div><div class="zv">${val>0?'+':''}${val}</div></div>`;}
+      h+='</div>';
+    }
+    return h+'</div>';
+  }
+
+  async function loadMachines(){
+    try{const d=await(await fetch(`${API}/machines`)).json();const list=document.getElementById('machinelist');(d.machines||[]).slice(0,250).forEach(m=>{const o=document.createElement('option');o.value=m.machine||m;list.appendChild(o);});}catch(e){}
+  }
+
+  async function loadInfra(){
+    const body=document.getElementById('infra_body');
+    body.innerHTML='<div class="hint"><span class="spin"></span> loading…</div>';
+    let d;
+    try{
+      const r=await fetch(`${API}/ui/infra`);
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      d=await r.json();
+    }catch(e){
+      body.innerHTML='<div class="hint" style="color:var(--red)">Failed to reach /ui/infra: '+e.message+'</div>';
+      return;
+    }
+    try{
+      let h='';
+      h+=isec('Docker containers', d.docker_containers||[], ['name','image','status','ports']);
+      h+=isec('Docker images (project)', d.docker_images||[], ['image','size','created']);
+      h+=ipods(d.k8s_pods||[]);
+      h+=isec('Resource usage (kubectl top)', d.k8s_usage||[], ['pod','cpu','memory']);
+      h+=ihpa(d.k8s_hpa||[]);
+      h+=itargets(d.prometheus_targets||[]);
+      h+=ianom(d.live_anomalies||[]);
+      body.innerHTML=h;
+    }catch(e){
+      body.innerHTML='<div class="hint" style="color:var(--red)">Render error: '+e.message+'</div>';
+    }
+  }
+  function ititle(x){return `<div style="margin:18px 0 6px;font-family:var(--mono);font-size:12px;color:var(--teal)">${x}</div>`;}
+  function isec(title,rows,cols){let h=ititle(title);if(!rows.length)return h+'<div class="hint">none</div>';h+='<table><thead><tr>'+cols.map(c=>`<th>${c}</th>`).join('')+'</tr></thead><tbody>';for(const r of rows){h+='<tr>'+cols.map(c=>`<td class="mono">${r[c]!=null&&r[c]!==''?r[c]:'—'}</td>`).join('')+'</tr>';}return h+'</tbody></table>';}
+  function ipods(rows){let h=ititle('Kubernetes pods');if(!rows.length)return h+'<div class="hint">cluster unreachable</div>';h+='<table><thead><tr><th>Pod</th><th>Image</th><th>Ready</th><th>Restarts</th><th>Status</th></tr></thead><tbody>';for(const r of rows){h+=`<tr><td class="mono">${r.name}</td><td class="mono">${r.image}</td><td><span class="tag ${r.ready?'norm':'anom'}">${r.ready?'yes':'no'}</span></td><td class="mono">${r.restarts}</td><td><span class="tag ${r.phase==='Running'?'norm':'anom'}">${r.phase}</span></td></tr>`;}return h+'</tbody></table>';}
+  function ihpa(rows){let h=ititle('Autoscaling (HPA)');if(!rows.length)return h+'<div class="hint">no HPA</div>';h+='<table><thead><tr><th>HPA</th><th>Current</th><th>Desired</th><th>Min</th><th>Max</th><th>CPU %</th></tr></thead><tbody>';for(const r of rows){h+=`<tr><td class="mono">${r.name}</td><td class="mono">${r.current}</td><td class="mono">${r.desired}</td><td class="mono">${r.min}</td><td class="mono">${r.max}</td><td class="mono">${r.cpu_util!=null?r.cpu_util+'%':'—'}</td></tr>`;}return h+'</tbody></table>';}
+  function itargets(rows){let h=ititle('Prometheus targets');if(!rows.length)return h+'<div class="hint">Prometheus unreachable</div>';h+='<table><thead><tr><th>Job</th><th>Health</th></tr></thead><tbody>';for(const r of rows){h+=`<tr><td class="mono">${r.job}</td><td><span class="tag ${r.health==='up'?'norm':'anom'}">${r.health}</span></td></tr>`;}return h+'</tbody></table>';}
+  function ianom(rows){let h=ititle('Live anomalies');if(!rows.length)return h+'<div class="hint">none currently</div>';h+='<table><thead><tr><th>Machine</th><th>Role</th><th>Type</th></tr></thead><tbody>';for(const r of rows){const cl=r.role==='likely_root_cause'?'rc':r.role==='downstream_effect'?'de':'iso';h+=`<tr><td class="mono">${r.machine}</td><td><span class="tag ${cl}">${r.role}</span></td><td class="mono">${r.type}</td></tr>`;}return h+'</tbody></table>';}
+
+  refreshStatus();
+  loadMachines();
+  setInterval(()=>{if(document.getElementById('status').classList.contains('on'))refreshStatus();},10000);
+</script>
+</body>
+</html>

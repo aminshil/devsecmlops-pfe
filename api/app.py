@@ -693,3 +693,202 @@ def get_feedback_stats():
     the retrain pipeline.
     """
     return verdict_stats()
+
+
+# ---------------------------------------------------------------------------
+# Mission-control UI (convenience layer; does not alter serving logic)
+# ---------------------------------------------------------------------------
+import subprocess as _sp
+import urllib.request as _ur
+import socket as _socket
+from fastapi.responses import HTMLResponse as _HTMLResponse
+
+_UI_PATH = Path(__file__).resolve().parent / "static" / "control_panel.html"
+
+
+@app.get("/ui", response_class=_HTMLResponse)
+def ui_page():
+    """Serve the mission-control web UI."""
+    try:
+        return _UI_PATH.read_text(encoding="utf-8")
+    except Exception:
+        return _HTMLResponse("<h1>UI not found</h1>", status_code=404)
+
+
+def _port_open(host, port, timeout=2):
+    try:
+        with _socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+@app.get("/ui/status")
+def ui_status():
+    """Live health of every platform layer."""
+    layers = [
+        {"layer": "L0/L1", "name": "Anomaly API", "up": True, "detail": f"{MODEL_NAME} v2.14.1"},
+        {"layer": "L2", "name": "Docker registry", "up": _port_open("localhost", 5000), "detail": ":5000"},
+        {"layer": "L3", "name": "Jenkins", "up": _port_open("localhost", 8080), "detail": "CI/CD"},
+        {"layer": "L3", "name": "SonarQube", "up": _port_open("localhost", 9000), "detail": "SAST"},
+    ]
+    k8s_up, k8s_detail = False, "unreachable"
+    try:
+        out = _sp.run(["kubectl", "get", "pods", "-n", "ml-serving", "-o", "json"],
+                      capture_output=True, text=True, timeout=6)
+        if out.returncode == 0:
+            pods = json.loads(out.stdout)["items"]
+            ready = sum(1 for pod in pods
+                        for c in pod.get("status", {}).get("conditions", [])
+                        if c["type"] == "Ready" and c["status"] == "True")
+            k8s_up = ready > 0
+            k8s_detail = f"{ready}/{len(pods)} pods ready"
+    except Exception:
+        pass
+    layers.append({"layer": "L4", "name": "Kubernetes", "up": k8s_up, "detail": k8s_detail})
+    layers += [
+        {"layer": "L5", "name": "Prometheus", "up": _port_open("localhost", 9090), "detail": ":9090"},
+        {"layer": "L5", "name": "Grafana", "up": _port_open("localhost", 3000), "detail": ":3000"},
+        {"layer": "L5", "name": "Replay exporter", "up": _port_open("localhost", 9200), "detail": ":9200"},
+        {"layer": "L5", "name": "Anomaly bridge", "up": _port_open("localhost", 9300), "detail": ":9300"},
+        {"layer": "L5", "name": "Node exporter", "up": _port_open("localhost", 9100), "detail": ":9100"},
+        {"layer": "L5", "name": "K8s exporter", "up": _port_open("localhost", 9400), "detail": ":9400"},
+    ]
+    return {"layers": layers, "up": sum(1 for l in layers if l["up"]), "total": len(layers)}
+
+
+def _prom_query(expr):
+    try:
+        url = f"http://localhost:9090/api/v1/query?query={_ur.quote(expr)}"
+        with _ur.urlopen(url, timeout=3) as r:
+            res = json.loads(r.read())["data"]["result"]
+        return float(res[0]["value"][1]) if res else None
+    except Exception:
+        return None
+
+
+@app.get("/ui/metrics")
+def ui_metrics():
+    """Live fleet stats from Prometheus."""
+    ac = _prom_query("bridge_anomaly_count")
+    cpu = _prom_query("avg(sim_cpu_percent)")
+    load = _prom_query("avg(sim_load_avg)")
+    gt = _prom_query("sum(sim_ground_truth_anomaly)")
+    return {
+        "anomaly_count": None if ac is None else int(ac),
+        "avg_cpu": None if cpu is None else round(cpu, 1),
+        "avg_load": None if load is None else round(load, 1),
+        "ground_truth": None if gt is None else int(gt),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Infrastructure detail endpoint (for the control-panel Infrastructure tab)
+# ---------------------------------------------------------------------------
+def _run(cmd, timeout=8):
+    try:
+        out = _sp.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return out.stdout if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+@app.get("/ui/infra")
+def ui_infra():
+    """Detailed Docker + Kubernetes + Prometheus info for the Infrastructure tab."""
+    infra = {}
+
+    # --- Docker containers ---
+    containers = []
+    raw = _run(["docker", "ps", "--format", "{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}"])
+    for line in raw.strip().splitlines():
+        parts = line.split("|")
+        if len(parts) >= 3:
+            containers.append({"name": parts[0], "image": parts[1],
+                               "status": parts[2], "ports": parts[3] if len(parts) > 3 else ""})
+    infra["docker_containers"] = containers
+
+    # --- Docker images (project only) ---
+    images = []
+    raw = _run(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}|{{.Size}}|{{.CreatedSince}}"])
+    for line in raw.strip().splitlines():
+        if "devsecmlops" in line:
+            parts = line.split("|")
+            if len(parts) >= 3:
+                images.append({"image": parts[0], "size": parts[1], "created": parts[2]})
+    infra["docker_images"] = images[:12]
+
+    # --- K8s pods ---
+    pods = []
+    raw = _run(["kubectl", "get", "pods", "-n", "ml-serving", "-o", "json"])
+    if raw:
+        try:
+            for p in json.loads(raw)["items"]:
+                cs = p.get("status", {}).get("containerStatuses", [{}])[0]
+                pods.append({
+                    "name": p["metadata"]["name"],
+                    "ready": cs.get("ready", False),
+                    "image": cs.get("image", "?"),
+                    "restarts": cs.get("restartCount", 0),
+                    "phase": p["status"].get("phase", "?"),
+                })
+        except Exception:
+            pass
+    infra["k8s_pods"] = pods
+
+    # --- kubectl top (resource usage) ---
+    usage = []
+    raw = _run(["kubectl", "top", "pods", "-n", "ml-serving", "--no-headers"])
+    for line in raw.strip().splitlines():
+        parts = line.split()
+        if len(parts) >= 3:
+            usage.append({"pod": parts[0], "cpu": parts[1], "memory": parts[2]})
+    infra["k8s_usage"] = usage
+
+    # --- HPA ---
+    hpa = []
+    raw = _run(["kubectl", "get", "hpa", "-n", "ml-serving", "-o", "json"])
+    if raw:
+        try:
+            for h in json.loads(raw)["items"]:
+                s = h.get("status", {})
+                cpu_util = None
+                for m in s.get("currentMetrics", []) or []:
+                    if m.get("resource", {}).get("name") == "cpu":
+                        cpu_util = m["resource"]["current"].get("averageUtilization")
+                hpa.append({
+                    "name": h["metadata"]["name"],
+                    "current": s.get("currentReplicas"),
+                    "desired": s.get("desiredReplicas"),
+                    "min": h["spec"].get("minReplicas"),
+                    "max": h["spec"].get("maxReplicas"),
+                    "cpu_util": cpu_util,
+                })
+        except Exception:
+            pass
+    infra["k8s_hpa"] = hpa
+
+    # --- Prometheus targets ---
+    targets = []
+    try:
+        with _ur.urlopen("http://localhost:9090/api/v1/targets", timeout=4) as r:
+            for t in json.loads(r.read())["data"]["activeTargets"]:
+                targets.append({"job": t["labels"].get("job", "?"), "health": t.get("health", "?")})
+    except Exception:
+        pass
+    infra["prometheus_targets"] = targets
+
+    # --- Live anomalies (from bridge via Prometheus) ---
+    anomalies = []
+    try:
+        url = "http://localhost:9090/api/v1/query?query=" + _ur.quote("bridge_is_anomaly == 1")
+        with _ur.urlopen(url, timeout=4) as r:
+            for s in json.loads(r.read())["data"]["result"]:
+                m = s["metric"]
+                anomalies.append({"machine": m.get("machine", "?"),
+                                  "role": m.get("role", "?"), "type": m.get("type", "?")})
+    except Exception:
+        pass
+    infra["live_anomalies"] = anomalies
+
+    return infra
