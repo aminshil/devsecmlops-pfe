@@ -723,38 +723,59 @@ def _port_open(host, port, timeout=2):
         return False
 
 
-@app.get("/ui/status")
-def ui_status():
-    """Live health of every platform layer."""
-    layers = [
-        {"layer": "L0/L1", "name": "Anomaly API", "up": True, "detail": f"{MODEL_NAME} v2.15.0"},
-        {"layer": "L2", "name": "Docker registry", "up": _port_open("localhost", 5000), "detail": ":5000"},
-        {"layer": "L3", "name": "Jenkins", "up": _port_open("localhost", 8080), "detail": "CI/CD"},
-        {"layer": "L3", "name": "SonarQube", "up": _port_open("localhost", 9000), "detail": "SAST"},
-    ]
-    k8s_up, k8s_detail = False, "unreachable"
+def _pod_is_ready(pod):
+    """True if a pod has a Ready condition set to True."""
+    for c in pod.get("status", {}).get("conditions", []):
+        if c.get("type") == "Ready" and c.get("status") == "True":
+            return True
+    return False
+
+
+def _k8s_layer():
+    """Build the Kubernetes layer status dict (extracted to keep ui_status simple)."""
     try:
         out = _sp.run(["kubectl", "get", "pods", "-n", "ml-serving", "-o", "json"],
                       capture_output=True, text=True, timeout=6)
-        if out.returncode == 0:
-            pods = json.loads(out.stdout)["items"]
-            ready = sum(1 for pod in pods
-                        for c in pod.get("status", {}).get("conditions", [])
-                        if c["type"] == "Ready" and c["status"] == "True")
-            k8s_up = ready > 0
-            k8s_detail = f"{ready}/{len(pods)} pods ready"
+        if out.returncode != 0:
+            return {"layer": "L4", "name": "Kubernetes", "up": False, "detail": "unreachable"}
+        pods = json.loads(out.stdout)["items"]
+        ready = sum(1 for pod in pods if _pod_is_ready(pod))
+        return {"layer": "L4", "name": "Kubernetes",
+                "up": ready > 0, "detail": f"{ready}/{len(pods)} pods ready"}
     except Exception:
-        pass
-    layers.append({"layer": "L4", "name": "Kubernetes", "up": k8s_up, "detail": k8s_detail})
-    layers += [
-        {"layer": "L5", "name": "Prometheus", "up": _port_open("localhost", 9090), "detail": ":9090"},
-        {"layer": "L5", "name": "Grafana", "up": _port_open("localhost", 3000), "detail": ":3000"},
-        {"layer": "L5", "name": "Replay exporter", "up": _port_open("localhost", 9200), "detail": ":9200"},
-        {"layer": "L5", "name": "Anomaly bridge", "up": _port_open("localhost", 9300), "detail": ":9300"},
-        {"layer": "L5", "name": "Node exporter", "up": _port_open("localhost", 9100), "detail": ":9100"},
-        {"layer": "L5", "name": "K8s exporter", "up": _port_open("localhost", 9400), "detail": ":9400"},
-    ]
-    return {"layers": layers, "up": sum(1 for l in layers if l["up"]), "total": len(layers)}
+        return {"layer": "L4", "name": "Kubernetes", "up": False, "detail": "unreachable"}
+
+
+# (host, port, layer, name, detail) for each port-checked layer
+_PORT_LAYERS = [
+    ("localhost", 5000, "L2", "Docker registry", ":5000"),
+    ("localhost", 8080, "L3", "Jenkins", "CI/CD"),
+    ("localhost", 9000, "L3", "SonarQube", "SAST"),
+    ("localhost", 9090, "L5", "Prometheus", ":9090"),
+    ("localhost", 3000, "L5", "Grafana", ":3000"),
+    ("localhost", 9200, "L5", "Replay exporter", ":9200"),
+    ("localhost", 9300, "L5", "Anomaly bridge", ":9300"),
+    ("localhost", 9100, "L5", "Node exporter", ":9100"),
+    ("localhost", 9400, "L5", "K8s exporter", ":9400"),
+]
+
+
+@app.get("/ui/status")
+def ui_status():
+    """Live health of every platform layer."""
+    layers = [{"layer": "L0/L1", "name": "Anomaly API", "up": True,
+               "detail": f"{MODEL_NAME} v2.15.0"}]
+    for host, port, layer, name, detail in _PORT_LAYERS:
+        if layer == "L5":
+            continue  # add L5 after the K8s layer for ordering
+        layers.append({"layer": layer, "name": name,
+                       "up": _port_open(host, port), "detail": detail})
+    layers.append(_k8s_layer())
+    for host, port, layer, name, detail in _PORT_LAYERS:
+        if layer == "L5":
+            layers.append({"layer": layer, "name": name,
+                           "up": _port_open(host, port), "detail": detail})
+    return {"layers": layers, "up": sum(1 for lyr in layers if lyr["up"]), "total": len(layers)}
 
 
 def _prom_query(expr):
@@ -793,12 +814,7 @@ def _run(cmd, timeout=8):
         return ""
 
 
-@app.get("/ui/infra")
-def ui_infra():
-    """Detailed Docker + Kubernetes + Prometheus info for the Infrastructure tab."""
-    infra = {}
-
-    # --- Docker containers ---
+def _infra_docker_containers():
     containers = []
     raw = _run(["docker", "ps", "--format", "{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}"])
     for line in raw.strip().splitlines():
@@ -806,79 +822,92 @@ def ui_infra():
         if len(parts) >= 3:
             containers.append({"name": parts[0], "image": parts[1],
                                "status": parts[2], "ports": parts[3] if len(parts) > 3 else ""})
-    infra["docker_containers"] = containers
+    return containers
 
-    # --- Docker images (project only) ---
+
+def _infra_docker_images():
     images = []
     raw = _run(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}|{{.Size}}|{{.CreatedSince}}"])
     for line in raw.strip().splitlines():
-        if "devsecmlops" in line:
-            parts = line.split("|")
-            if len(parts) >= 3:
-                images.append({"image": parts[0], "size": parts[1], "created": parts[2]})
-    infra["docker_images"] = images[:12]
+        if "devsecmlops" not in line:
+            continue
+        parts = line.split("|")
+        if len(parts) >= 3:
+            images.append({"image": parts[0], "size": parts[1], "created": parts[2]})
+    return images[:12]
 
-    # --- K8s pods ---
+
+def _infra_k8s_pods():
     pods = []
     raw = _run(["kubectl", "get", "pods", "-n", "ml-serving", "-o", "json"])
-    if raw:
-        try:
-            for p in json.loads(raw)["items"]:
-                cs = p.get("status", {}).get("containerStatuses", [{}])[0]
-                pods.append({
-                    "name": p["metadata"]["name"],
-                    "ready": cs.get("ready", False),
-                    "image": cs.get("image", "?"),
-                    "restarts": cs.get("restartCount", 0),
-                    "phase": p["status"].get("phase", "?"),
-                })
-        except Exception:
-            pass
-    infra["k8s_pods"] = pods
+    if not raw:
+        return pods
+    try:
+        for p in json.loads(raw)["items"]:
+            cs = p.get("status", {}).get("containerStatuses", [{}])[0]
+            pods.append({
+                "name": p["metadata"]["name"],
+                "ready": cs.get("ready", False),
+                "image": cs.get("image", "?"),
+                "restarts": cs.get("restartCount", 0),
+                "phase": p["status"].get("phase", "?"),
+            })
+    except Exception:
+        pass
+    return pods
 
-    # --- kubectl top (resource usage) ---
+
+def _infra_k8s_usage():
     usage = []
     raw = _run(["kubectl", "top", "pods", "-n", "ml-serving", "--no-headers"])
     for line in raw.strip().splitlines():
         parts = line.split()
         if len(parts) >= 3:
             usage.append({"pod": parts[0], "cpu": parts[1], "memory": parts[2]})
-    infra["k8s_usage"] = usage
+    return usage
 
-    # --- HPA ---
+
+def _hpa_cpu_util(status):
+    for m in status.get("currentMetrics", []) or []:
+        if m.get("resource", {}).get("name") == "cpu":
+            return m["resource"]["current"].get("averageUtilization")
+    return None
+
+
+def _infra_k8s_hpa():
     hpa = []
     raw = _run(["kubectl", "get", "hpa", "-n", "ml-serving", "-o", "json"])
-    if raw:
-        try:
-            for h in json.loads(raw)["items"]:
-                s = h.get("status", {})
-                cpu_util = None
-                for m in s.get("currentMetrics", []) or []:
-                    if m.get("resource", {}).get("name") == "cpu":
-                        cpu_util = m["resource"]["current"].get("averageUtilization")
-                hpa.append({
-                    "name": h["metadata"]["name"],
-                    "current": s.get("currentReplicas"),
-                    "desired": s.get("desiredReplicas"),
-                    "min": h["spec"].get("minReplicas"),
-                    "max": h["spec"].get("maxReplicas"),
-                    "cpu_util": cpu_util,
-                })
-        except Exception:
-            pass
-    infra["k8s_hpa"] = hpa
+    if not raw:
+        return hpa
+    try:
+        for h in json.loads(raw)["items"]:
+            s = h.get("status", {})
+            hpa.append({
+                "name": h["metadata"]["name"],
+                "current": s.get("currentReplicas"),
+                "desired": s.get("desiredReplicas"),
+                "min": h["spec"].get("minReplicas"),
+                "max": h["spec"].get("maxReplicas"),
+                "cpu_util": _hpa_cpu_util(s),
+            })
+    except Exception:
+        pass
+    return hpa
 
-    # --- Prometheus targets ---
+
+def _infra_prometheus_targets():
     targets = []
     try:
         with _ur.urlopen("http://localhost:9090/api/v1/targets", timeout=4) as r:
-            for t in json.loads(r.read())["data"]["activeTargets"]:
-                targets.append({"job": t["labels"].get("job", "?"), "health": t.get("health", "?")})
+            for tgt in json.loads(r.read())["data"]["activeTargets"]:
+                targets.append({"job": tgt["labels"].get("job", "?"),
+                                "health": tgt.get("health", "?")})
     except Exception:
         pass
-    infra["prometheus_targets"] = targets
+    return targets
 
-    # --- Live anomalies (from bridge via Prometheus) ---
+
+def _infra_live_anomalies():
     anomalies = []
     try:
         url = "http://localhost:9090/api/v1/query?query=" + _ur.quote("bridge_is_anomaly == 1")
@@ -889,9 +918,21 @@ def ui_infra():
                                   "role": m.get("role", "?"), "type": m.get("type", "?")})
     except Exception:
         pass
-    infra["live_anomalies"] = anomalies
+    return anomalies
 
-    return infra
+
+@app.get("/ui/infra")
+def ui_infra():
+    """Detailed Docker + Kubernetes + Prometheus info for the Infrastructure tab."""
+    return {
+        "docker_containers": _infra_docker_containers(),
+        "docker_images": _infra_docker_images(),
+        "k8s_pods": _infra_k8s_pods(),
+        "k8s_usage": _infra_k8s_usage(),
+        "k8s_hpa": _infra_k8s_hpa(),
+        "prometheus_targets": _infra_prometheus_targets(),
+        "live_anomalies": _infra_live_anomalies(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -910,6 +951,7 @@ def _load_sample_pool():
         return _SAMPLE_CACHE["rows"]
     import os as _os
     import random as _random
+    _rng = _random.SystemRandom()
     path = Path(__file__).resolve().parent.parent / "data" / "telecom_fleet_v2_test.csv"
     samples = []
     try:
@@ -939,7 +981,7 @@ def _load_sample_pool():
                     run.append(row)
                 if len(run) >= 10:
                     samples.append({"cur": run[9], "hist": run[:10]})
-        _random.shuffle(samples)
+        _rng.shuffle(samples)
     except Exception:
         samples = []
     _SAMPLE_CACHE["rows"] = samples
@@ -950,11 +992,12 @@ def _load_sample_pool():
 def ui_sample(n: int = 20):
     """N real labeled readings from the independent test set, with true cause."""
     import random as _random
+    _rng = _random.SystemRandom()
     pool = _load_sample_pool()
     if not pool:
         return {"rows": [], "error": "test dataset not available"}
     n = max(1, min(n, 100))
-    picks = _random.sample(pool, min(n, len(pool)))
+    picks = _rng.sample(pool, min(n, len(pool)))
     out = []
     for s in picks:
         try:

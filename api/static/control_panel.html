@@ -6,17 +6,16 @@
 <title>DevSecMLOps — Control Panel</title>
 <style>
   :root{
-    --bg:#0a0e16; --panel:#121a28; --panel2:#1a2536; --line:#26344a; --line2:#33455f;
+    --bg:#0a0e16; --panel:#121a28; --panel2:#1a2536; --line:#26344a;
     --ink:#e8eef8; --dim:#93a4bd; --faint:#5f7189;
     --teal:#36e0ac; --tealdim:#1c9c78; --violet:#8f7cf7; --amber:#f2b134;
-    --red:#ff6b6b; --blue:#4aa3ff; --green:#5ad17a; --pink:#f26fb3;
+    --red:#ff6b6b; --blue:#4aa3ff; --green:#5ad17a;
     --mono:'SFMono-Regular',ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
     --sans:'Segoe UI',system-ui,-apple-system,Helvetica,Arial,sans-serif;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.55}
   .wrap{max-width:1200px;margin:0 auto;padding:0 20px}
-  code{font-family:var(--mono);font-size:.85em;background:var(--panel2);border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:var(--teal)}
   button{font-family:var(--sans);cursor:pointer}
   h1,h2,h3{letter-spacing:-.3px;margin:0}
   header{border-bottom:1px solid var(--line);background:linear-gradient(180deg,rgba(54,224,172,.05),transparent);padding:20px 0}
@@ -49,6 +48,8 @@
   .btn.violet{background:var(--violet);color:#0a0416}
   .btn.small{padding:6px 12px;font-size:12px;margin-top:0}
   .btnrow{display:flex;gap:10px;flex-wrap:wrap}
+  .linkbtn{display:inline-block;font-family:var(--mono);font-size:11px;color:var(--blue);cursor:pointer;border:1px solid var(--line);border-radius:5px;padding:4px 9px;margin:3px 3px 0 0;background:var(--panel2)}
+  .linkbtn:hover{border-color:var(--blue)}
   .result{margin-top:16px;background:#0c1119;border:1px solid var(--line);border-radius:9px;overflow:hidden;display:none}
   .result.show{display:block}
   .verdict{padding:14px 16px;font-weight:700;font-size:15px;display:flex;align-items:center;gap:10px}
@@ -85,14 +86,9 @@
   .tag.iso{background:rgba(147,164,189,.15);color:var(--dim)}
   .tag.anom{background:rgba(255,107,107,.15);color:var(--red)}
   .tag.norm{background:rgba(54,224,172,.12);color:var(--teal)}
-  .log{background:#0c1119;border:1px solid var(--line);border-radius:9px;padding:12px;font-family:var(--mono);font-size:12px;color:var(--dim);max-height:200px;overflow-y:auto;margin-top:12px}
-  .log div{padding:2px 0}
-  .log .ok{color:var(--teal)}.log .err{color:var(--red)}.log .info{color:var(--blue)}
   .spin{display:inline-block;width:13px;height:13px;border:2px solid var(--line);border-top-color:var(--teal);border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
   @keyframes sp{to{transform:rotate(360deg)}}
   .hint{color:var(--faint);font-size:11.5px;font-family:var(--mono);margin-top:6px}
-  .preset{display:inline-block;font-family:var(--mono);font-size:11px;color:var(--blue);cursor:pointer;border:1px solid var(--line);border-radius:5px;padding:4px 9px;margin:3px 3px 0 0;background:var(--panel2)}
-  .preset:hover{border-color:var(--blue)}
   .summary{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
   .sumcard{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:14px}
   .sumcard .st{font-family:var(--mono);font-size:11px;color:var(--teal);text-transform:uppercase;margin-bottom:6px}
@@ -105,24 +101,24 @@
   <div class="logo"><b>DevSecMLOps</b> Control Panel</div>
   <span class="ver" id="verChip">v—</span>
   <div class="links">
-    <a href="#" id="grafanaLink" target="_blank">Grafana</a>
-    <a href="#" id="promLink" target="_blank">Prometheus</a>
-    <a href="/docs" target="_blank">API Docs</a>
+    <a href="#" id="grafanaLink" target="_blank" rel="noopener">Grafana</a>
+    <a href="#" id="promLink" target="_blank" rel="noopener">Prometheus</a>
+    <a href="/docs" target="_blank" rel="noopener">API Docs</a>
   </div>
 </div></header>
 <div class="wrap">
   <div class="tabs">
-    <button class="on" onclick="tab('status',this)">Status</button>
-    <button onclick="tab('operator',this)">Operator</button>
-    <button onclick="tab('rootcause',this)">Root Cause</button>
-    <button onclick="tab('demo',this)">Demo</button>
-    <button onclick="tab('infra',this)">Infrastructure</button>
-    <button onclick="tab('summary',this)">Project</button>
+    <button type="button" class="on" data-tab="status">Status</button>
+    <button type="button" data-tab="operator">Operator</button>
+    <button type="button" data-tab="rootcause">Root Cause</button>
+    <button type="button" data-tab="demo">Demo</button>
+    <button type="button" data-tab="infra">Infrastructure</button>
+    <button type="button" data-tab="summary">Project</button>
   </div>
 
   <div class="tabpage on" id="status">
     <div class="card" style="margin-bottom:16px">
-      <h3>Platform layers <button class="btn sec small" style="margin-left:auto" onclick="refreshStatus()">↻ Refresh</button></h3>
+      <h3>Platform layers <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshStatus">↻ Refresh</button></h3>
       <div class="sub">Live health of every layer (L0–L5). Auto-refreshes every 10s. <span id="upcount"></span></div>
       <div class="statgrid" id="statusGrid"><div class="stat"><div class="sn">loading…</div><div class="sv"><span class="spin"></span></div></div></div>
     </div>
@@ -138,29 +134,29 @@
       <div class="card">
         <h3>Analyze a reading</h3>
         <div class="sub">Submit one machine's 6 metrics → anomaly + likely cause + z-scores.</div>
-        <label>Machine</label>
+        <label for="op_machine">Machine</label>
         <input id="op_machine" value="web-01" list="machinelist">
         <datalist id="machinelist"></datalist>
-        <label>Hour of day (0–23)</label>
+        <label for="op_hour">Hour of day (0–23)</label>
         <input id="op_hour" type="number" min="0" max="23" value="14">
-        <label>Metrics</label>
+        <span class="sub" style="display:block;margin-top:10px">Metrics</span>
         <div class="row6">
-          <div><label style="margin:0">cpu</label><input id="op_cpu" type="number" value="30"></div>
-          <div><label style="margin:0">ram</label><input id="op_ram" type="number" value="50"></div>
-          <div><label style="margin:0">network</label><input id="op_network" type="number" value="40"></div>
-          <div><label style="margin:0">disk_io</label><input id="op_disk_io" type="number" value="25"></div>
-          <div><label style="margin:0">disk_usage</label><input id="op_disk_usage" type="number" value="42"></div>
-          <div><label style="margin:0">load_avg</label><input id="op_load_avg" type="number" step="0.1" value="1.2"></div>
+          <div><label for="op_cpu">cpu</label><input id="op_cpu" type="number" value="30"></div>
+          <div><label for="op_ram">ram</label><input id="op_ram" type="number" value="50"></div>
+          <div><label for="op_network">network</label><input id="op_network" type="number" value="40"></div>
+          <div><label for="op_disk_io">disk_io</label><input id="op_disk_io" type="number" value="25"></div>
+          <div><label for="op_disk_usage">disk_usage</label><input id="op_disk_usage" type="number" value="42"></div>
+          <div><label for="op_load_avg">load_avg</label><input id="op_load_avg" type="number" step="0.1" value="1.2"></div>
         </div>
-        <label>Quick presets</label>
+        <span class="sub" style="display:block;margin-top:10px">Quick presets</span>
         <div>
-          <span class="preset" onclick="preset('normal')">Normal</span>
-          <span class="preset" onclick="preset('memleak')">Memory leak (v4)</span>
-          <span class="preset" onclick="preset('disk')">Disk saturation</span>
-          <span class="preset" onclick="preset('cpu')">CPU spike</span>
+          <button type="button" class="linkbtn" data-preset="normal">Normal</button>
+          <button type="button" class="linkbtn" data-preset="memleak">Memory leak (v4)</button>
+          <button type="button" class="linkbtn" data-preset="disk">Disk saturation</button>
+          <button type="button" class="linkbtn" data-preset="cpu">CPU spike</button>
         </div>
-        <label style="margin-top:14px"><input type="checkbox" id="op_history" style="width:auto;display:inline;margin-right:6px">Include rolling history (v4 model)</label>
-        <button class="btn" onclick="doPredict()">Analyze</button>
+        <label for="op_history" style="margin-top:14px"><input type="checkbox" id="op_history" style="width:auto;display:inline;margin-right:6px">Include rolling history (v4 model)</label>
+        <button type="button" class="btn" id="btnPredict">Analyze</button>
       </div>
       <div class="card">
         <h3>Result</h3>
@@ -179,8 +175,8 @@
       <h3>Root cause analysis</h3>
       <div class="sub">When several machines alert together, the dependency graph separates the true culprit (a router) from downstream victims.</div>
       <div class="btnrow">
-        <button class="btn violet" onclick="injectCascade()">Simulate a router cascade</button>
-        <button class="btn sec" onclick="clearRC()">Clear</button>
+        <button type="button" class="btn violet" id="btnCascade">Simulate a router cascade</button>
+        <button type="button" class="btn sec" id="btnClearRC">Clear</button>
       </div>
       <div class="hint">Sends router-06 + its real dependents (web-06, app-06, db-03, cache-05, queue-01) through /root-cause.</div>
       <div class="result" id="rc_result"><div class="rbody" id="rc_body"></div></div>
@@ -190,11 +186,11 @@
   <div class="tabpage" id="demo">
     <div class="card">
       <h3>Send test readings &amp; evaluate</h3>
-      <div class="sub">Each test reading is generated as a known anomaly or known normal (ground truth). The model predicts, and we score it right/wrong live.</div>
+      <div class="sub">Each reading is a real, held-out test row (seed-123) with its true label. The model predicts; we score it right/wrong live.</div>
       <div class="btnrow">
-        <button class="btn" onclick="sendTestBatch(20)">Send 20 readings</button>
-        <button class="btn sec" onclick="sendTestBatch(5)">Send 5</button>
-        <button class="btn sec" onclick="clearResults()">Clear</button>
+        <button type="button" class="btn" data-batch="20">Send 20 readings</button>
+        <button type="button" class="btn sec" data-batch="5">Send 5</button>
+        <button type="button" class="btn sec" id="btnClearResults">Clear</button>
       </div>
       <div id="scoreBar" style="margin-top:16px"></div>
       <div id="resultsTable"></div>
@@ -203,7 +199,7 @@
 
   <div class="tabpage" id="infra">
     <div class="card" style="margin-bottom:16px">
-      <h3>Infrastructure <button class="btn sec small" style="margin-left:auto" onclick="loadInfra()">↻ Refresh</button></h3>
+      <h3>Infrastructure <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshInfra">↻ Refresh</button></h3>
       <div class="sub">Live Docker containers, images, Kubernetes pods, resource usage, autoscaling, Prometheus targets, and active anomalies.</div>
       <div id="infra_body"><div class="hint"><span class="spin"></span> loading…</div></div>
     </div>
@@ -218,7 +214,7 @@
         <div class="sumcard"><div class="st">Best config</div><div class="sl">v4 + per-class</div><div class="sl">F1 <b>0.823</b></div><div class="sl">Precision <b>0.953</b></div></div>
         <div class="sumcard"><div class="st">Architecture</div><div class="sl">XGBoost primary</div><div class="sl">+ IsolationForest net</div><div class="sl">6 base + 9 rolling feat</div></div>
         <div class="sumcard"><div class="st">Stack</div><div class="sl">Jenkins · SonarQube</div><div class="sl">Docker · K8s · Trivy</div><div class="sl">Prometheus · Grafana</div><div class="sl">MLflow · MinIO</div></div>
-        <div class="sumcard"><div class="st">Quality</div><div class="sl">15 pytest <b>pass</b></div><div class="sl">SonarQube <b>0 issues</b></div><div class="sl">Trivy <b>0 CVEs</b></div><div class="sl">v2.14.1 tagged</div></div>
+        <div class="sumcard"><div class="st">Quality</div><div class="sl">15 pytest <b>pass</b></div><div class="sl">SonarQube <b>0 issues</b></div><div class="sl">Trivy <b>0 CVEs</b></div><div class="sl">v2.15.0 tagged</div></div>
         <div class="sumcard"><div class="st">Feedback loop</div><div class="sl">PostgreSQL StatefulSet</div><div class="sl">Guardrailed retrain</div><div class="sl">Operator verdicts</div></div>
         <div class="sumcard"><div class="st">Fleet</div><div class="sl">200 machines</div><div class="sl">11 types</div><div class="sl">6 anomaly types</div></div>
       </div>
@@ -228,262 +224,262 @@
 <script>
   const API = "";
   const VM_IP = location.hostname;
-  document.getElementById('grafanaLink').href = `http://${VM_IP}:3000`;
-  document.getElementById('promLink').href = `http://${VM_IP}:9090`;
-
-  function tab(id, btn){
-    document.querySelectorAll('.tabpage').forEach(p=>p.classList.remove('on'));
-    document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));
-    document.getElementById(id).classList.add('on');
-    if(btn) btn.classList.add('on');
-    if(id==='status') refreshStatus();
-    if(id==='infra') loadInfra();
+  document.getElementById("grafanaLink").href = "http://" + VM_IP + ":3000";
+  document.getElementById("promLink").href = "http://" + VM_IP + ":9090";
+  let RESULTS = [];
+  let PAGE = 1;
+  function zClass(v){ const a=Math.abs(v); if(a>=3){return "hi";} if(a>=2){return "mid";} return "lo"; }
+  function roleClass(role){ if(role==="likely_root_cause"){return "rc";} if(role==="downstream_effect"){return "de";} return "iso"; }
+  function kv(k,v){ return '<div class="kv"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>'; }
+  function sectionTitle(t){ return '<div style="margin:18px 0 6px;font-family:var(--mono);font-size:12px;color:var(--teal)">'+t+'</div>'; }
+  async function getJSON(url, opts){ const r=await fetch(url,opts); const d=await r.json(); if(!r.ok){ throw new Error((d&&d.detail)?d.detail:("HTTP "+r.status)); } return d; }
+  function activateTab(id){
+    document.querySelectorAll(".tabpage").forEach(function(p){ p.classList.remove("on"); });
+    document.querySelectorAll(".tabs button").forEach(function(b){ b.classList.toggle("on", b.dataset.tab===id); });
+    const page=document.getElementById(id); if(page){ page.classList.add("on"); }
+    if(id==="status"){ refreshStatus(); }
+    if(id==="infra"){ loadInfra(); }
   }
-
   const PRESETS = {
-    normal:  {cpu:20, ram:45, network:30, disk_io:20, disk_usage:40, load_avg:1.0, hist:false},
-    memleak: {cpu:45, ram:95, network:30, disk_io:25, disk_usage:42, load_avg:2.0, hist:true},
-    disk:    {cpu:55, ram:60, network:40, disk_io:98, disk_usage:97, load_avg:9.5, hist:false},
-    cpu:     {cpu:99, ram:70, network:50, disk_io:40, disk_usage:45, load_avg:12.0, hist:false},
+    normal:{cpu:20,ram:45,network:30,disk_io:20,disk_usage:40,load_avg:1.0,hist:false},
+    memleak:{cpu:45,ram:95,network:30,disk_io:25,disk_usage:42,load_avg:2.0,hist:true},
+    disk:{cpu:55,ram:60,network:40,disk_io:98,disk_usage:97,load_avg:9.5,hist:false},
+    cpu:{cpu:99,ram:70,network:50,disk_io:40,disk_usage:45,load_avg:12.0,hist:false}
   };
-  function preset(name){
-    const p=PRESETS[name];
-    op_cpu.value=p.cpu; op_ram.value=p.ram; op_network.value=p.network;
-    op_disk_io.value=p.disk_io; op_disk_usage.value=p.disk_usage; op_load_avg.value=p.load_avg;
-    op_history.checked=p.hist;
+  function applyPreset(name){
+    const p=PRESETS[name]; if(!p){ return; }
+    document.getElementById("op_cpu").value=p.cpu;
+    document.getElementById("op_ram").value=p.ram;
+    document.getElementById("op_network").value=p.network;
+    document.getElementById("op_disk_io").value=p.disk_io;
+    document.getElementById("op_disk_usage").value=p.disk_usage;
+    document.getElementById("op_load_avg").value=p.load_avg;
+    document.getElementById("op_history").checked=p.hist;
   }
-
+  function buildHistory(m){
+    const cpu=[],ram=[],load=[];
+    for(let i=0;i<10;i++){ cpu.push(Number((m.cpu-(9-i)*0.5).toFixed(1))); ram.push(Number((m.ram-(9-i)*3.5).toFixed(1))); load.push(Number((m.load_avg-(9-i)*0.05).toFixed(2))); }
+    return {cpu:cpu,ram:ram,load_avg:load};
+  }
   async function doPredict(){
-    const metrics={cpu:+op_cpu.value,ram:+op_ram.value,network:+op_network.value,disk_io:+op_disk_io.value,disk_usage:+op_disk_usage.value,load_avg:+op_load_avg.value};
-    const body={machine:op_machine.value,hour:+op_hour.value,metrics};
-    if(op_history.checked){
-      const r=metrics.ram,c=metrics.cpu,l=metrics.load_avg;
-      body.history={cpu:Array.from({length:10},(_,i)=>+(c-(9-i)*0.5).toFixed(1)),ram:Array.from({length:10},(_,i)=>+(r-(9-i)*3.5).toFixed(1)),load_avg:Array.from({length:10},(_,i)=>+(l-(9-i)*0.05).toFixed(2))};
-    }
-    op_placeholder.style.display='none';
-    document.getElementById('op_result').classList.add('show');
-    document.getElementById('op_verdict').className='verdict';
-    document.getElementById('op_verdict').innerHTML='<span class="spin"></span> analyzing…';
-    document.getElementById('op_rbody').innerHTML='';
+    const metrics={cpu:Number(document.getElementById("op_cpu").value),ram:Number(document.getElementById("op_ram").value),network:Number(document.getElementById("op_network").value),disk_io:Number(document.getElementById("op_disk_io").value),disk_usage:Number(document.getElementById("op_disk_usage").value),load_avg:Number(document.getElementById("op_load_avg").value)};
+    const body={machine:document.getElementById("op_machine").value,hour:Number(document.getElementById("op_hour").value),metrics:metrics};
+    if(document.getElementById("op_history").checked){ body.history=buildHistory(metrics); }
+    document.getElementById("op_placeholder").style.display="none";
+    document.getElementById("op_result").classList.add("show");
+    document.getElementById("op_verdict").className="verdict";
+    document.getElementById("op_verdict").innerHTML='<span class="spin"></span> analyzing…';
+    document.getElementById("op_rbody").innerHTML="";
     try{
-      const rp=await fetch(`${API}/predict`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      const d=await rp.json();
-      if(!rp.ok) throw new Error(d.detail||'error');
+      const d=await getJSON(API+"/predict",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
       renderPrediction(d);
     }catch(e){
-      document.getElementById('op_verdict').className='verdict anom';
-      document.getElementById('op_verdict').innerHTML='error';
-      document.getElementById('op_rbody').innerHTML=`<div style="color:var(--red);font-family:var(--mono);font-size:12px">${e.message}</div>`;
+      document.getElementById("op_verdict").className="verdict anom";
+      document.getElementById("op_verdict").textContent="error";
+      document.getElementById("op_rbody").innerHTML='<div style="color:var(--red);font-family:var(--mono);font-size:12px">'+e.message+'</div>';
     }
   }
   function renderPrediction(d){
     const anom=d.is_anomaly===1;
-    const v=document.getElementById('op_verdict');
-    v.className='verdict '+(anom?'anom':'norm');
-    v.innerHTML=`<span class="dot"></span>${anom?'ANOMALY':'NORMAL'} ${anom?'· '+d.likely_cause:''}`;
-    let h=kv('model',d.model)+kv('window',d.window||'—');
-    if(d.xgb_vote) h+=kv('XGBoost',`${d.xgb_vote.is_anomaly?'anomaly':'normal'} (${d.xgb_vote.cause})`);
-    if(d.iso_vote) h+=kv('IsolationForest',`${d.iso_vote.is_anomaly?'anomaly':'normal'} · ${d.iso_vote.score}`);
-    h+=kv('rolling (v4)',d.rolling_features_used?'yes':'no')+kv('baseline',d.baseline_used||'—');
-    if(d.z_scores){
-      h+='<div class="zgrid">';
-      for(const [k,val] of Object.entries(d.z_scores)){
-        const a=Math.abs(val),cls=a>=3?'hi':a>=2?'mid':'lo';
-        h+=`<div class="zchip ${cls}"><div class="zn">${k}</div><div class="zv">${val>0?'+':''}${val}</div></div>`;
-      }
-      h+='</div>';
-    }
-    document.getElementById('op_rbody').innerHTML=h;
+    const v=document.getElementById("op_verdict");
+    v.className="verdict "+(anom?"anom":"norm");
+    v.innerHTML='<span class="dot"></span>'+(anom?"ANOMALY":"NORMAL")+" "+(anom?("· "+d.likely_cause):"");
+    let h=kv("model",d.model)+kv("window",d.window||"—");
+    if(d.xgb_vote){ h+=kv("XGBoost",(d.xgb_vote.is_anomaly?"anomaly":"normal")+" ("+d.xgb_vote.cause+")"); }
+    if(d.iso_vote){ h+=kv("IsolationForest",(d.iso_vote.is_anomaly?"anomaly":"normal")+" · "+d.iso_vote.score); }
+    h+=kv("rolling (v4)",d.rolling_features_used?"yes":"no")+kv("baseline",d.baseline_used||"—");
+    if(d.z_scores){ h+='<div class="zgrid">'; Object.keys(d.z_scores).forEach(function(k){ const val=d.z_scores[k]; h+='<div class="zchip '+zClass(val)+'"><div class="zn">'+k+'</div><div class="zv">'+(val>0?"+":"")+val+'</div></div>'; }); h+='</div>'; }
+    document.getElementById("op_rbody").innerHTML=h;
   }
-  function kv(k,v){return `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`;}
-
   async function injectCascade(){
     const anomalies={"router-06":0.55,"web-06":0.62,"app-06":0.60,"db-03":0.58,"cache-05":0.59,"queue-01":0.57};
-    document.getElementById('rc_result').classList.add('show');
-    document.getElementById('rc_body').innerHTML='<span class="spin"></span> running /root-cause…';
+    document.getElementById("rc_result").classList.add("show");
+    document.getElementById("rc_body").innerHTML='<span class="spin"></span> running /root-cause…';
     try{
-      const r=await fetch(`${API}/root-cause`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({anomalies})});
-      const d=await r.json();
-      if(!r.ok) throw new Error(d.detail||'error');
-      let h=`<div style="margin-bottom:10px">Likely root cause: <span class="tag rc">${(d.likely_root_causes||[]).join(', ')||'none'}</span></div>`;
-      h+='<table><thead><tr><th>Machine</th><th>Role</th><th>Score</th><th>Downstream</th><th>Router</th></tr></thead><tbody>';
-      for(const x of (d.ranked||[])){
-        const rc=x.role==='likely_root_cause'?'rc':x.role==='downstream_effect'?'de':'iso';
-        h+=`<tr><td class="mono">${x.machine}</td><td><span class="tag ${rc}">${x.role}</span></td><td class="mono">${x.own_score}</td><td class="mono">${x.downstream_anomalous_count||0}</td><td class="mono">${x.upstream_router||'—'}</td></tr>`;
-      }
-      h+='</tbody></table>';
-      document.getElementById('rc_body').innerHTML=h;
-    }catch(e){document.getElementById('rc_body').innerHTML=`<div style="color:var(--red);font-family:var(--mono)">${e.message}</div>`;}
+      const d=await getJSON(API+"/root-cause",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({anomalies:anomalies})});
+      renderRootCause(d);
+    }catch(e){ document.getElementById("rc_body").innerHTML='<div style="color:var(--red);font-family:var(--mono)">'+e.message+'</div>'; }
   }
-  function clearRC(){document.getElementById('rc_result').classList.remove('show');}
-
+  function renderRootCause(d){
+    const causes=(d.likely_root_causes||[]).join(", ")||"none";
+    let h='<div style="margin-bottom:10px">Likely root cause: <span class="tag rc">'+causes+'</span></div>';
+    h+='<table><thead><tr><th>Machine</th><th>Role</th><th>Score</th><th>Downstream</th><th>Router</th></tr></thead><tbody>';
+    (d.ranked||[]).forEach(function(x){ h+='<tr><td class="mono">'+x.machine+'</td><td><span class="tag '+roleClass(x.role)+'">'+x.role+'</span></td><td class="mono">'+x.own_score+'</td><td class="mono">'+(x.downstream_anomalous_count||0)+'</td><td class="mono">'+(x.upstream_router||"—")+'</td></tr>'; });
+    h+='</tbody></table>';
+    document.getElementById("rc_body").innerHTML=h;
+  }
+  function statCard(name,state,val){ return '<div class="stat"><div class="sn"><span class="sd '+state+'"></span>'+name+'</div><div class="sv small">'+val+'</div></div>'; }
   async function refreshStatus(){
-    const grid=document.getElementById('statusGrid');
+    const grid=document.getElementById("statusGrid");
     try{
-      const r=await fetch(`${API}/ui/status`);const d=await r.json();
-      document.getElementById('upcount').textContent=`(${d.up}/${d.total} up)`;
-      grid.innerHTML=d.layers.map(l=>`<div class="stat"><div class="sn"><span class="sd ${l.up?'up':'down'}"></span>${l.layer} · ${l.name}</div><div class="sv small">${l.detail}</div></div>`).join('');
-    }catch(e){grid.innerHTML='<div class="stat"><div class="sn"><span class="sd down"></span>status</div><div class="sv small">unreachable</div></div>';}
-    try{const h=await(await fetch(`${API}/health`)).json();verChip.textContent='v'+(h.version||'?');}catch(e){}
+      const d=await getJSON(API+"/ui/status");
+      document.getElementById("upcount").textContent="("+d.up+"/"+d.total+" up)";
+      grid.innerHTML=d.layers.map(function(l){ return statCard(l.layer+" · "+l.name, l.up?"up":"down", l.detail); }).join("");
+    }catch(e){ grid.innerHTML=statCard("status","down","unreachable"); }
+    try{ const h=await getJSON(API+"/health"); document.getElementById("verChip").textContent="v"+(h.version||"?"); }catch(e){ document.getElementById("verChip").textContent="v?"; }
     refreshFleet();
   }
+  function fleetCard(name,val){ return '<div class="stat"><div class="sn">'+name+'</div><div class="sv">'+(val===null||val===undefined?"—":val)+'</div></div>'; }
   async function refreshFleet(){
-    const grid=document.getElementById('fleetGrid');
+    const grid=document.getElementById("fleetGrid");
     try{
-      const d=await(await fetch(`${API}/ui/metrics`)).json();
-      grid.innerHTML=fleet('Anomalous machines',d.anomaly_count)+fleet('Avg CPU %',d.avg_cpu)+fleet('Avg load',d.avg_load)+fleet('Ground-truth anom',d.ground_truth);
-    }catch(e){grid.innerHTML='<div class="stat"><div class="sn">metrics</div><div class="sv small" style="color:var(--faint)">Prometheus not reachable</div></div>';}
+      const d=await getJSON(API+"/ui/metrics");
+      grid.innerHTML=fleetCard("Anomalous machines",d.anomaly_count)+fleetCard("Avg CPU %",d.avg_cpu)+fleetCard("Avg load",d.avg_load)+fleetCard("Ground-truth anom",d.ground_truth);
+    }catch(e){ grid.innerHTML='<div class="stat"><div class="sn">metrics</div><div class="sv small" style="color:var(--faint)">Prometheus not reachable</div></div>'; }
   }
-  function fleet(n,v){return `<div class="stat"><div class="sn">${n}</div><div class="sv">${v==null?'—':v}</div></div>`;}
-
-  let RESULTS = [];
-  let PAGE = 1;
-  const CAUSE_BY_SPIKE = 'disk_saturation'; // spike readings are disk/cpu heavy
+  function infraSimple(title,rows,cols){
+    let h=sectionTitle(title);
+    if(!rows.length){ return h+'<div class="hint">none</div>'; }
+    h+='<table><thead><tr>'+cols.map(function(c){ return "<th>"+c+"</th>"; }).join("")+'</tr></thead><tbody>';
+    rows.forEach(function(r){ h+="<tr>"+cols.map(function(c){ const val=(r[c]!==null&&r[c]!==undefined&&r[c]!=="")?r[c]:"—"; return '<td class="mono">'+val+'</td>'; }).join("")+"</tr>"; });
+    return h+"</tbody></table>";
+  }
+  function infraPods(rows){
+    let h=sectionTitle("Kubernetes pods");
+    if(!rows.length){ return h+'<div class="hint">cluster unreachable</div>'; }
+    h+='<table><thead><tr><th>Pod</th><th>Image</th><th>Ready</th><th>Restarts</th><th>Status</th></tr></thead><tbody>';
+    rows.forEach(function(r){ const rt=r.ready?"norm":"anom"; const pt=r.phase==="Running"?"norm":"anom"; h+='<tr><td class="mono">'+r.name+'</td><td class="mono">'+r.image+'</td><td><span class="tag '+rt+'">'+(r.ready?"yes":"no")+'</span></td><td class="mono">'+r.restarts+'</td><td><span class="tag '+pt+'">'+r.phase+'</span></td></tr>'; });
+    return h+"</tbody></table>";
+  }
+  function infraHpa(rows){
+    let h=sectionTitle("Autoscaling (HPA)");
+    if(!rows.length){ return h+'<div class="hint">no HPA</div>'; }
+    h+='<table><thead><tr><th>HPA</th><th>Current</th><th>Desired</th><th>Min</th><th>Max</th><th>CPU %</th></tr></thead><tbody>';
+    rows.forEach(function(r){ const cpu=(r.cpu_util!==null&&r.cpu_util!==undefined)?(r.cpu_util+"%"):"—"; h+='<tr><td class="mono">'+r.name+'</td><td class="mono">'+r.current+'</td><td class="mono">'+r.desired+'</td><td class="mono">'+r.min+'</td><td class="mono">'+r.max+'</td><td class="mono">'+cpu+'</td></tr>'; });
+    return h+"</tbody></table>";
+  }
+  function infraTargets(rows){
+    let h=sectionTitle("Prometheus targets");
+    if(!rows.length){ return h+'<div class="hint">Prometheus unreachable</div>'; }
+    h+='<table><thead><tr><th>Job</th><th>Health</th></tr></thead><tbody>';
+    rows.forEach(function(r){ const tag=r.health==="up"?"norm":"anom"; h+='<tr><td class="mono">'+r.job+'</td><td><span class="tag '+tag+'">'+r.health+'</span></td></tr>'; });
+    return h+"</tbody></table>";
+  }
+  function infraAnomalies(rows){
+    let h=sectionTitle("Live anomalies");
+    if(!rows.length){ return h+'<div class="hint">none currently</div>'; }
+    h+='<table><thead><tr><th>Machine</th><th>Role</th><th>Type</th></tr></thead><tbody>';
+    rows.forEach(function(r){ h+='<tr><td class="mono">'+r.machine+'</td><td><span class="tag '+roleClass(r.role)+'">'+r.role+'</span></td><td class="mono">'+r.type+'</td></tr>'; });
+    return h+"</tbody></table>";
+  }
+  function renderInfra(d){
+    let h="";
+    h+=infraSimple("Docker containers",d.docker_containers||[],["name","image","status","ports"]);
+    h+=infraSimple("Docker images (project)",d.docker_images||[],["image","size","created"]);
+    h+=infraPods(d.k8s_pods||[]);
+    h+=infraSimple("Resource usage (kubectl top)",d.k8s_usage||[],["pod","cpu","memory"]);
+    h+=infraHpa(d.k8s_hpa||[]);
+    h+=infraTargets(d.prometheus_targets||[]);
+    h+=infraAnomalies(d.live_anomalies||[]);
+    return h;
+  }
+  async function loadInfra(){
+    const body=document.getElementById("infra_body");
+    body.innerHTML='<div class="hint"><span class="spin"></span> loading…</div>';
+    try{ const d=await getJSON(API+"/ui/infra"); body.innerHTML=renderInfra(d); }
+    catch(e){ body.innerHTML='<div class="hint" style="color:var(--red)">Failed to load infrastructure: '+e.message+'</div>'; }
+  }
+  function verdictOf(isAnom,predicted){ if(isAnom&&predicted){return "TP";} if(!isAnom&&!predicted){return "TN";} if(!isAnom&&predicted){return "FP";} return "FN"; }
   async function sendTestBatch(n){
-    // Pull REAL labeled readings from the evaluation dataset (true ground truth)
     let sample;
-    try{
-      const sr = await fetch(`${API}/ui/sample?n=${n}`);
-      sample = await sr.json();
-    }catch(e){ alert('Could not load sample data: '+e.message); return; }
-    const rows = (sample && sample.rows) || [];
-    if(!rows.length){ alert('No sample data available (dataset not found on server).'); return; }
-
+    try{ sample=await getJSON(API+"/ui/sample?n="+n); }
+    catch(e){ alert("Could not load sample data: "+e.message); return; }
+    const rows=(sample&&sample.rows)||[];
+    if(!rows.length){ alert("No sample data available (dataset not found on server)."); return; }
     for(const s of rows){
-      const isAnom = s.true_label === 1;   // real label from the dataset
-      const t0 = performance.now();
+      const isAnom=s.true_label===1;
+      const t0=performance.now();
       try{
         const body={machine:s.machine,hour:s.hour,metrics:s.metrics};
-        if(s.history) body.history=s.history;
-        const d = await (await fetch(`${API}/predict`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
-        const ms_taken = Math.round(performance.now()-t0);
-        const predicted = d.is_anomaly === 1;
-        let verdict;
-        if(isAnom && predicted) verdict='TP';
-        else if(!isAnom && !predicted) verdict='TN';
-        else if(!isAnom && predicted) verdict='FP';
-        else verdict='FN';
-        RESULTS.unshift({
-          time:new Date().toLocaleTimeString(),
-          machine:s.machine, truth:isAnom?'anomaly':'normal',
-          predicted:predicted?'anomaly':'normal',
-          cause:d.likely_cause||'—', verdict, ms:ms_taken, detail:d
-        });
-      }catch(e){}
+        if(s.history){ body.history=s.history; }
+        const d=await getJSON(API+"/predict",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+        const msTaken=Math.round(performance.now()-t0);
+        const predicted=d.is_anomaly===1;
+        RESULTS.unshift({time:new Date().toLocaleTimeString(),machine:s.machine,truth:isAnom?"anomaly":"normal",predicted:predicted?"anomaly":"normal",cause:d.likely_cause||"—",verdict:verdictOf(isAnom,predicted),ms:msTaken,detail:d});
+      }catch(e){ /* skip a failed reading */ }
     }
     PAGE=1;
     renderResults();
   }
   function clearResults(){ RESULTS=[]; renderResults(); }
-  function renderResults(){
-    const sb=document.getElementById('scoreBar');
-    const tbl=document.getElementById('resultsTable');
-    if(!RESULTS.length){ sb.innerHTML=''; tbl.innerHTML='<div class="hint">No tests sent yet. Click "Send" to evaluate the model live.</div>'; return; }
-    const tp=RESULTS.filter(r=>r.verdict==='TP').length;
-    const tn=RESULTS.filter(r=>r.verdict==='TN').length;
-    const fp=RESULTS.filter(r=>r.verdict==='FP').length;
-    const fn=RESULTS.filter(r=>r.verdict==='FN').length;
-    const correct=tp+tn, total=RESULTS.length;
+  function countVerdict(v){ return RESULTS.filter(function(r){ return r.verdict===v; }).length; }
+  function renderScoreBar(){
+    const tp=countVerdict("TP"),tn=countVerdict("TN"),fp=countVerdict("FP"),fn=countVerdict("FN");
+    const correct=tp+tn,total=RESULTS.length;
     const acc=total?Math.round(100*correct/total):0;
-    const prec=(tp+fp)?(tp/(tp+fp)).toFixed(2):'—';
-    const rec=(tp+fn)?(tp/(tp+fn)).toFixed(2):'—';
-    sb.innerHTML=`<div class="statgrid">
-      <div class="stat"><div class="sn">Accuracy</div><div class="sv">${acc}%</div></div>
-      <div class="stat"><div class="sn">Correct</div><div class="sv">${correct}/${total}</div></div>
-      <div class="stat"><div class="sn">Precision</div><div class="sv">${prec}</div></div>
-      <div class="stat"><div class="sn">Recall</div><div class="sv">${rec}</div></div>
-      <div class="stat"><div class="sn">TP / TN</div><div class="sv small">${tp} / ${tn}</div></div>
-      <div class="stat"><div class="sn">FP / FN</div><div class="sv small" style="color:${(fp+fn)?'var(--red)':'var(--dim)'}">${fp} / ${fn}</div></div>
-    </div>`;
-    // pagination
+    const prec=(tp+fp)?(tp/(tp+fp)).toFixed(2):"—";
+    const rec=(tp+fn)?(tp/(tp+fn)).toFixed(2):"—";
+    const fpColor=(fp+fn)?"var(--red)":"var(--dim)";
+    return '<div class="statgrid"><div class="stat"><div class="sn">Accuracy</div><div class="sv">'+acc+'%</div></div><div class="stat"><div class="sn">Correct</div><div class="sv">'+correct+'/'+total+'</div></div><div class="stat"><div class="sn">Precision</div><div class="sv">'+prec+'</div></div><div class="stat"><div class="sn">Recall</div><div class="sv">'+rec+'</div></div><div class="stat"><div class="sn">TP / TN</div><div class="sv small">'+tp+' / '+tn+'</div></div><div class="stat"><div class="sn">FP / FN</div><div class="sv small" style="color:'+fpColor+'">'+fp+' / '+fn+'</div></div></div>';
+  }
+  const VERDICT_LABEL={TP:"✓ true positive",TN:"✓ true negative",FP:"✗ false alarm",FN:"✗ missed"};
+  function detailHtml(d){
+    if(!d){ return ""; }
+    let h='<div style="padding:10px">';
+    h+=kv("model",d.model);
+    if(d.xgb_vote){ h+=kv("XGBoost",(d.xgb_vote.is_anomaly?"anomaly":"normal")+" ("+d.xgb_vote.cause+")"); }
+    if(d.iso_vote){ h+=kv("IsolationForest",(d.iso_vote.is_anomaly?"anomaly":"normal")+" · "+d.iso_vote.score); }
+    if(d.z_scores){ h+='<div class="zgrid">'; Object.keys(d.z_scores).forEach(function(k){ const val=d.z_scores[k]; h+='<div class="zchip '+zClass(val)+'"><div class="zn">'+k+'</div><div class="zv">'+(val>0?"+":"")+val+'</div></div>'; }); h+='</div>'; }
+    return h+"</div>";
+  }
+  function rowHtml(r,i){
+    const ok=(r.verdict==="TP"||r.verdict==="TN");
+    const vtag=ok?"norm":"anom";
+    const truthTag=r.truth==="anomaly"?"anom":"norm";
+    const predTag=r.predicted==="anomaly"?"anom":"norm";
+    let h="<tr>";
+    h+='<td class="mono">'+r.time+'</td><td class="mono">'+r.machine+'</td>';
+    h+='<td><span class="tag '+truthTag+'">'+r.truth+'</span></td>';
+    h+='<td><span class="tag '+predTag+'">'+r.predicted+'</span></td>';
+    h+='<td class="mono">'+r.cause+'</td>';
+    h+='<td><span class="tag '+vtag+'">'+VERDICT_LABEL[r.verdict]+'</span></td>';
+    h+='<td class="mono">'+r.ms+'</td>';
+    h+='<td><button type="button" class="linkbtn" data-detail="'+i+'">details</button></td></tr>';
+    h+='<tr id="det-'+i+'" style="display:none"><td colspan="8" style="background:#0c1119">'+detailHtml(r.detail)+'</td></tr>';
+    return h;
+  }
+  function renderResults(){
+    const sb=document.getElementById("scoreBar");
+    const tbl=document.getElementById("resultsTable");
+    if(!RESULTS.length){ sb.innerHTML=""; tbl.innerHTML='<div class="hint">No tests sent yet. Click "Send" to evaluate the model live.</div>'; return; }
+    sb.innerHTML=renderScoreBar();
     const perPage=15;
     const totalPages=Math.max(1,Math.ceil(RESULTS.length/perPage));
-    if(PAGE>totalPages) PAGE=totalPages;
+    if(PAGE>totalPages){ PAGE=totalPages; }
     const startI=(PAGE-1)*perPage;
     const pageRows=RESULTS.slice(startI,startI+perPage);
     let h='<table><thead><tr><th>Time</th><th>Machine</th><th>Real</th><th>Predicted</th><th>Cause</th><th>Result</th><th>ms</th><th></th></tr></thead><tbody>';
-    pageRows.forEach((r,pi)=>{
-      const i=startI+pi;
-      const ok=(r.verdict==='TP'||r.verdict==='TN');
-      const vtag=ok?'norm':'anom';
-      const vlabel={TP:'✓ true positive',TN:'✓ true negative',FP:'✗ false alarm',FN:'✗ missed'}[r.verdict];
-      h+=`<tr>
-        <td class="mono">${r.time}</td>
-        <td class="mono">${r.machine}</td>
-        <td><span class="tag ${r.truth==='anomaly'?'anom':'norm'}">${r.truth}</span></td>
-        <td><span class="tag ${r.predicted==='anomaly'?'anom':'norm'}">${r.predicted}</span></td>
-        <td class="mono">${r.cause}</td>
-        <td><span class="tag ${vtag}">${vlabel}</span></td>
-        <td class="mono">${r.ms}</td>
-        <td><span class="preset" onclick="toggleDetail(${i})">details</span></td>
-      </tr>
-      <tr id="det-${i}" style="display:none"><td colspan="8" style="background:#0c1119">${detailHtml(r.detail)}</td></tr>`;
-    });
-    h+='</tbody></table>';
-    // pager controls
+    pageRows.forEach(function(r,pi){ h+=rowHtml(r,startI+pi); });
+    h+="</tbody></table>";
     let pager='<div style="display:flex;gap:8px;align-items:center;margin-top:12px;font-family:var(--mono);font-size:12px">';
-    pager+=`<button class="btn sec small" onclick="gotoPage(${PAGE-1})" ${PAGE<=1?'disabled':''}>← prev</button>`;
-    pager+=`<span style="color:var(--dim)">page ${PAGE} / ${totalPages} · ${RESULTS.length} total tests</span>`;
-    pager+=`<button class="btn sec small" onclick="gotoPage(${PAGE+1})" ${PAGE>=totalPages?'disabled':''}>next →</button>`;
-    pager+='</div>';
+    pager+='<button type="button" class="btn sec small" data-page="'+(PAGE-1)+'"'+(PAGE<=1?" disabled":"")+'>← prev</button>';
+    pager+='<span style="color:var(--dim)">page '+PAGE+' / '+totalPages+' · '+RESULTS.length+' total tests</span>';
+    pager+='<button type="button" class="btn sec small" data-page="'+(PAGE+1)+'"'+(PAGE>=totalPages?" disabled":"")+'>next →</button>';
+    pager+="</div>";
     tbl.innerHTML=h+pager;
   }
-  function gotoPage(p){ const perPage=15; const tp=Math.max(1,Math.ceil(RESULTS.length/perPage)); PAGE=Math.min(Math.max(1,p),tp); renderResults(); }
-  function toggleDetail(i){ const el=document.getElementById('det-'+i); el.style.display=el.style.display==='none'?'table-row':'none'; }
-  function detailHtml(d){
-    if(!d) return '';
-    let h='<div style="padding:10px">';
-    h+=`<div class="kv"><span class="k">model</span><span class="v">${d.model}</span></div>`;
-    if(d.xgb_vote) h+=`<div class="kv"><span class="k">XGBoost</span><span class="v">${d.xgb_vote.is_anomaly?'anomaly':'normal'} (${d.xgb_vote.cause})</span></div>`;
-    if(d.iso_vote) h+=`<div class="kv"><span class="k">IsolationForest</span><span class="v">${d.iso_vote.is_anomaly?'anomaly':'normal'} · ${d.iso_vote.score}</span></div>`;
-    if(d.z_scores){
-      h+='<div class="zgrid">';
-      for(const [k,val] of Object.entries(d.z_scores)){const a=Math.abs(val),cls=a>=3?'hi':a>=2?'mid':'lo';h+=`<div class="zchip ${cls}"><div class="zn">${k}</div><div class="zv">${val>0?'+':''}${val}</div></div>`;}
-      h+='</div>';
-    }
-    return h+'</div>';
-  }
-
+  function gotoPage(p){ const perPage=15; const totalPages=Math.max(1,Math.ceil(RESULTS.length/perPage)); PAGE=Math.min(Math.max(1,p),totalPages); renderResults(); }
+  function toggleDetail(i){ const el=document.getElementById("det-"+i); if(el){ el.style.display=(el.style.display==="none")?"table-row":"none"; } }
   async function loadMachines(){
-    try{const d=await(await fetch(`${API}/machines`)).json();const list=document.getElementById('machinelist');(d.machines||[]).slice(0,250).forEach(m=>{const o=document.createElement('option');o.value=m.machine||m;list.appendChild(o);});}catch(e){}
-  }
-
-  async function loadInfra(){
-    const body=document.getElementById('infra_body');
-    body.innerHTML='<div class="hint"><span class="spin"></span> loading…</div>';
-    let d;
     try{
-      const r=await fetch(`${API}/ui/infra`);
-      if(!r.ok) throw new Error('HTTP '+r.status);
-      d=await r.json();
-    }catch(e){
-      body.innerHTML='<div class="hint" style="color:var(--red)">Failed to reach /ui/infra: '+e.message+'</div>';
-      return;
-    }
-    try{
-      let h='';
-      h+=isec('Docker containers', d.docker_containers||[], ['name','image','status','ports']);
-      h+=isec('Docker images (project)', d.docker_images||[], ['image','size','created']);
-      h+=ipods(d.k8s_pods||[]);
-      h+=isec('Resource usage (kubectl top)', d.k8s_usage||[], ['pod','cpu','memory']);
-      h+=ihpa(d.k8s_hpa||[]);
-      h+=itargets(d.prometheus_targets||[]);
-      h+=ianom(d.live_anomalies||[]);
-      body.innerHTML=h;
-    }catch(e){
-      body.innerHTML='<div class="hint" style="color:var(--red)">Render error: '+e.message+'</div>';
-    }
+      const d=await getJSON(API+"/machines");
+      const list=document.getElementById("machinelist");
+      (d.machines||[]).slice(0,250).forEach(function(m){ const o=document.createElement("option"); o.value=m.machine||m; list.appendChild(o); });
+    }catch(e){ /* autocomplete optional */ }
   }
-  function ititle(x){return `<div style="margin:18px 0 6px;font-family:var(--mono);font-size:12px;color:var(--teal)">${x}</div>`;}
-  function isec(title,rows,cols){let h=ititle(title);if(!rows.length)return h+'<div class="hint">none</div>';h+='<table><thead><tr>'+cols.map(c=>`<th>${c}</th>`).join('')+'</tr></thead><tbody>';for(const r of rows){h+='<tr>'+cols.map(c=>`<td class="mono">${r[c]!=null&&r[c]!==''?r[c]:'—'}</td>`).join('')+'</tr>';}return h+'</tbody></table>';}
-  function ipods(rows){let h=ititle('Kubernetes pods');if(!rows.length)return h+'<div class="hint">cluster unreachable</div>';h+='<table><thead><tr><th>Pod</th><th>Image</th><th>Ready</th><th>Restarts</th><th>Status</th></tr></thead><tbody>';for(const r of rows){h+=`<tr><td class="mono">${r.name}</td><td class="mono">${r.image}</td><td><span class="tag ${r.ready?'norm':'anom'}">${r.ready?'yes':'no'}</span></td><td class="mono">${r.restarts}</td><td><span class="tag ${r.phase==='Running'?'norm':'anom'}">${r.phase}</span></td></tr>`;}return h+'</tbody></table>';}
-  function ihpa(rows){let h=ititle('Autoscaling (HPA)');if(!rows.length)return h+'<div class="hint">no HPA</div>';h+='<table><thead><tr><th>HPA</th><th>Current</th><th>Desired</th><th>Min</th><th>Max</th><th>CPU %</th></tr></thead><tbody>';for(const r of rows){h+=`<tr><td class="mono">${r.name}</td><td class="mono">${r.current}</td><td class="mono">${r.desired}</td><td class="mono">${r.min}</td><td class="mono">${r.max}</td><td class="mono">${r.cpu_util!=null?r.cpu_util+'%':'—'}</td></tr>`;}return h+'</tbody></table>';}
-  function itargets(rows){let h=ititle('Prometheus targets');if(!rows.length)return h+'<div class="hint">Prometheus unreachable</div>';h+='<table><thead><tr><th>Job</th><th>Health</th></tr></thead><tbody>';for(const r of rows){h+=`<tr><td class="mono">${r.job}</td><td><span class="tag ${r.health==='up'?'norm':'anom'}">${r.health}</span></td></tr>`;}return h+'</tbody></table>';}
-  function ianom(rows){let h=ititle('Live anomalies');if(!rows.length)return h+'<div class="hint">none currently</div>';h+='<table><thead><tr><th>Machine</th><th>Role</th><th>Type</th></tr></thead><tbody>';for(const r of rows){const cl=r.role==='likely_root_cause'?'rc':r.role==='downstream_effect'?'de':'iso';h+=`<tr><td class="mono">${r.machine}</td><td><span class="tag ${cl}">${r.role}</span></td><td class="mono">${r.type}</td></tr>`;}return h+'</tbody></table>';}
-
+  document.querySelectorAll(".tabs button").forEach(function(b){ b.addEventListener("click", function(){ activateTab(b.dataset.tab); }); });
+  document.querySelectorAll("[data-preset]").forEach(function(b){ b.addEventListener("click", function(){ applyPreset(b.dataset.preset); }); });
+  document.querySelectorAll("[data-batch]").forEach(function(b){ b.addEventListener("click", function(){ sendTestBatch(Number(b.dataset.batch)); }); });
+  document.getElementById("btnRefreshStatus").addEventListener("click", refreshStatus);
+  document.getElementById("btnRefreshInfra").addEventListener("click", loadInfra);
+  document.getElementById("btnPredict").addEventListener("click", doPredict);
+  document.getElementById("btnCascade").addEventListener("click", injectCascade);
+  document.getElementById("btnClearRC").addEventListener("click", function(){ document.getElementById("rc_result").classList.remove("show"); });
+  document.getElementById("btnClearResults").addEventListener("click", clearResults);
+  document.getElementById("resultsTable").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.detail!==undefined){ toggleDetail(Number(t.dataset.detail)); } if(t.dataset.page!==undefined){ gotoPage(Number(t.dataset.page)); } });
   refreshStatus();
   loadMachines();
-  setInterval(()=>{if(document.getElementById('status').classList.contains('on'))refreshStatus();},10000);
+  setInterval(function(){ if(document.getElementById("status").classList.contains("on")){ refreshStatus(); } }, 10000);
 </script>
 </body>
 </html>
