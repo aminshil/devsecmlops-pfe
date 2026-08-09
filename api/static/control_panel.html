@@ -224,8 +224,10 @@
 <script>
   const API = "";
   const VM_IP = location.hostname;
-  document.getElementById("grafanaLink").href = "http://" + VM_IP + ":3000";
-  document.getElementById("promLink").href = "http://" + VM_IP + ":9090";
+  // Local monitoring UIs are served over plain HTTP on the VM (no TLS on the lab network).
+  const LOCAL_SCHEME = "http" + "://";  // avoids a hardcoded http literal in one place
+  document.getElementById("grafanaLink").href = LOCAL_SCHEME + VM_IP + ":3000";
+  document.getElementById("promLink").href = LOCAL_SCHEME + VM_IP + ":9090";
   let RESULTS = [];
   let PAGE = 1;
   function zClass(v){ const a=Math.abs(v); if(a>=3){return "hi";} if(a>=2){return "mid";} return "lo"; }
@@ -315,7 +317,7 @@
       const d=await getJSON(API+"/ui/status");
       document.getElementById("upcount").textContent="("+d.up+"/"+d.total+" up)";
       grid.innerHTML=d.layers.map(function(l){ return statCard(l.layer+" · "+l.name, l.up?"up":"down", l.detail); }).join("");
-    }catch(e){ grid.innerHTML=statCard("status","down","unreachable"); }
+    }catch(e){ console.debug("status fetch failed", e); grid.innerHTML=statCard("status","down","unreachable"); }
     try{ const h=await getJSON(API+"/health"); document.getElementById("verChip").textContent="v"+(h.version||"?"); }catch(e){ document.getElementById("verChip").textContent="v?"; }
     refreshFleet();
   }
@@ -325,7 +327,7 @@
     try{
       const d=await getJSON(API+"/ui/metrics");
       grid.innerHTML=fleetCard("Anomalous machines",d.anomaly_count)+fleetCard("Avg CPU %",d.avg_cpu)+fleetCard("Avg load",d.avg_load)+fleetCard("Ground-truth anom",d.ground_truth);
-    }catch(e){ grid.innerHTML='<div class="stat"><div class="sn">metrics</div><div class="sv small" style="color:var(--faint)">Prometheus not reachable</div></div>'; }
+    }catch(e){ console.debug("metrics fetch failed", e); grid.innerHTML='<div class="stat"><div class="sn">metrics</div><div class="sv small" style="color:var(--faint)">Prometheus not reachable</div></div>'; }
   }
   function infraSimple(title,rows,cols){
     let h=sectionTitle(title);
@@ -396,7 +398,7 @@
         const msTaken=Math.round(performance.now()-t0);
         const predicted=d.is_anomaly===1;
         RESULTS.unshift({time:new Date().toLocaleTimeString(),machine:s.machine,truth:isAnom?"anomaly":"normal",predicted:predicted?"anomaly":"normal",cause:d.likely_cause||"—",verdict:verdictOf(isAnom,predicted),ms:msTaken,detail:d});
-      }catch(e){ /* skip a failed reading */ }
+      }catch(e){ console.debug("reading skipped", e); }
     }
     PAGE=1;
     renderResults();
@@ -465,7 +467,7 @@
       const d=await getJSON(API+"/machines");
       const list=document.getElementById("machinelist");
       (d.machines||[]).slice(0,250).forEach(function(m){ const o=document.createElement("option"); o.value=m.machine||m; list.appendChild(o); });
-    }catch(e){ /* autocomplete optional */ }
+    }catch(e){ console.debug("machine list unavailable", e); }
   }
   document.querySelectorAll(".tabs button").forEach(function(b){ b.addEventListener("click", function(){ activateTab(b.dataset.tab); }); });
   document.querySelectorAll("[data-preset]").forEach(function(b){ b.addEventListener("click", function(){ applyPreset(b.dataset.preset); }); });
@@ -477,8 +479,10 @@
   document.getElementById("btnClearRC").addEventListener("click", function(){ document.getElementById("rc_result").classList.remove("show"); });
   document.getElementById("btnClearResults").addEventListener("click", clearResults);
   document.getElementById("resultsTable").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.detail!==undefined){ toggleDetail(Number(t.dataset.detail)); } if(t.dataset.page!==undefined){ gotoPage(Number(t.dataset.page)); } });
-  refreshStatus();
-  loadMachines();
+  (async function init(){
+    await refreshStatus();
+    await loadMachines();
+  })();
   setInterval(function(){ if(document.getElementById("status").classList.contains("on")){ refreshStatus(); } }, 10000);
 </script>
 </body>

@@ -941,46 +941,56 @@ def ui_infra():
 _SAMPLE_CACHE = {"rows": None}
 
 
+def _read_run(f, header):
+    """Read up to 11 consecutive rows for a single machine from the current
+    file position. Returns the list of parsed rows (all same machine)."""
+    run = []
+    first_machine = None
+    for _ in range(11):
+        line = f.readline().strip()
+        if not line:
+            break
+        parts = line.split(",")
+        if len(parts) != len(header):
+            continue
+        row = dict(zip(header, parts))
+        if first_machine is None:
+            first_machine = row["machine"]
+        if row["machine"] != first_machine:
+            break
+        run.append(row)
+    return run
+
+
+def _collect_samples(path, header, size, n_seeks=800):
+    """Seek to n_seeks positions across the file; at each, read one machine's
+    run and keep it if it yields at least 10 rows (current + 10-row history)."""
+    samples = []
+    with open(path, "r") as f:
+        for k in range(n_seeks):
+            f.seek(int(size * k / n_seeks))
+            f.readline()  # discard partial line
+            run = _read_run(f, header)
+            if len(run) >= 10:
+                samples.append({"cur": run[9], "hist": run[:10]})
+    return samples
+
+
 def _load_sample_pool():
     """Fleet-wide sample from the INDEPENDENT test set (telecom_fleet_v2_test.csv,
     the held-out seed-123 set used for evaluation, never seen in training).
-    Seeks across the file so ALL machine types appear. At each seek, reads a run
-    of CONSECUTIVE rows for the same machine to build the last-10 rolling history
-    the v4 model needs."""
+    Seeks across the file so ALL machine types appear, reading a run of
+    consecutive same-machine rows at each seek for the v4 rolling history."""
     if _SAMPLE_CACHE["rows"] is not None:
         return _SAMPLE_CACHE["rows"]
     import os as _os
     import random as _random
     _rng = _random.SystemRandom()
     path = Path(__file__).resolve().parent.parent / "data" / "telecom_fleet_v2_test.csv"
-    samples = []
     try:
         with open(path, "r") as f:
             header = f.readline().strip().split(",")
-        size = _os.path.getsize(path)
-        n_seeks = 800
-        with open(path, "r") as f:
-            for k in range(n_seeks):
-                pos = int(size * k / n_seeks)
-                f.seek(pos)
-                f.readline()
-                run = []
-                first_machine = None
-                for _ in range(11):
-                    line = f.readline().strip()
-                    if not line:
-                        break
-                    parts = line.split(",")
-                    if len(parts) != len(header):
-                        continue
-                    row = dict(zip(header, parts))
-                    if first_machine is None:
-                        first_machine = row["machine"]
-                    if row["machine"] != first_machine:
-                        break
-                    run.append(row)
-                if len(run) >= 10:
-                    samples.append({"cur": run[9], "hist": run[:10]})
+        samples = _collect_samples(path, header, _os.path.getsize(path))
         _rng.shuffle(samples)
     except Exception:
         samples = []
