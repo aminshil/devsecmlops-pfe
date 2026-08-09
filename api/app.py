@@ -204,7 +204,7 @@ def _get_stats(machine: str, window: str | None, machine_type: str | None):
 
 app = FastAPI(
     title=f"DevSecMLOps — Anomaly Detector [{MODEL_NAME}]",
-    version="2.14.1",
+    version="2.15.0",
     description=(
         "Per-machine per-time-window z-score + Isolation Forest anomaly detection. "
         "Trained on a 200-machine synthetic Tunisie Telecom fleet "
@@ -283,7 +283,7 @@ def health():
     return {
         "status":          "ok",
         "model":           MODEL_NAME,
-        "version":         "2.14.1",
+        "version":         "2.15.0",
         "n_machines":      len(machines_known),
         "n_features":      len(FEATURES),
         "features":        FEATURES,
@@ -727,7 +727,7 @@ def _port_open(host, port, timeout=2):
 def ui_status():
     """Live health of every platform layer."""
     layers = [
-        {"layer": "L0/L1", "name": "Anomaly API", "up": True, "detail": f"{MODEL_NAME} v2.14.1"},
+        {"layer": "L0/L1", "name": "Anomaly API", "up": True, "detail": f"{MODEL_NAME} v2.15.0"},
         {"layer": "L2", "name": "Docker registry", "up": _port_open("localhost", 5000), "detail": ":5000"},
         {"layer": "L3", "name": "Jenkins", "up": _port_open("localhost", 8080), "detail": "CI/CD"},
         {"layer": "L3", "name": "SonarQube", "up": _port_open("localhost", 9000), "detail": "SAST"},

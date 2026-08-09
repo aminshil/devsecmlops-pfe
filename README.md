@@ -14,7 +14,7 @@ victims when multiple machines alert at once.
 A production-deployed anomaly detection platform for a simulated 200-machine
 telecom fleet, built end-to-end across seven infrastructure layers (L0-L5,
 with L6 as documented future work). Currently serving live in Kubernetes at
-version 2.14.1 (v4 rolling-features XGBoost primary + IsolationForest safety
+version 2.15.0 (v4 rolling-features XGBoost primary + IsolationForest safety
 net, with a hybrid v3/v4 serving path), verified through a 33,600-request
 two-week load test with zero errors.
 
@@ -79,6 +79,7 @@ intact as documented history and fallback options.
 | L3 | Jenkins CI/CD (9 stages, real SonarQube SAST, container smoke test, Trivy) | ✅ Done |
 | L4 | Kubernetes (Minikube): anomaly-api + PostgreSQL StatefulSet for the feedback loop | ✅ Done |
 | L5 | Monitoring (Prometheus, Grafana, real-data replay, K8s monitoring) | ✅ Done |
+| — | Control panel (mission-control web UI at `/ui`: status, operator, root-cause, live demo eval, infrastructure) | ✅ Done |
 | L6 | Ansible (infrastructure as code) | 📋 Planned |
 
 **Current model (v4, offline, seed-123 test set):** F1 = 0.816 · Precision = 0.931 ·
@@ -89,7 +90,7 @@ errors over a 33,600-request two-week demo. The v3 6-feature model (F1 = 0.718
 offline) remains the fallback whenever request history is unavailable.
 
 **Full version history:** see [GitHub Releases](https://github.com/aminshil/devsecmlops-pfe/releases)
-— tagged releases from v0.1.0 (initial POC) through v2.14.1, each with
+— tagged releases from v0.1.0 (initial POC) through v2.15.0, each with
 detailed release notes covering what changed and why.
 
 ---
@@ -1077,6 +1078,84 @@ clean `likely_root_causes` list for direct use in an alert summary.
 
 ---
 
+## Control panel (mission-control UI)
+
+A single web console served by the API at `/ui` that drives the entire
+platform by clicking, not commands — built as the live-demo and operator
+interface. It calls the existing `/predict`, `/root-cause`, `/machines`,
+and `/feedback` endpoints (it does not alter any serving logic) plus three
+small read-only support endpoints (`/ui/status`, `/ui/metrics`, `/ui/infra`).
+
+Six tabs:
+
+- **Status** — live health of all platform layers (L0–L5): API, Docker
+  registry, Jenkins, SonarQube, Kubernetes pods, Prometheus, Grafana, and
+  every exporter, each with an up/down indicator, plus live fleet metrics
+  from Prometheus. Auto-refreshes every 10s.
+- **Operator** — submit a single reading (6 metrics + hour) and see the
+  prediction, likely cause, model votes, and per-feature z-scores, with
+  quick presets (normal / memory-leak / disk / cpu).
+- **Root Cause** — inject a router cascade (a router plus its real
+  `dependency_graph.json` dependents) and watch `/root-cause` rank the
+  culprit vs the downstream victims.
+- **Demo** — send batches of **real, held-out test readings** and score the
+  model live: a table of real-vs-predicted with a TP/TN/FP/FN verdict per
+  row, a running precision/recall/accuracy scorebar, pagination, and an
+  expandable per-prediction detail (both model votes + all six z-scores).
+- **Infrastructure** — full live detail: Docker containers and images,
+  Kubernetes pods (with image tags and restart counts), `kubectl top`
+  resource usage, HPA status, Prometheus target health, and the machines
+  currently flagged anomalous.
+- **Project** — a results summary (model metrics, stack, quality gates).
+
+### Honest demo evaluation, and a bug it exposed
+
+The Demo tab is deliberately built to be *honest*, and getting there
+surfaced a real, instructive bug. Two design rules make it trustworthy:
+
+1. **It evaluates on genuinely held-out data.** The readings are sampled
+   from `data/telecom_fleet_v2_test.csv` — the same independent seed-123
+   test set used for evaluation throughout this project (referenced by
+   `scripts/master_comparison.py` and `scripts/retrain_from_feedback.py`),
+   never seen during training. An earlier version sampled the training
+   file, which would have inflated the numbers by testing on data the model
+   had already learned; that was corrected. The sampler also seeks across
+   the whole file so all 11 machine types appear, and supplies each row's
+   10-reading rolling history so the demo exercises the v4 model, with the
+   row's true label and true `anomaly_type` as ground truth.
+
+2. **A demo-side bug found and fixed (wrong time context).** The sampler
+   originally sent a hardcoded `hour: 14` for every reading. But the model
+   uses **per-time-window baselines** (night/morning/afternoon/evening), so
+   a reading actually recorded at 22:00 was being z-scored against the
+   14:00 baseline — the wrong window. On the same real web-server reading,
+   the correct evening baseline gives cpu z = +0.05 (normal) while the
+   hardcoded-afternoon baseline gives z = −1.65 (pushed toward anomalous);
+   compounded across metrics, this falsely flagged a large fraction of
+   genuinely-normal rows (measured: a 73% false-positive rate on 15 real
+   normal readings). The fix parses the real hour from each row's timestamp
+   and passes it to `/predict`; the false-positive rate on the same rows
+   dropped to 0%. **This was purely a demo-harness bug — it fed the API the
+   wrong time context. The model, the baselines, and the production
+   `/predict` path were correct throughout; the documented evaluation
+   metrics were never affected.** It is recorded here because it is a clean
+   illustration of why per-time-window baselines matter: send the wrong
+   window and even correct readings look anomalous.
+
+### How it is served
+
+The control panel ships in the Docker image (the `COPY api/` step already
+includes `api/static/`), so `/ui` is available wherever the API runs. For
+the live demo it is run as a host process so its status/infra endpoints have
+native access to `kubectl`, `docker`, and Prometheus on the VM; in-cluster it
+still serves the UI and operator/demo tabs, with the host-only infrastructure
+detail limited by the container's access. `start_control_panel.sh` brings up
+the full demo stack (Minikube, exporters, Prometheus, Grafana, node-exporter,
+and the control-panel API) with one command and prints a layer-by-layer
+status readout.
+
+---
+
 ## Docker (L2)
 
 - Base: `python:3.10-slim`, non-root `appuser`, layer-cached deps, model and
@@ -1085,8 +1164,8 @@ clean `likely_root_causes` list for direct use in an alert summary.
 - Local registry (`registry:2`, port 5000) for Jenkins to push to
 
 ```bash
-docker build -t devsecmlops-api:2.14.1 .
-docker run -p 8000:8000 devsecmlops-api:2.14.1
+docker build -t devsecmlops-api:2.15.0 .
+docker run -p 8000:8000 devsecmlops-api:2.15.0
 ```
 
 ---
@@ -1145,7 +1224,7 @@ Minikube, single-node, Docker driver. Single namespace: `ml-serving`
 outside the cluster, not in a K8s namespace -- see MLOps section below
 for why.
 
-- **Deployment:** 2 replicas of `devsecmlops-api:2.14.1`
+- **Deployment:** 2 replicas of `devsecmlops-api:2.15.0`
 - **Service:** NodePort 30080
 - **HorizontalPodAutoscaler:** 2–5 replicas, target 70% CPU
 - **Security:** non-root `securityContext` (`runAsUser: 1000`,
@@ -1200,7 +1279,7 @@ likely_root_causes=['router-01']
 ```bash
 minikube start --driver=docker --force
 minikube addons enable metrics-server
-minikube image load devsecmlops-api:2.14.1
+minikube image load devsecmlops-api:2.15.0
 kubectl apply -f kubernetes/namespace.yaml
 kubectl apply -f kubernetes/postgres.yaml     # PostgreSQL StatefulSet for the feedback loop
 kubectl apply -f kubernetes/deployment.yaml
@@ -1478,8 +1557,8 @@ python ml-model/zscore_demo.py
 MODEL_NAME=telecom uvicorn api.app:app --host 0.0.0.0 --port 8000
 
 # Or containerized
-docker build -t devsecmlops-api:2.14.1 .
-docker run -p 8000:8000 devsecmlops-api:2.14.1
+docker build -t devsecmlops-api:2.15.0 .
+docker run -p 8000:8000 devsecmlops-api:2.15.0
 
 # Test endpoints
 curl localhost:8000/health
