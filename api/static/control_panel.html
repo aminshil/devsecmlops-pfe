@@ -340,19 +340,24 @@
   let PAGE = 1;
   const CAUSE_BY_SPIKE = 'disk_saturation'; // spike readings are disk/cpu heavy
   async function sendTestBatch(n){
-    const ms=['web-01','app-05','db-01','cache-03','queue-02','edge-02','batch-01','router-01','firewall-01','voip-01'];
-    for(let i=0;i<n;i++){
-      const m=ms[Math.floor(Math.random()*ms.length)];
-      const isAnom=Math.random()<0.5;  // ground truth: half anomalies, half normal
-      const metrics=isAnom
-        ? {cpu:95,ram:92,network:45,disk_io:95,disk_usage:96,load_avg:11}
-        : {cpu:22,ram:46,network:35,disk_io:20,disk_usage:40,load_avg:1.0};
-      const t0=performance.now();
+    // Pull REAL labeled readings from the evaluation dataset (true ground truth)
+    let sample;
+    try{
+      const sr = await fetch(`${API}/ui/sample?n=${n}`);
+      sample = await sr.json();
+    }catch(e){ alert('Could not load sample data: '+e.message); return; }
+    const rows = (sample && sample.rows) || [];
+    if(!rows.length){ alert('No sample data available (dataset not found on server).'); return; }
+
+    for(const s of rows){
+      const isAnom = s.true_label === 1;   // real label from the dataset
+      const t0 = performance.now();
       try{
-        const d=await(await fetch(`${API}/predict`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({machine:m,hour:14,metrics})})).json();
-        const ms_taken=Math.round(performance.now()-t0);
-        const predicted=d.is_anomaly===1;
-        // verdict: compare ground truth vs prediction
+        const body={machine:s.machine,hour:s.hour,metrics:s.metrics};
+        if(s.history) body.history=s.history;
+        const d = await (await fetch(`${API}/predict`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+        const ms_taken = Math.round(performance.now()-t0);
+        const predicted = d.is_anomaly === 1;
         let verdict;
         if(isAnom && predicted) verdict='TP';
         else if(!isAnom && !predicted) verdict='TN';
@@ -360,10 +365,9 @@
         else verdict='FN';
         RESULTS.unshift({
           time:new Date().toLocaleTimeString(),
-          machine:m, truth:isAnom?'anomaly':'normal',
+          machine:s.machine, truth:isAnom?'anomaly':'normal',
           predicted:predicted?'anomaly':'normal',
-          cause:d.likely_cause||'—', verdict, ms:ms_taken,
-          detail:d
+          cause:d.likely_cause||'—', verdict, ms:ms_taken, detail:d
         });
       }catch(e){}
     }

@@ -892,3 +892,97 @@ def ui_infra():
     infra["live_anomalies"] = anomalies
 
     return infra
+
+
+# ---------------------------------------------------------------------------
+# Real-data sampler for the demo (independent test set, true labels + causes)
+# ---------------------------------------------------------------------------
+_SAMPLE_CACHE = {"rows": None}
+
+
+def _load_sample_pool():
+    """Fleet-wide sample from the INDEPENDENT test set (telecom_fleet_v2_test.csv,
+    the held-out seed-123 set used for evaluation, never seen in training).
+    Seeks across the file so ALL machine types appear. At each seek, reads a run
+    of CONSECUTIVE rows for the same machine to build the last-10 rolling history
+    the v4 model needs."""
+    if _SAMPLE_CACHE["rows"] is not None:
+        return _SAMPLE_CACHE["rows"]
+    import os as _os
+    import random as _random
+    path = Path(__file__).resolve().parent.parent / "data" / "telecom_fleet_v2_test.csv"
+    samples = []
+    try:
+        with open(path, "r") as f:
+            header = f.readline().strip().split(",")
+        size = _os.path.getsize(path)
+        n_seeks = 800
+        with open(path, "r") as f:
+            for k in range(n_seeks):
+                pos = int(size * k / n_seeks)
+                f.seek(pos)
+                f.readline()
+                run = []
+                first_machine = None
+                for _ in range(11):
+                    line = f.readline().strip()
+                    if not line:
+                        break
+                    parts = line.split(",")
+                    if len(parts) != len(header):
+                        continue
+                    row = dict(zip(header, parts))
+                    if first_machine is None:
+                        first_machine = row["machine"]
+                    if row["machine"] != first_machine:
+                        break
+                    run.append(row)
+                if len(run) >= 10:
+                    samples.append({"cur": run[9], "hist": run[:10]})
+        _random.shuffle(samples)
+    except Exception:
+        samples = []
+    _SAMPLE_CACHE["rows"] = samples
+    return samples
+
+
+@app.get("/ui/sample")
+def ui_sample(n: int = 20):
+    """N real labeled readings from the independent test set, with true cause."""
+    import random as _random
+    pool = _load_sample_pool()
+    if not pool:
+        return {"rows": [], "error": "test dataset not available"}
+    n = max(1, min(n, 100))
+    picks = _random.sample(pool, min(n, len(pool)))
+    out = []
+    for s in picks:
+        try:
+            cur = s["cur"]; hist = s["hist"]
+            # parse real hour from "YYYY-MM-DD HH:MM:SS" so the model uses the
+            # correct per-time-window baseline (hardcoding 14 caused false flags)
+            _ts = str(cur.get("timestamp", ""))
+            try:
+                _hr = int(_ts[11:13])
+            except Exception:
+                _hr = 14
+            out.append({
+                "machine": cur["machine"],
+                "type": cur.get("type", ""),
+                "hour": _hr,
+                "metrics": {
+                    "cpu": float(cur["cpu"]), "ram": float(cur["ram"]),
+                    "network": float(cur["network"]), "disk_io": float(cur["disk_io"]),
+                    "disk_usage": float(cur["disk_usage"]), "load_avg": float(cur["load_avg"]),
+                },
+                "history": {
+                    "cpu": [float(h["cpu"]) for h in hist],
+                    "ram": [float(h["ram"]) for h in hist],
+                    "load_avg": [float(h["load_avg"]) for h in hist],
+                },
+                "true_label": int(cur["label"]),
+                "true_cause": cur.get("anomaly_type", "") or ("normal" if cur["label"] == "0" else "anomaly"),
+            })
+        except Exception:
+            continue
+    return {"rows": out}
