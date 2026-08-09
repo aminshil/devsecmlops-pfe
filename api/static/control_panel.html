@@ -221,7 +221,7 @@
     </div>
   </div>
 </div>
-<script>
+<script type="module">
   const API = "";
   const VM_IP = location.hostname;
   // Local monitoring UIs are served over plain HTTP on the VM (no TLS on the lab network).
@@ -318,7 +318,7 @@
       document.getElementById("upcount").textContent="("+d.up+"/"+d.total+" up)";
       grid.innerHTML=d.layers.map(function(l){ return statCard(l.layer+" · "+l.name, l.up?"up":"down", l.detail); }).join("");
     }catch(e){ console.debug("status fetch failed", e); grid.innerHTML=statCard("status","down","unreachable"); }
-    try{ const h=await getJSON(API+"/health"); document.getElementById("verChip").textContent="v"+(h.version||"?"); }catch(e){ document.getElementById("verChip").textContent="v?"; }
+    try{ const h=await getJSON(API+"/health"); document.getElementById("verChip").textContent="v"+(h.version||"?"); }catch(e){ console.debug("health check failed", e); document.getElementById("verChip").textContent="v?"; }
     refreshFleet();
   }
   function fleetCard(name,val){ return '<div class="stat"><div class="sn">'+name+'</div><div class="sv">'+(val===null||val===undefined?"—":val)+'</div></div>'; }
@@ -479,10 +479,8 @@
   document.getElementById("btnClearRC").addEventListener("click", function(){ document.getElementById("rc_result").classList.remove("show"); });
   document.getElementById("btnClearResults").addEventListener("click", clearResults);
   document.getElementById("resultsTable").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.detail!==undefined){ toggleDetail(Number(t.dataset.detail)); } if(t.dataset.page!==undefined){ gotoPage(Number(t.dataset.page)); } });
-  (async function init(){
-    await refreshStatus();
-    await loadMachines();
-  })();
+  await refreshStatus();
+  await loadMachines();
   setInterval(function(){ if(document.getElementById("status").classList.contains("on")){ refreshStatus(); } }, 10000);
 </script>
 </body>
