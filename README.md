@@ -172,15 +172,34 @@ Machines the model has never seen (`machine+window` not in baseline) must still 
 
 The obvious next step after modeling router->machine dependencies was modeling application-tier calls (web -> app -> db). Built, tested at full scale, and reverted: every model regressed (IsolationForest 0.663 -> 0.599, z-threshold 0.657 -> 0.572). Root cause: service-tier correlation inflated the variance absorbed into each downstream machine's baseline, particularly for types 1-2 hops away, widening what counts as "normal" and making genuine anomalies harder to distinguish. **This is a real, informative negative result** -- documented rather than silently discarded, because knowing what doesn't work matters.
 
-### 7. Why supervised (v2 RandomForest) added on top, not replacing v1
+### 7. Why novelty detection (train on normal-only) was tested and rejected
+A natural alternative for the unsupervised baseline is *novelty detection*:
+train the IsolationForest on confirmed-normal rows only (excluding every
+anomaly from training), so it learns the shape of "normal" and flags any
+deviation. Implemented in `ml-model/train_serving_telecom_novelty.py` and run
+at full scale (11.3M normal-only training rows, evaluated on the same seed-42
+mixed test split): F1 = 0.564, Precision = 0.448, Recall = 0.764, ROC-AUC =
+0.921. Training on normal-only *raises* recall (0.764 vs the mixed-training
+0.650) — the model is more sensitive because it has never been shown that
+some anomaly-adjacent readings are tolerable — but precision *collapses*
+(0.448 vs 0.646): it over-flags, because it never learned where the boundary
+of acceptable near-normal variation lies. Net F1 drops from 0.648 to 0.564,
+while ROC-AUC is essentially unchanged (0.921 vs 0.924), confirming the
+ranking ability is similar and only the operating point moved. **Another
+informative negative result**: pure novelty detection is not adopted, because
+the mixed-training baseline plus a supervised classifier on top gives better
+balanced performance. The experiment is kept because it quantifies exactly
+what novelty detection costs on this data.
+
+### 8. Why supervised (v2 RandomForest) added on top, not replacing v1
 
 IsolationForest tells you *something is wrong* but not *what*. Adding labeled cause data (`anomaly_type` column: cpu_spike, memory_leak, network_flood, disk_saturation, silent_failure, cascade) enabled a supervised classifier to explain the anomaly. RandomForest was chosen over other supervised options because it needs no feature scaling assumptions, handles the 6-feature space cleanly, and is deterministic. Result on independent seed-123 test set: F1 = 0.731 (vs IsolationForest's 0.652). But cascade recall collapsed to 0.029 -- see next decision.
 
-### 8. Why cascade is folded into normal during training
+### 9. Why cascade is folded into normal during training
 
 The generator by design labels cascade anomalies only 40% consistently (a downstream machine affected by a router failure is labeled anomalous 40% of the time, unlabeled 60%, *for the identical feature pattern*). Training a supervised classifier on this noisy label collapses everything -- initial F1 = 0.513, cascade precision = 0.16, poisoning the other classes. Folding cascade into normal during training fixed that (F1 = 0.731) but left RandomForest blind to cascades. Solution: keep IsolationForest as a *safety net* (see next decision).
 
-### 9. Why dual-model architecture (primary + safety net)
+### 10. Why dual-model architecture (primary + safety net)
 
 RandomForest is blind to cascades by construction (see previous). IsolationForest, being unsupervised, has no such blind spot -- it reacts to any statistical deviation regardless of label noise (0.262 cascade recall). Running both means the primary gets high accuracy on the 5 clean cause types AND cascades still get detected via the safety net. Two rejected alternatives:
 
@@ -189,7 +208,7 @@ RandomForest is blind to cascades by construction (see previous). IsolationFores
 
 Both rejections are documented with real numbers, not hand-waved.
 
-### 10. Why XGBoost replaced RandomForest as primary (v3)
+### 11. Why XGBoost replaced RandomForest as primary (v3)
 
 Full-scale offline comparison, same train/test data as v2:
 
@@ -200,11 +219,11 @@ Overall F1 favors RandomForest by 1.3 points, but XGBoost wins per-cause recall 
 
 **Architectural bonus:** XGBoost's 3.6MB model fits directly in the Docker image, eliminating the entire MinIO-fetch-at-startup mechanism built for v2's 125MB RandomForest. Simpler deployment, faster startup, one less runtime dependency.
 
-### 11. Why LightGBM was tested but not adopted
+### 12. Why LightGBM was tested but not adopted
 
 Same methodology as XGBoost: F1 = 0.716, Precision = 0.767, Recall = 0.671, per-cause recall within 0.001-0.002 of XGBoost on every category. Essentially identical performance, 3.0MB model (marginally smaller), 51s training (marginally faster). Kept as evidence because the negative result is genuinely useful: **it confirms the ceiling on this data with these features is a gradient-boosting-family ceiling, not an XGBoost-specific one**. Meaningfully passing F1 = 0.72 would require something structurally different (sequence-aware models, richer temporal features, or larger real-world data), not another gradient booster.
 
-### 12. Why rolling/trend features WERE integrated as v4 (updated)
+### 13. Why rolling/trend features WERE integrated as v4 (updated)
 
 Per-machine rolling mean, rolling std, and delta features (10-reading window,
 cpu/ram/load_avg) were first tested on a 5-day pilot (F1 0.708 -> 0.729) and
@@ -224,31 +243,31 @@ for the stateless-serving rationale. This entry is kept (rather than deleted)
 to record that the original "not integrated" decision was later revisited and
 reversed on stronger full-scale evidence.
 
-### 13. Why SMD real-world validation matters
+### 14. Why SMD real-world validation matters
 
 F1 = 0.269 on the Server Machine Dataset (28 real servers, public benchmark used by OmniAnomaly and other sequence-model papers). Much lower than synthetic F1 = 0.72, and this is the honest point: **published unsupervised sequence models on SMD report F1 in the 0.40-0.55 range** using recurrent architectures that read a sliding window of history. This project prioritizes training speed, interpretability, and simple CI/CD-integrated deployment over the marginal accuracy gains of a recurrent sequence model -- a documented tradeoff, not an oversight. The SMD result's purpose is not to win on the benchmark; it confirms the same per-machine, per-window z-score methodology generalizes to real, independently-collected data and isn't an artifact of the synthetic generator.
 
-### 14. Why MLflow + MinIO run outside the Kubernetes cluster
+### 15. Why MLflow + MinIO run outside the Kubernetes cluster
 
 Same reasoning as Jenkins, SonarQube, and the local Docker registry: **shared platform/tooling services supporting the development process are not the product being served to end users**. In a real organization, one MLflow server tracks experiments across many projects; it does not live inside a single project's own K8s namespace. Only the anomaly-api workload runs in K8s (namespace `ml-serving`), matching how production would separate stateful tooling from stateless application deployments.
 
-### 15. Why the CI/CD pipeline uses fail-fast pytest before SonarQube
+### 16. Why the CI/CD pipeline uses fail-fast pytest before SonarQube
 
 Stage 1b (pytest) runs 15 real tests -- 8 preprocess + 7 API -- before any downstream stage. If a commit breaks the tests, the pipeline stops immediately, before wasting 5-10 minutes on SonarQube scanning, Docker build, Trivy CVE scan, and registry push. Same principle in reverse: SonarQube warnings do NOT abort the pipeline (`abortPipeline: false`), because code quality issues are advisory, not blockers -- a real bug should stop CI, a code smell should not.
 
-### 16. Why the custom SonarQube Quality Gate
+### 17. Why the custom SonarQube Quality Gate
 
 The default Sonar Way gate demands 80% coverage and less than 3% duplication. Neither threshold fits a research-heavy ML repository where most of `ml-model/` is one-shot experiment scripts (not library code intended for unit testing) and 20%+ duplication is intentional (near-identical variant scripts for A/B comparison). Custom gate `devsecmlops-pfe-research`: coverage >= 5% (project has 6.7%, passes honestly), duplication <= 25% (has 21%, passes honestly), 0 New Issues (strict), Security Hotspots strict. **This is engineering judgment, not gaming the metric** -- adjusting thresholds to reflect what "good" actually means for this project, while keeping bug/security requirements strict.
 
-### 17. Why models are baked into the Docker image (v1, v3), not fetched
+### 18. Why models are baked into the Docker image (v1, v3), not fetched
 
 Image tag = exact model version. Immutable, reproducible, no runtime dependency on external artifact storage. v2's 125MB RandomForest violated this rule -- too large for git and too large to bake into the image comfortably -- so v2 needed the MinIO-fetch entrypoint as a workaround. The switch to v3 XGBoost (3.6MB) restored the baked-in pattern and eliminated the MinIO dependency for the primary model. Small model size is a real architectural virtue, not just a nice-to-have.
 
-### 18. Why v2 code paths were kept alive after v3 switch
+### 19. Why v2 code paths were kept alive after v3 switch
 
 Setting `MODEL_NAME=telecom_v2` in the K8s deployment env still fully works. The v2 loading block, MinIO fetch entrypoint, and RandomForest artifact all remain functional. Reason: **additive changes are safer than destructive ones**, and defense-day A/B comparison ("here's v2 running with RandomForest, here's v3 running with XGBoost, watch them differ on the same input") is a real, tangible demonstration that would be lost if v2 were deleted.
 
-### 19. Why PREDICT_THRESHOLD = 0.85 (recall priority)
+### 20. Why PREDICT_THRESHOLD = 0.85 (recall priority)
 
 v3/v4 flag an anomaly when P(normal) < PREDICT_THRESHOLD. The default 0.5
 (plain argmax) was raised to 0.85 in production after an offline threshold
@@ -261,7 +280,7 @@ NOC. This is why live F1 (0.690 at 0.85) is lower than offline F1 (0.816 at
 threshold deliberately trades precision for recall. Configurable via the
 PREDICT_THRESHOLD env var without code changes.
 
-### 20. Why the client supplies rolling history (stateless v4 serving)
+### 21. Why the client supplies rolling history (stateless v4 serving)
 
 v4 needs the last 10 readings per machine to compute rolling features. Three
 ways to get them: (a) keep per-machine buffers inside the API pods -- but with
@@ -274,7 +293,7 @@ API stateless and horizontally scalable, and makes v4 backward compatible
 (history absent -> v3 fallback). The serving-side rolling computation is
 verified byte-identical to the training-time function.
 
-### 21. Why the feedback DB was rebuilt from SQLite to PostgreSQL
+### 22. Why the feedback DB was rebuilt from SQLite to PostgreSQL
 
 The feedback loop was first built on SQLite (single file on a PVC). That was
 rebuilt to PostgreSQL (StatefulSet + headless Service + Secret + PVC) for
@@ -287,7 +306,7 @@ named `window` is a PostgreSQL reserved keyword (SQLite accepted it), so it was
 renamed to `time_window`; and the K8s env ordering matters -- POSTGRES_PASSWORD
 must be declared before DATABASE_URL for `$(VAR)` substitution to resolve.
 
-### 22. Why feedback logging is best-effort, not fail-loud (graceful degradation)
+### 23. Why feedback logging is best-effort, not fail-loud (graceful degradation)
 
 Model serving (/health, /predict) is the critical function; the feedback log is
 secondary. Originally the API called the DB on startup and on every /predict,
@@ -299,7 +318,7 @@ back null, logging is skipped). More robust in production AND makes the smoke
 test pass -- a monitoring API should never stop detecting anomalies because its
 feedback log is offline.
 
-### 23. Why the retrain guardrail is strict, and what 500 rows proved
+### 24. Why the retrain guardrail is strict, and what 500 rows proved
 
 The retrain pipeline only promotes a new model if aggregate F1 does not drop
 AND per-cause recall drops by no more than 5 points on any category. Tested
