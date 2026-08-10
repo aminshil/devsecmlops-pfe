@@ -1,0 +1,67 @@
+---
+# ===========================================================================
+# prerequisites: verify required binaries and bring up the always-on support
+# containers (registry, minio, sonarqube, jenkins) with their real named
+# volumes. These use restart=always so they survive Docker restarts.
+# ===========================================================================
+- name: Verify required binaries are installed
+  ansible.builtin.command: "which {{ item }}"
+  changed_when: false
+  loop: [docker, minikube, kubectl, prometheus]
+  register: bin_check
+  failed_when: bin_check.rc != 0
+
+- name: Check the Python virtualenv exists
+  ansible.builtin.stat:
+    path: "{{ repo_dir }}/venv/bin/activate"
+  register: venv_stat
+
+- name: Warn if virtualenv is missing
+  ansible.builtin.debug:
+    msg: "venv not found at {{ repo_dir }}/venv — create with: python3 -m venv venv && pip install -r requirements.txt"
+  when: not venv_stat.stat.exists
+
+- name: Ensure local Docker registry is running
+  community.docker.docker_container:
+    name: registry
+    image: "{{ img_registry }}"
+    state: started
+    restart_policy: always
+    ports: ["{{ port_registry }}:5000"]
+    volumes: ["registry_data:/var/lib/registry"]
+
+- name: Ensure MinIO (MLflow artifact store) is running
+  community.docker.docker_container:
+    name: minio
+    image: "minio/minio"
+    state: started
+    restart_policy: always
+    command: 'server /data --console-address ":9001"'
+    ports: ["9001:9000", "9002:9001"]
+    volumes: ["minio_data:/data"]
+
+- name: Ensure SonarQube (SAST) is running
+  community.docker.docker_container:
+    name: sonarqube
+    image: "sonarqube:community"
+    state: started
+    restart_policy: always
+    ports: ["9000:9000"]
+    volumes:
+      - "sonarqube_data:/opt/sonarqube/data"
+      - "sonarqube_extensions:/opt/sonarqube/extensions"
+      - "sonarqube_logs:/opt/sonarqube/logs"
+  # From the host: http://localhost:9000. From inside the Jenkins container the
+  # CI pipeline reaches it as http://sonarqube:9000 (Docker name resolution).
+  # Both are correct in their respective network contexts.
+
+- name: Ensure Jenkins (CI/CD) is running
+  community.docker.docker_container:
+    name: jenkins
+    image: "jenkins/jenkins:lts"
+    state: started
+    restart_policy: always
+    ports: ["8080:8080", "50000:50000"]
+    volumes:
+      - "jenkins_home:/var/jenkins_home"
+      - "/var/run/docker.sock:/var/run/docker.sock"

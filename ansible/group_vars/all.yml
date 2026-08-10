@@ -1,0 +1,21 @@
+---
+repo_dir: "{{ playbook_dir }}/.."
+k8s_namespace: ml-serving
+api_image: "devsecmlops-api:2.15.0"
+img_grafana: "grafana/grafana:latest"
+img_node_exporter: "prom/node-exporter:latest"
+img_registry: "registry:2"
+port_control_panel: 8000
+port_grafana: 3000
+port_prometheus: 9090
+port_node_exporter: 9100
+port_replay_exporter: 9200
+port_anomaly_bridge: 9300
+port_k8s_exporter: 9400
+port_registry: 5000
+cp_model_name: telecom_v3
+cp_predict_threshold: "0.85"
+cp_database_url: "postgresql://x:x@localhost:9999/n"
+bin_prometheus: /usr/local/bin/prometheus
+bin_minikube: /usr/local/bin/minikube
+bin_kubectl: /usr/local/bin/kubectl

@@ -1,0 +1,41 @@
+---
+# ===========================================================================
+# control_panel: the mission-control web UI + serving API (L0/L1).
+# Runs as a host uvicorn process on :8000 so its /ui/status and /ui/infra
+# endpoints have native access to kubectl, docker, and Prometheus on the VM
+# (a container cannot reach those). Started idempotently via a pgrep guard.
+# ===========================================================================
+
+- name: Start the control-panel API (uvicorn on :{{ port_control_panel }})
+  ansible.builtin.shell: |
+    cd {{ repo_dir }}
+    source venv/bin/activate
+    pgrep -f "uvicorn api.app:app.*{{ port_control_panel }}" >/dev/null || \
+      MODEL_NAME={{ cp_model_name }} \
+      PREDICT_THRESHOLD={{ cp_predict_threshold }} \
+      DATABASE_URL="{{ cp_database_url }}" \
+      nohup uvicorn api.app:app --host 0.0.0.0 --port {{ port_control_panel }} \
+        > /tmp/control_panel.log 2>&1 &
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Wait for the control panel to answer on its port
+  ansible.builtin.wait_for:
+    host: localhost
+    port: "{{ port_control_panel }}"
+    timeout: 30
+
+- name: Fetch platform layer status from the control panel
+  ansible.builtin.uri:
+    url: "http://localhost:{{ port_control_panel }}/ui/status"
+    return_content: true
+  register: status_resp
+  failed_when: false
+
+- name: Report how many layers are up
+  ansible.builtin.debug:
+    msg: >-
+      Control panel live at http://<vm-ip>:{{ port_control_panel }}/ui —
+      {{ (status_resp.json.up | default('?')) }}/{{ (status_resp.json.total | default('?')) }} layers up
+  when: status_resp.json is defined

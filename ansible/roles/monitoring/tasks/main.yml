@@ -1,0 +1,80 @@
+---
+# ===========================================================================
+# monitoring: the observability stack (L5).
+#   - Grafana        : container, persistent volume, restart=always (:3000)
+#   - node-exporter  : container, host network + host rootfs mount (:9100)
+#   - replay/bridge/k8s exporters : host Python processes (:9200/:9300/:9400)
+#   - Prometheus     : host binary scraping all exporters (:9090)
+#
+# The exporters and Prometheus run as background host processes (not systemd),
+# so they are started idempotently: a pgrep guard means re-running the play
+# does not spawn duplicates.
+# ===========================================================================
+
+- name: Ensure Grafana is running (persistent volume, host network)
+  community.docker.docker_container:
+    name: grafana
+    image: "{{ img_grafana }}"
+    state: started
+    restart_policy: always
+    network_mode: host
+    env:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+    volumes:
+      - "grafana-data:/var/lib/grafana"
+
+- name: Ensure node-exporter is running (host rootfs for real disk metrics)
+  community.docker.docker_container:
+    name: node-exporter
+    image: "{{ img_node_exporter }}"
+    state: started
+    restart_policy: "no"
+    network_mode: host
+    volumes:
+      - "/:/host:ro,rslave"
+    command: "--path.rootfs=/host"
+
+- name: Start the replay exporter (fleet data -> Prometheus, :9200)
+  ansible.builtin.shell: |
+    cd {{ repo_dir }}
+    pgrep -f replay_exporter.py >/dev/null || \
+      nohup python3 monitoring/replay_exporter.py > /tmp/replay.log 2>&1 &
+  args:
+    executable: /bin/bash
+  register: replay_start
+  changed_when: "'already' not in replay_start.stdout"
+
+- name: Start the anomaly bridge (calls /predict + /root-cause, :9300)
+  ansible.builtin.shell: |
+    cd {{ repo_dir }}
+    pgrep -f anomaly_bridge.py >/dev/null || \
+      nohup python3 monitoring/anomaly_bridge.py > /tmp/bridge.log 2>&1 &
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Start the k8s exporter (pod/HPA metrics via kubectl, :9400)
+  ansible.builtin.shell: |
+    cd {{ repo_dir }}
+    pgrep -f k8s_exporter.py >/dev/null || \
+      nohup python3 monitoring/k8s_exporter.py > /tmp/k8s_exp.log 2>&1 &
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Start Prometheus (scrapes node-exporter + the 3 exporters, :9090)
+  ansible.builtin.shell: |
+    cd {{ repo_dir }}
+    pgrep -f "prometheus --config" >/dev/null || \
+      nohup {{ bin_prometheus }} --config.file=monitoring/prometheus.yml \
+        --storage.tsdb.path=/tmp/prom_data > /tmp/prom.log 2>&1 &
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Wait for Prometheus to answer on its port
+  ansible.builtin.wait_for:
+    host: localhost
+    port: "{{ port_prometheus }}"
+    timeout: 30

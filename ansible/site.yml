@@ -1,0 +1,25 @@
+---
+# ===========================================================================
+# DevSecMLOps platform — full bring-up as infrastructure-as-code (L6).
+# Reproduces the entire running platform on a provisioned Ubuntu VM:
+#   prerequisites -> monitoring -> kubernetes -> control_panel
+#
+# Usage (from the ansible/ directory):
+#   ansible-playbook -i inventory.ini site.yml
+# Run part of it:
+#   ansible-playbook -i inventory.ini site.yml --tags monitoring
+# Dry run:
+#   ansible-playbook -i inventory.ini site.yml --check
+# ===========================================================================
+- name: Provision and launch the DevSecMLOps platform
+  hosts: platform
+  gather_facts: true
+  roles:
+    - role: prerequisites
+      tags: [prerequisites, setup]
+    - role: monitoring
+      tags: [monitoring, observability]
+    - role: kubernetes
+      tags: [kubernetes, k8s]
+    - role: control_panel
+      tags: [control_panel, ui]

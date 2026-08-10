@@ -1,0 +1,70 @@
+---
+# ===========================================================================
+# kubernetes: the K8s serving layer (L4).
+#   - Start Minikube (Docker driver, --force after any Docker restart)
+#   - Enable metrics-server (needed for HPA CPU utilisation)
+#   - Apply manifests in dependency order: namespace -> postgres -> deployment
+#     -> service -> hpa
+#   - Load the API image into Minikube (imagePullPolicy: Never pattern)
+#   - Wait for postgres and the anomaly-api pods to become Ready
+# ===========================================================================
+
+- name: Check whether Minikube is already running
+  ansible.builtin.command: "{{ bin_minikube }} status --format '{{ '{{' }}.Host{{ '}}' }}'"
+  register: mk_status
+  changed_when: false
+  failed_when: false
+
+- name: Start Minikube (Docker driver, forced)
+  ansible.builtin.command: "{{ bin_minikube }} start --driver=docker --force"
+  when: "'Running' not in mk_status.stdout"
+  register: mk_start
+  changed_when: "'Done' in mk_start.stdout or mk_start.rc == 0"
+
+- name: Enable the metrics-server addon (HPA CPU metrics)
+  ansible.builtin.command: "{{ bin_minikube }} addons enable metrics-server"
+  register: ms_enable
+  changed_when: "'enabled' in ms_enable.stdout"
+  failed_when: false
+
+- name: Load the API image into Minikube (imagePullPolicy Never pattern)
+  ansible.builtin.command: "{{ bin_minikube }} image load {{ api_image }}"
+  register: img_load
+  changed_when: false
+  failed_when: false
+
+- name: Apply Kubernetes manifests in dependency order
+  ansible.builtin.command: "{{ bin_kubectl }} apply -f {{ repo_dir }}/kubernetes/{{ item }}"
+  loop:
+    - namespace.yaml
+    - postgres.yaml
+    - deployment.yaml
+    - service.yaml
+    - hpa.yaml
+  register: kubectl_apply
+  changed_when: "'created' in kubectl_apply.stdout or 'configured' in kubectl_apply.stdout"
+
+- name: Wait for the postgres pod to be Ready
+  ansible.builtin.command: >
+    {{ bin_kubectl }} wait --for=condition=ready pod
+    -l app=postgres -n {{ k8s_namespace }} --timeout=120s
+  register: pg_wait
+  changed_when: false
+  failed_when: false
+
+- name: Wait for the anomaly-api pods to be Ready
+  ansible.builtin.command: >
+    {{ bin_kubectl }} wait --for=condition=ready pod
+    -l app=anomaly-api -n {{ k8s_namespace }} --timeout=120s
+  register: api_wait
+  changed_when: false
+  failed_when: false
+
+- name: Show final pod status
+  ansible.builtin.command: "{{ bin_kubectl }} get pods -n {{ k8s_namespace }}"
+  register: pods_final
+  changed_when: false
+
+- name: Display pods
+  ansible.builtin.debug:
+    var: pods_final.stdout_lines

@@ -13,7 +13,7 @@ victims when multiple machines alert at once.
 
 A production-deployed anomaly detection platform for a simulated 200-machine
 telecom fleet, built end-to-end across seven infrastructure layers (L0-L5,
-with L6 as documented future work). Currently serving live in Kubernetes at
+all seven now built, L6 being an idempotent Ansible playbook). Currently serving live in Kubernetes at
 version 2.15.0 (v4 rolling-features XGBoost primary + IsolationForest safety
 net, with a hybrid v3/v4 serving path), verified through a 33,600-request
 two-week load test with zero errors.
@@ -80,7 +80,7 @@ intact as documented history and fallback options.
 | L4 | Kubernetes (Minikube): anomaly-api + PostgreSQL StatefulSet for the feedback loop | ✅ Done |
 | L5 | Monitoring (Prometheus, Grafana, real-data replay, K8s monitoring) | ✅ Done |
 | — | Control panel (mission-control web UI at `/ui`: status, operator, root-cause, live demo eval, infrastructure) | ✅ Done |
-| L6 | Ansible (infrastructure as code) | 📋 Planned |
+| L6 | Ansible (infrastructure as code): one playbook, four roles, reproduces the platform from a provisioned VM | ✅ Done |
 
 **Current model (v4, offline, seed-123 test set):** F1 = 0.816 · Precision = 0.931 ·
 Recall = 0.726 on a 200-machine synthetic Tunisie Telecom fleet, 6 base features +
@@ -1469,6 +1469,97 @@ mlflow server --host 0.0.0.0 --port 5001 \
 
 ---
 
+## Ansible (L6)
+
+The final layer turns the entire platform bring-up into **infrastructure as
+code**. Everything the earlier layers set up by hand is described declaratively
+in one Ansible playbook and brought up idempotently with a single command:
+`ansible-playbook site.yml`.
+
+### Structure
+
+```
+ansible/
+  inventory.ini         localhost (the platform runs on one VM)
+  group_vars/all.yml    images, ports, control-panel env, binary paths
+  site.yml              the playbook: four roles, tagged, in order
+  roles/
+    prerequisites/      binaries + always-on support containers
+    monitoring/         Grafana, node-exporter, exporters, Prometheus
+    kubernetes/         Minikube + manifests + readiness waits
+    control_panel/      the mission-control API on :8000
+```
+
+### What each role does
+
+1. **prerequisites** — verifies required binaries (`docker`, `minikube`,
+   `kubectl`, `prometheus`), checks the Python virtualenv, and brings up the
+   always-on support containers (`registry`, `minio`, `sonarqube`, `jenkins`)
+   with their real named volumes and `restart=always` policy via the
+   declarative `community.docker` collection.
+2. **monitoring** — Grafana (persistent `grafana-data` volume, host network,
+   `restart=always`, :3000), node-exporter (host network + `-v /:/host:ro,rslave`
+   rootfs mount for real VM disk metrics, :9100), the three host exporters
+   (replay :9200, anomaly-bridge :9300, k8s :9400), and Prometheus (:9090)
+   scraping all of them.
+3. **kubernetes** — starts Minikube (Docker driver, `--force`), enables
+   metrics-server, loads the API image (`imagePullPolicy: Never` pattern),
+   applies the manifests in order (`namespace → postgres → deployment →
+   service → hpa`), and waits for the `postgres` and `anomaly-api` pods to
+   become Ready.
+4. **control_panel** — launches the mission-control API/UI (uvicorn on :8000)
+   with the production env (`MODEL_NAME`, `PREDICT_THRESHOLD`, `DATABASE_URL`)
+   and reports how many platform layers came up.
+
+### Running it
+
+```
+cd ansible
+ansible-galaxy collection install community.docker   # one-time
+
+# Full platform bring-up (all four roles, in order)
+ansible-playbook -i inventory.ini site.yml
+
+# Only part of the stack
+ansible-playbook -i inventory.ini site.yml --tags monitoring
+ansible-playbook -i inventory.ini site.yml --tags kubernetes,control_panel
+
+# Dry run — report what would change without applying anything
+ansible-playbook -i inventory.ini site.yml --check
+```
+
+### Idempotency (verified, not assumed)
+
+Re-running the playbook is safe. Container tasks use
+`community.docker.docker_container` (declarative — no duplicate containers),
+and the host processes (exporters, Prometheus, uvicorn) are guarded with
+`pgrep` so a second run does not spawn duplicates. Verified by a real run
+against the already-running stack: every process stayed single-instance
+(`pgrep -c` returned 1 for each), and the play reported `failed=0` with most
+tasks `ok` rather than `changed`.
+
+### Honest design notes
+
+- **Host processes vs systemd.** The exporters, Prometheus, and the control
+  panel run as background host processes — matching how the platform actually
+  runs for the demo — not as systemd units. Ansible starts them idempotently
+  rather than pretending they are managed services.
+- **SonarQube hostname.** From the host, SonarQube is `http://localhost:9000`.
+  From inside the Jenkins container the CI pipeline reaches it as
+  `http://sonarqube:9000` (Docker resolves the container name). Both are
+  correct in their respective network contexts.
+- **Image loading.** The API image is loaded into Minikube directly
+  (`minikube image load`, `imagePullPolicy: Never`) rather than pulled from the
+  local registry, for the same single-node reason documented in the Kubernetes
+  section.
+- **Scope.** Ansible automates the *platform bring-up*, not base-OS package
+  installation: the VM is expected to already have Docker, Minikube, kubectl,
+  and the Prometheus binary, with the repo cloned and its virtualenv created.
+
+---
+
+---
+
 ## Repository layout
 
 ```
@@ -1597,8 +1688,6 @@ python monitoring/k8s_exporter.py &      # publishes K8s pod/HPA status
 
 ## Roadmap
 
-- **L6 — Ansible:** single playbook to reproduce the entire platform from
-  a fresh bare Ubuntu VM
 - **Continuous learning (documented, not implemented):** a tiered
   retraining design was scoped but not built. New-machine detection and
   lightweight baseline updates (online mean/std, e.g. Welford's algorithm)
