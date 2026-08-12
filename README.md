@@ -79,7 +79,7 @@ intact as documented history and fallback options.
 | L3 | Jenkins CI/CD (9 stages, real SonarQube SAST, container smoke test, Trivy) | ✅ Done |
 | L4 | Kubernetes (Minikube): anomaly-api + PostgreSQL StatefulSet for the feedback loop | ✅ Done |
 | L5 | Monitoring (Prometheus, Grafana, real-data replay, K8s monitoring) | ✅ Done |
-| — | Control panel (mission-control web UI at `/ui`: status, operator, root-cause, live demo eval, infrastructure) | ✅ Done |
+| — | Control panel (mission-control web UI at `/ui`: status, operator, root-cause, live demo eval, infrastructure, training console) | ✅ Done |
 | L6 | Ansible (infrastructure as code): one playbook, four roles, reproduces the platform from a provisioned VM | ✅ Done |
 
 **Current model (v4, offline, seed-123 test set):** F1 = 0.816 · Precision = 0.931 ·
@@ -90,7 +90,7 @@ errors over a 33,600-request two-week demo. The v3 6-feature model (F1 = 0.718
 offline) remains the fallback whenever request history is unavailable.
 
 **Full version history:** see [GitHub Releases](https://github.com/aminshil/devsecmlops-pfe/releases)
-— tagged releases from v0.1.0 (initial POC) through v2.15.0, each with
+— tagged releases from v0.1.0 (initial POC) through v2.17.0, each with
 detailed release notes covering what changed and why.
 
 ---
@@ -1172,6 +1172,59 @@ detail limited by the container's access. `start_control_panel.sh` brings up
 the full demo stack (Minikube, exporters, Prometheus, Grafana, node-exporter,
 and the control-panel API) with one command and prints a layer-by-layer
 status readout.
+
+---
+
+### Training console (interactive MLOps: train, verify, deploy)
+
+The control panel is not only a monitoring and demo surface — it also exposes
+the **model lifecycle** interactively, through a Training tab that turns
+"train a model, check it, ship it" into something you can watch happen. This
+is the MLOps loop made tangible, and it is deliberately honest at every step.
+
+The flow has four stages, each backed by a real endpoint:
+
+**1. Train.** Pick any dataset from `data/` (the dropdown scans the folder
+live, so a newly-added CSV appears automatically), pick a model, set the
+hyperparameters (`contamination`, `n_estimators`), and choose a sample size —
+from 5,000 rows (very fast) up to the full dataset (the whole 17.28M-row
+fleet). Training is **real**: it reuses the production `preprocess.py`, so the
+per-machine per-time-window z-scoring is identical to what the served model
+uses — not a simplified stand-in. It runs on a background thread with a
+single-job lock (two trainings cannot run at once, which protects the shared
+VM from an out-of-memory cascade), and it is **schema-adaptive**: fleet
+datasets (with `machine`, `timestamp`, and the six features) and SMD-style
+datasets (a few features, no machine column) both train, the latter by
+synthesizing a single global baseline so the same z-scoring path still applies.
+
+**2. Compare.** Every run this session lands in a comparison table alongside
+the highlighted production baseline (v4, F1 0.816), so you can see immediately
+how a fresh IsolationForest stacks up: its F1, precision, recall, ROC-AUC, the
+exact parameters, and how much data it saw.
+
+**3. Verify (the guardrail).** Before anything can be registered, a run must
+pass the guardrail: its F1 must be at least the production F1 (0.816). This is
+the same principle enforced by `scripts/retrain_from_feedback.py` — a new
+model may only be promoted if it does not regress. The verdict is explicit
+(PASS or REJECT) with the reasoning shown. In practice a single quick-sampled
+IsolationForest does **not** beat the tuned dual-model, so the guardrail
+rejects it — and that rejection is the point: it demonstrates, live, that the
+system will not let a worse model reach production, even deliberately. A full
+17.28M-row training run scored F1 0.664 and was correctly rejected against the
+0.816 baseline.
+
+**4. Register + deploy (safely).** Only a verified run can be registered.
+Registering saves the artifact and surfaces the **exact** `docker build`,
+`minikube image load`, and `kubectl set image` commands a real rollout would
+run — shown, never executed from the browser. Rolling the live Kubernetes pods
+stays a deliberate, manual step: the console gets you to the door of
+production and hands you the key, rather than pushing you through it.
+
+The backend lives in `api/training.py` (isolated from the serving path) and is
+mounted through six endpoints: `/ui/datasets`, `/ui/train`, `/ui/train/status`,
+`/ui/train/runs`, `/ui/verify`, and `/ui/register`. The whole flow was verified
+end to end — a full-fleet training run, a correct guardrail rejection, and a
+register call refused because the run had not passed verification.
 
 ---
 
