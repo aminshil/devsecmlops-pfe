@@ -204,7 +204,7 @@ def _get_stats(machine: str, window: str | None, machine_type: str | None):
 
 app = FastAPI(
     title=f"DevSecMLOps — Anomaly Detector [{MODEL_NAME}]",
-    version="2.15.0",
+    version="2.16.0",
     description=(
         "Per-machine per-time-window z-score + Isolation Forest anomaly detection. "
         "Trained on a 200-machine synthetic Tunisie Telecom fleet "
@@ -283,7 +283,7 @@ def health():
     return {
         "status":          "ok",
         "model":           MODEL_NAME,
-        "version":         "2.15.0",
+        "version":         "2.16.0",
         "n_machines":      len(machines_known),
         "n_features":      len(FEATURES),
         "features":        FEATURES,
@@ -764,7 +764,7 @@ _PORT_LAYERS = [
 def ui_status():
     """Live health of every platform layer."""
     layers = [{"layer": "L0/L1", "name": "Anomaly API", "up": True,
-               "detail": f"{MODEL_NAME} v2.15.0"}]
+               "detail": f"{MODEL_NAME} v2.16.0"}]
     for host, port, layer, name, detail in _PORT_LAYERS:
         if layer == "L5":
             continue  # add L5 after the K8s layer for ordering
@@ -1039,3 +1039,62 @@ def ui_sample(n: int = 20):
         except Exception:
             continue
     return {"rows": out}
+
+
+# ===========================================================================
+# Training console (MLOps tab) — pick a dataset, train for real, compare runs,
+# verify against the production baseline (guardrail), register + show deploy.
+# Backed by api/training.py. This is a demo/ops surface, not the serving path.
+# ===========================================================================
+from api import training as _training
+
+
+class _TrainIn(BaseModel):
+    dataset: str
+    model: str = "isolation_forest"
+    contamination: float = 0.068
+    n_estimators: int = 200
+    sample_rows: int = 20000  # 0 = full dataset
+
+
+class _RunRef(BaseModel):
+    run_id: str
+
+
+@app.get("/ui/datasets")
+def ui_datasets():
+    """Real CSVs under data/ that can be trained on."""
+    return {"datasets": _training.list_datasets()}
+
+
+@app.post("/ui/train")
+def ui_train(body: _TrainIn):
+    """Start a real training run on a background thread (one at a time)."""
+    return _training.start_training(
+        body.dataset, body.model,
+        {"contamination": body.contamination, "n_estimators": body.n_estimators},
+        body.sample_rows)
+
+
+@app.get("/ui/train/status")
+def ui_train_status():
+    """Poll the active training job."""
+    return _training.training_status()
+
+
+@app.get("/ui/train/runs")
+def ui_train_runs():
+    """All runs this session + the production baseline (for the comparison table)."""
+    return _training.list_runs()
+
+
+@app.post("/ui/verify")
+def ui_verify(body: _RunRef):
+    """Guardrail: new F1 must not regress vs production. Returns PASS/REJECT."""
+    return _training.verify_run(body.run_id)
+
+
+@app.post("/ui/register")
+def ui_register(body: _RunRef):
+    """Register a verified run + return the real kubectl deploy commands (shown)."""
+    return _training.register_run(body.run_id)

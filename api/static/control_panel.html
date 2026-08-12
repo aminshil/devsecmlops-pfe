@@ -113,6 +113,7 @@
     <button type="button" data-tab="rootcause">Root Cause</button>
     <button type="button" data-tab="demo">Demo</button>
     <button type="button" data-tab="infra">Infrastructure</button>
+    <button type="button" data-tab="training">Training</button>
     <button type="button" data-tab="summary">Project</button>
   </div>
 
@@ -204,6 +205,51 @@
       <div id="infra_body"><div class="hint"><span class="spin"></span> loading…</div></div>
     </div>
   </div>
+  <div class="tabpage" id="training">
+    <div class="card" style="margin-bottom:16px">
+      <h3>Train a model</h3>
+      <div class="sub">Pick a dataset, a model, and parameters, then train for real. Training reuses the production preprocessing (per-machine per-window z-scoring). Large datasets are sampled so the run is fast and memory-safe; choose "full" to use everything.</div>
+      <div class="grid g2">
+        <div>
+          <label for="tr_dataset">Dataset</label>
+          <select id="tr_dataset"></select>
+          <label for="tr_model">Model</label>
+          <select id="tr_model">
+            <option value="isolation_forest">IsolationForest (unsupervised)</option>
+          </select>
+          <label for="tr_sample">Sample size (rows)</label>
+          <select id="tr_sample">
+            <option value="5000">5,000 — very fast</option>
+            <option value="20000" selected>20,000 — fast</option>
+            <option value="100000">100,000 — slower</option>
+            <option value="500000">500,000 — slow</option>
+            <option value="0">full dataset — slowest, memory-heavy</option>
+          </select>
+        </div>
+        <div>
+          <label for="tr_contam">contamination (expected anomaly fraction)</label>
+          <input id="tr_contam" type="number" step="0.001" value="0.068">
+          <label for="tr_trees">n_estimators (trees)</label>
+          <input id="tr_trees" type="number" value="200">
+          <button type="button" class="btn" id="btnTrain" style="width:100%">Train</button>
+          <div id="tr_progress" class="hint" style="margin-top:10px"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <h3>Runs this session <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshRuns">↻</button></h3>
+      <div class="sub">Every run compared against the production baseline. Verify a run against the guardrail; only a run that passes can be registered.</div>
+      <div id="tr_runs"><div class="hint">No runs yet — train a model above.</div></div>
+    </div>
+
+    <div class="card" id="tr_deploy_card" style="display:none">
+      <h3>Deploy commands</h3>
+      <div class="sub">Registered artifact. These are the exact commands a real rollout runs — shown here, not executed (deploying to live pods is a deliberate manual step).</div>
+      <pre id="tr_deploy" style="white-space:pre-wrap"></pre>
+    </div>
+  </div>
+
   <div class="tabpage" id="summary">
     <div class="card">
       <h3>Project summary</h3>
@@ -214,7 +260,7 @@
         <div class="sumcard"><div class="st">Best config</div><div class="sl">v4 + per-class</div><div class="sl">F1 <b>0.823</b></div><div class="sl">Precision <b>0.953</b></div></div>
         <div class="sumcard"><div class="st">Architecture</div><div class="sl">XGBoost primary</div><div class="sl">+ IsolationForest net</div><div class="sl">6 base + 9 rolling feat</div></div>
         <div class="sumcard"><div class="st">Stack</div><div class="sl">Jenkins · SonarQube</div><div class="sl">Docker · K8s · Trivy</div><div class="sl">Prometheus · Grafana</div><div class="sl">MLflow · MinIO</div></div>
-        <div class="sumcard"><div class="st">Quality</div><div class="sl">15 pytest <b>pass</b></div><div class="sl">SonarQube <b>0 issues</b></div><div class="sl">Trivy <b>0 CVEs</b></div><div class="sl">v2.15.0 tagged</div></div>
+        <div class="sumcard"><div class="st">Quality</div><div class="sl">15 pytest <b>pass</b></div><div class="sl">SonarQube <b>0 issues</b></div><div class="sl">Trivy <b>0 CVEs</b></div><div class="sl">v2.16.0 tagged</div></div>
         <div class="sumcard"><div class="st">Feedback loop</div><div class="sl">PostgreSQL StatefulSet</div><div class="sl">Guardrailed retrain</div><div class="sl">Operator verdicts</div></div>
         <div class="sumcard"><div class="st">Fleet</div><div class="sl">200 machines</div><div class="sl">11 types</div><div class="sl">6 anomaly types</div></div>
       </div>
@@ -237,10 +283,109 @@
   async function getJSON(url, opts){ const r=await fetch(url,opts); const d=await r.json(); if(!r.ok){ throw new Error((d&&d.detail)?d.detail:("HTTP "+r.status)); } return d; }
   function activateTab(id){
     document.querySelectorAll(".tabpage").forEach(function(p){ p.classList.remove("on"); });
-    document.querySelectorAll(".tabs button").forEach(function(b){ b.classList.toggle("on", b.dataset.tab===id); });
+    // ---- Training (MLOps) tab ----
+  let TR_POLL = null;
+  async function loadDatasets(){
+    try{
+      const d = await getJSON(API + "/ui/datasets");
+      const sel = document.getElementById("tr_dataset");
+      sel.innerHTML = "";
+      (d.datasets || []).forEach(function(ds){
+        const o = document.createElement("option");
+        o.value = ds.name;
+        o.textContent = ds.name + " (" + ds.size_mb + " MB" + (ds.big ? ", big" : "") + ")";
+        sel.appendChild(o);
+      });
+    }catch(e){ console.debug("datasets load failed", e); }
+  }
+  async function startTrain(){
+    const body = {
+      dataset: document.getElementById("tr_dataset").value,
+      model: document.getElementById("tr_model").value,
+      contamination: Number(document.getElementById("tr_contam").value),
+      n_estimators: Number(document.getElementById("tr_trees").value),
+      sample_rows: Number(document.getElementById("tr_sample").value)
+    };
+    const prog = document.getElementById("tr_progress");
+    prog.innerHTML = '<span class="spin"></span> starting…';
+    try{
+      const r = await getJSON(API + "/ui/train", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+      if(!r.ok){ prog.textContent = "could not start: " + (r.error || "unknown"); return; }
+      pollTrain();
+    }catch(e){ prog.textContent = "error: " + e.message; }
+  }
+  function pollTrain(){
+    if(TR_POLL){ clearInterval(TR_POLL); }
+    const prog = document.getElementById("tr_progress");
+    TR_POLL = setInterval(async function(){
+      try{
+        const s = await getJSON(API + "/ui/train/status");
+        if(s.running){
+          prog.innerHTML = '<span class="spin"></span> ' + (s.status || "training…");
+        }else{
+          clearInterval(TR_POLL); TR_POLL = null;
+          prog.textContent = (s.status === "done") ? "✓ training complete" : ("✗ " + s.status);
+          loadRuns();
+        }
+      }catch(e){ clearInterval(TR_POLL); TR_POLL = null; prog.textContent = "status error"; }
+    }, 1500);
+  }
+  function metricCell(v){ return (v === null || v === undefined) ? "—" : v; }
+  async function loadRuns(){
+    const box = document.getElementById("tr_runs");
+    try{
+      const d = await getJSON(API + "/ui/train/runs");
+      const prod = d.production || {};
+      let h = '<table><thead><tr><th>Run</th><th>Dataset</th><th>Model</th><th>F1</th><th>Precision</th><th>Recall</th><th>ROC-AUC</th><th>Data</th><th></th></tr></thead><tbody>';
+      h += '<tr style="background:rgba(54,224,172,.07)"><td class="mono">production</td><td class="mono">telecom_fleet</td><td class="mono">v4 (XGB+ISO)</td><td class="mono"><b>' + prod.f1 + '</b></td><td class="mono">' + metricCell(prod.precision) + '</td><td class="mono">' + metricCell(prod.recall) + '</td><td class="mono">—</td><td class="mono">baseline</td><td></td></tr>';
+      (d.runs || []).forEach(function(r){
+        if(r.error){
+          h += '<tr><td class="mono">' + r.run_id + '</td><td class="mono">' + r.dataset + '</td><td class="mono">' + r.model + '</td><td colspan="5" style="color:var(--red)">error: ' + r.error + '</td><td></td></tr>';
+          return;
+        }
+        const m = r.metrics || {};
+        const vtag = (r.verified === true) ? '<span class="tag norm">verified</span>' : (r.verified === false ? '<span class="tag anom">rejected</span>' : '');
+        h += '<tr><td class="mono">' + r.run_id + ' ' + vtag + '</td><td class="mono">' + r.dataset + '</td><td class="mono">' + r.model + '</td><td class="mono"><b>' + m.f1 + '</b></td><td class="mono">' + metricCell(m.precision) + '</td><td class="mono">' + metricCell(m.recall) + '</td><td class="mono">' + metricCell(m.roc_auc) + '</td><td class="mono" style="font-size:11px">' + (r.data_note || "") + '</td>';
+        h += '<td><button type="button" class="linkbtn" data-verify="' + r.run_id + '">verify</button>';
+        if(r.verified === true){ h += ' <button type="button" class="linkbtn" data-register="' + r.run_id + '">register</button>'; }
+        h += '</td></tr>';
+        if(r.verify_reason){ h += '<tr><td colspan="9" style="font-size:12px;color:var(--dim);padding:6px 10px">' + r.verify_reason + '</td></tr>'; }
+      });
+      h += '</tbody></table>';
+      box.innerHTML = h;
+    }catch(e){ box.innerHTML = '<div class="hint" style="color:var(--red)">could not load runs: ' + e.message + '</div>'; }
+  }
+  async function verifyRun(runId){
+    try{
+      const r = await getJSON(API + "/ui/verify", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({run_id: runId})});
+      const verdict = r.passed ? "✓ PASS" : "✗ REJECT";
+      alert(verdict + "\n\n" + (r.reason || ""));
+      loadRuns();
+    }catch(e){ alert("verify error: " + e.message); }
+  }
+  async function registerRun(runId){
+    try{
+      const r = await getJSON(API + "/ui/register", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({run_id: runId})});
+      if(!r.ok){ alert("register refused: " + (r.error || "unknown")); return; }
+      const card = document.getElementById("tr_deploy_card");
+      document.getElementById("tr_deploy").textContent = (r.deploy_commands || []).join("\n");
+      card.style.display = "block";
+      card.scrollIntoView({behavior:"smooth"});
+    }catch(e){ alert("register error: " + e.message); }
+  }
+  document.getElementById("btnTrain").addEventListener("click", startTrain);
+  document.getElementById("btnRefreshRuns").addEventListener("click", loadRuns);
+  document.getElementById("tr_runs").addEventListener("click", function(ev){
+    const t = ev.target;
+    if(t.dataset.verify !== undefined){ verifyRun(t.dataset.verify); }
+    if(t.dataset.register !== undefined){ registerRun(t.dataset.register); }
+  });
+
+  document.querySelectorAll(".tabs button").forEach(function(b){ b.classList.toggle("on", b.dataset.tab===id); });
     const page=document.getElementById(id); if(page){ page.classList.add("on"); }
     if(id==="status"){ refreshStatus(); }
     if(id==="infra"){ loadInfra(); }
+    if(id==="training"){ loadDatasets(); loadRuns(); }
   }
   const PRESETS = {
     normal:{cpu:20,ram:45,network:30,disk_io:20,disk_usage:40,load_avg:1.0,hist:false},
