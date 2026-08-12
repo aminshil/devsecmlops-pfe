@@ -1,25 +1,65 @@
 ---
 # ===========================================================================
-# DevSecMLOps platform — full bring-up as infrastructure-as-code (L6).
-# Reproduces the entire running platform on a provisioned Ubuntu VM:
-#   prerequisites -> monitoring -> kubernetes -> control_panel
+# DevSecMLOps platform — infrastructure as code (L6), two profiles.
 #
-# Usage (from the ansible/ directory):
-#   ansible-playbook -i inventory.ini site.yml
-# Run part of it:
-#   ansible-playbook -i inventory.ini site.yml --tags monitoring
-# Dry run:
-#   ansible-playbook -i inventory.ini site.yml --check
+#   PRODUCTION (systemd services, real K8s Secrets, resource limits, K8s-only):
+#     ansible-playbook -i inventory.ini site.yml -e profile=production --ask-vault-pass
+#
+#   DEMO (the jury-facing setup: full tooling, host processes, control panel):
+#     ansible-playbook -i inventory.ini site.yml -e profile=demo
+#     ansible-playbook -i inventory.ini site.yml            # demo is the default
+#
+# Common roles (system install, app setup, kubernetes) run in both profiles.
+# Profile-specific roles are gated by the variables in group_vars/<profile>.yml.
+#
+# Safe validation without changing anything:
+#   ansible-playbook -i inventory.ini site.yml -e profile=production --check
+#   ansible-playbook -i inventory.ini site.yml --syntax-check
 # ===========================================================================
-- name: Provision and launch the DevSecMLOps platform
+- name: DevSecMLOps platform bring-up
   hosts: platform
   gather_facts: true
+
+  vars:
+    profile: "{{ profile | default('demo') }}"
+
+  pre_tasks:
+    - name: Load the selected profile's variables
+      ansible.builtin.include_vars: "group_vars/{{ profile }}.yml"
+    - name: Announce the profile
+      ansible.builtin.debug:
+        msg: "Bringing up the platform with the '{{ profile }}' profile."
+
   roles:
+    # --- common to both profiles ---
+    - role: system
+      tags: [system, install]
+    - role: app_setup
+      tags: [app_setup, setup]
+
+    # --- demo-only support tooling (registry/minio/sonarqube/jenkins) ---
     - role: prerequisites
-      tags: [prerequisites, setup]
-    - role: monitoring
-      tags: [monitoring, observability]
+      when: run_support_containers | default(false)
+      tags: [prerequisites]
+
+    # --- production secrets (real K8s Secret for the DB) ---
+    - role: secrets
+      when: use_k8s_secret_for_db | default(false)
+      tags: [secrets, production]
+
+    # --- Kubernetes serving (both, prod adds limits + secret ref) ---
     - role: kubernetes
       tags: [kubernetes, k8s]
+
+    # --- monitoring: systemd units (prod) OR nohup host processes (demo) ---
+    - role: monitoring_systemd
+      when: use_systemd_services | default(false)
+      tags: [monitoring, production]
+    - role: monitoring
+      when: not (use_systemd_services | default(false))
+      tags: [monitoring, demo]
+
+    # --- demo-only mission-control panel on :8000 ---
     - role: control_panel
-      tags: [control_panel, ui]
+      when: run_control_panel | default(false)
+      tags: [control_panel, demo]

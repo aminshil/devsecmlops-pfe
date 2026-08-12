@@ -1,0 +1,28 @@
+---
+# ===========================================================================
+# DEMO profile values (the current, jury-facing setup).
+#   ansible-playbook site.yml -e profile=demo   (this is the default)
+#
+# Demo patterns: the full stack including CI tooling, exporters as background
+# host processes, and the mission-control panel on :8000 so the whole platform
+# is drivable from one browser tab.
+# ===========================================================================
+
+profile: demo
+
+# --- what this profile runs ---
+run_support_containers: true       # registry/minio/sonarqube/jenkins up for the demo
+run_control_panel: true            # the :8000 mission-control UI
+use_systemd_services: false        # exporters + prometheus as nohup host processes
+apply_resource_limits: false       # keep the single-node VM unconstrained
+use_k8s_secret_for_db: false       # placeholder DSN is fine for the demo
+
+# --- Kubernetes serving (demo) ---
+k8s_namespace: ml-serving
+api_image: "devsecmlops-api:2.16.0"
+api_replicas: 2
+
+# --- control panel serving env (matches start_control_panel.sh) ---
+cp_model_name: telecom_v3
+cp_predict_threshold: "0.85"
+cp_database_url: "postgresql://x:x@localhost:9999/n"

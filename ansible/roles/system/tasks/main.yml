@@ -1,0 +1,117 @@
+---
+# ===========================================================================
+# system role [both profiles]: base-OS install of the platform's binaries.
+# Version-pinned to what the project was validated on. Every task is guarded
+# so it is a no-op if the tool is already installed — running this against an
+# already-provisioned VM will NOT reinstall or disrupt anything.
+#
+# Pinned versions (validated on the dev VM):
+#   Docker 29.6.x · Minikube v1.38.1 · kubectl v1.36.2 · Prometheus 2.53.0
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Docker
+# ---------------------------------------------------------------------------
+- name: Check if Docker is already installed
+  ansible.builtin.command: docker --version
+  register: docker_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Docker via the official convenience script (only if missing)
+  when: docker_check.rc != 0
+  block:
+    - name: Download the Docker install script
+      ansible.builtin.get_url:
+        url: https://get.docker.com
+        dest: /tmp/get-docker.sh
+        mode: "0755"
+    - name: Run the Docker install script
+      ansible.builtin.command: sh /tmp/get-docker.sh
+      changed_when: true
+    - name: Ensure the Docker service is enabled and started
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: started
+
+- name: Add the invoking user to the docker group
+  ansible.builtin.user:
+    name: "{{ ansible_user_id }}"
+    groups: docker
+    append: true
+  when: docker_check.rc != 0
+
+# ---------------------------------------------------------------------------
+# kubectl (pinned)
+# ---------------------------------------------------------------------------
+- name: Check if kubectl is already installed
+  ansible.builtin.command: kubectl version --client
+  register: kubectl_check
+  changed_when: false
+  failed_when: false
+
+- name: Install kubectl v1.36.2 (only if missing)
+  when: kubectl_check.rc != 0
+  ansible.builtin.get_url:
+    url: "https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl"
+    dest: /usr/local/bin/kubectl
+    mode: "0755"
+
+# ---------------------------------------------------------------------------
+# Minikube (pinned)
+# ---------------------------------------------------------------------------
+- name: Check if Minikube is already installed
+  ansible.builtin.command: minikube version
+  register: minikube_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Minikube v1.38.1 (only if missing)
+  when: minikube_check.rc != 0
+  ansible.builtin.get_url:
+    url: "https://github.com/kubernetes/minikube/releases/download/v1.38.1/minikube-linux-amd64"
+    dest: /usr/local/bin/minikube
+    mode: "0755"
+
+# ---------------------------------------------------------------------------
+# Prometheus binary (pinned)
+# ---------------------------------------------------------------------------
+- name: Check if the Prometheus binary is present
+  ansible.builtin.command: prometheus --version
+  register: prom_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Prometheus 2.53.0 (only if missing)
+  when: prom_check.rc != 0
+  block:
+    - name: Download the Prometheus tarball
+      ansible.builtin.get_url:
+        url: "https://github.com/prometheus/prometheus/releases/download/v2.53.0/prometheus-2.53.0.linux-amd64.tar.gz"
+        dest: /tmp/prometheus.tar.gz
+        mode: "0644"
+    - name: Unpack Prometheus
+      ansible.builtin.unarchive:
+        src: /tmp/prometheus.tar.gz
+        dest: /tmp/
+        remote_src: true
+    - name: Install the Prometheus binary to /usr/local/bin
+      ansible.builtin.copy:
+        src: /tmp/prometheus-2.53.0.linux-amd64/prometheus
+        dest: /usr/local/bin/prometheus
+        mode: "0755"
+        remote_src: true
+
+# ---------------------------------------------------------------------------
+# Base OS packages
+# ---------------------------------------------------------------------------
+- name: Ensure Python venv + pip + build essentials are present
+  ansible.builtin.apt:
+    name:
+      - python3-venv
+      - python3-pip
+      - build-essential
+    state: present
+    update_cache: true
+  become: true

@@ -1,0 +1,109 @@
+---
+# ===========================================================================
+# monitoring_systemd role [PRODUCTION profile only].
+# Runs the exporters and Prometheus as managed systemd units — the production
+# pattern — instead of the demo's nohup background processes. Each unit has
+# Restart=always and survives reboots (WantedBy=multi-user.target).
+#
+# This is the honest production upgrade of the demo 'monitoring' role: same
+# processes, but supervised by systemd rather than launched by hand.
+# ===========================================================================
+
+- name: Install the replay-exporter systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/replay-exporter.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=DevSecMLOps fleet replay exporter (:9200)
+      After=network.target
+
+      [Service]
+      Type=simple
+      WorkingDirectory={{ repo_dir }}
+      ExecStart={{ repo_dir }}/venv/bin/python3 monitoring/replay_exporter.py
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  become: true
+
+- name: Install the anomaly-bridge systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/anomaly-bridge.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=DevSecMLOps anomaly bridge (:9300)
+      After=network.target
+
+      [Service]
+      Type=simple
+      WorkingDirectory={{ repo_dir }}
+      ExecStart={{ repo_dir }}/venv/bin/python3 monitoring/anomaly_bridge.py
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  become: true
+
+- name: Install the k8s-exporter systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/k8s-exporter.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=DevSecMLOps k8s exporter (:9400)
+      After=network.target
+
+      [Service]
+      Type=simple
+      WorkingDirectory={{ repo_dir }}
+      ExecStart={{ repo_dir }}/venv/bin/python3 monitoring/k8s_exporter.py
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  become: true
+
+- name: Install the Prometheus systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/prometheus.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Prometheus (:9090)
+      After=network.target
+
+      [Service]
+      Type=simple
+      WorkingDirectory={{ repo_dir }}
+      ExecStart=/usr/local/bin/prometheus --config.file={{ repo_dir }}/monitoring/prometheus.yml --storage.tsdb.path={{ prometheus_data_dir | default('/tmp/prom_data') }}
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  become: true
+
+- name: Reload systemd, enable and start all monitoring units
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    daemon_reload: true
+    enabled: true
+    state: started
+  loop:
+    - replay-exporter.service
+    - anomaly-bridge.service
+    - k8s-exporter.service
+    - prometheus.service
+  become: true
+
+- name: Wait for Prometheus to answer
+  ansible.builtin.wait_for:
+    host: localhost
+    port: 9090
+    timeout: 30

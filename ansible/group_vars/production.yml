@@ -1,0 +1,40 @@
+---
+# ===========================================================================
+# PRODUCTION profile values.
+#   ansible-playbook site.yml -e profile=production
+#
+# Production patterns: services run as systemd units, secrets come from an
+# Ansible Vault (never hardcoded), the API runs ONLY in Kubernetes with
+# resource limits, and the demo-only control panel is NOT started.
+# ===========================================================================
+
+profile: production
+
+# --- what this profile runs ---
+run_support_containers: false      # registry/minio/sonarqube/jenkins are CI/dev tooling, not prod runtime
+run_control_panel: false           # the :8000 control panel is a demo/ops tool, not production serving
+use_systemd_services: true         # exporters + prometheus as managed systemd units
+apply_resource_limits: true        # K8s pods get requests/limits
+use_k8s_secret_for_db: true        # DB creds via a real K8s Secret, not a placeholder DSN
+
+# --- Kubernetes serving (production) ---
+k8s_namespace: ml-serving
+api_image: "devsecmlops-api:2.16.0"
+api_replicas: 3
+api_cpu_request: "250m"
+api_cpu_limit: "1000m"
+api_mem_request: "256Mi"
+api_mem_limit: "512Mi"
+
+# --- Database secret ---
+# The real password is provided via Ansible Vault (ansible-vault) and referenced
+# here — NEVER written in plaintext in the repo. Example to create the vault:
+#   ansible-vault create group_vars/production_secrets.yml
+# containing:  vault_db_password: "<the real password>"
+db_user: "anomaly"
+db_name: "feedback"
+db_password: "{{ vault_db_password | default('CHANGE_ME_VIA_VAULT') }}"
+
+# --- monitoring (systemd unit settings) ---
+prometheus_user: prometheus
+prometheus_data_dir: /var/lib/prometheus

@@ -1,0 +1,38 @@
+---
+# ===========================================================================
+# app_setup role [both profiles]: prepare the application environment.
+#   - create the Python virtualenv if missing
+#   - install the Python dependencies
+#   - build the API Docker image (so it can be loaded into K8s)
+# Idempotent: skips the venv if it exists, and image build is cheap to re-run.
+# ===========================================================================
+
+- name: Check whether the virtualenv already exists
+  ansible.builtin.stat:
+    path: "{{ repo_dir }}/venv/bin/activate"
+  register: venv_stat
+
+- name: Create the Python virtualenv (if missing)
+  ansible.builtin.command: "python3 -m venv {{ repo_dir }}/venv"
+  args:
+    creates: "{{ repo_dir }}/venv/bin/activate"
+  when: not venv_stat.stat.exists
+
+- name: Install Python dependencies into the virtualenv
+  ansible.builtin.pip:
+    requirements: "{{ repo_dir }}/requirements.txt"
+    virtualenv: "{{ repo_dir }}/venv"
+  when: not venv_stat.stat.exists
+
+- name: Check whether the API image already exists
+  ansible.builtin.command: "docker image inspect {{ api_image }}"
+  register: img_check
+  changed_when: false
+  failed_when: false
+
+- name: Build the API Docker image (if missing)
+  ansible.builtin.command: "docker build -t {{ api_image }} ."
+  args:
+    chdir: "{{ repo_dir }}"
+  when: img_check.rc != 0
+  changed_when: true
