@@ -90,7 +90,7 @@ errors over a 33,600-request two-week demo. The v3 6-feature model (F1 = 0.718
 offline) remains the fallback whenever request history is unavailable.
 
 **Full version history:** see [GitHub Releases](https://github.com/aminshil/devsecmlops-pfe/releases)
-— tagged releases from v0.1.0 (initial POC) through v2.17.0, each with
+— tagged releases from v0.1.0 (initial POC) through v2.18.0, each with
 detailed release notes covering what changed and why.
 
 ---
@@ -1542,6 +1542,53 @@ ansible/
     kubernetes/         Minikube + manifests + readiness waits
     control_panel/      the mission-control API on :8000
 ```
+
+### Two profiles: production and demo
+
+The playbook runs in one of two profiles, selected with `-e profile=...`:
+
+```
+ansible-playbook -i inventory.ini site.yml -e profile=production --ask-vault-pass
+ansible-playbook -i inventory.ini site.yml -e profile=demo    # demo is the default
+```
+
+**Shared roles run in both profiles:**
+
+- **system** — installs the platform's binaries from a bare Ubuntu VM: Docker,
+  kubectl (v1.36.2), Minikube (v1.38.1), and the Prometheus binary (2.53.0),
+  plus base packages. Every task is version-pinned and guarded, so it is a
+  no-op if the tool is already present — running it against an
+  already-provisioned host will not reinstall or disrupt anything.
+- **app_setup** — creates the Python virtualenv, installs `requirements.txt`,
+  and builds the API Docker image.
+- **kubernetes** — starts Minikube, enables metrics-server, applies the
+  manifests, and waits for the pods to be Ready.
+
+**The production profile** (`group_vars/production.yml`) applies real
+production patterns:
+
+- **systemd services** — the exporters and Prometheus run as managed systemd
+  units (`Restart=always`, enabled at boot) via the `monitoring_systemd` role,
+  instead of the demo's `nohup` background processes.
+- **real secrets** — the `secrets` role creates a genuine Kubernetes Secret
+  for the database credentials from an Ansible Vault variable
+  (`vault_db_password`), never a hardcoded string. A guard **refuses to run**
+  if the password is still the placeholder, so production cannot be brought up
+  with a fake credential.
+- **resource limits** — the serving Deployment gets CPU/memory
+  requests and limits and runs 3 replicas.
+- **K8s-only serving** — the demo-only support containers and the `:8000`
+  control panel are **not** started; only the anomaly-api workload runs.
+
+**The demo profile** (`group_vars/demo.yml`) is the jury-facing setup this
+repository runs day to day: the full support tooling (registry, MinIO,
+SonarQube, Jenkins), the exporters as host processes, and the mission-control
+panel on `:8000` so the whole platform is drivable from one browser tab.
+
+Both profiles were validated with `--syntax-check` and a `--check` dry run:
+the demo profile runs clean (`failed=0`, the production-only roles correctly
+skipped), and the production profile correctly halts at the secrets guard when
+no vault password is supplied — the guard working exactly as intended.
 
 ### What each role does
 
