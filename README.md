@@ -346,19 +346,22 @@ production settings (`contamination=0.068`, `n_estimators=200`)
 
 | Model | Precision | Recall | F1 | F1@adj | ROC-AUC | PR-AUC@adj |
 |-------|-----------|--------|-----|--------|---------|------------|
-| z-threshold (\|z\|>3) | 0.695 | 0.623 | **0.657** | **0.680** | 0.914 | 0.710 |
-| Isolation Forest, raw (no z-score) | 0.362 | 0.359 | 0.361 | 0.382 | 0.771 | 0.409 |
-| **Isolation Forest, z-scored (shipped)** | 0.599 | 0.656 | 0.626 | 0.647 | **0.922** | **0.722** |
-| OneClassSVM, z-scored | 0.493 | 0.622 | 0.550 | 0.569 | 0.897 | 0.635 |
-| Local Outlier Factor, z-scored | 0.245 | 0.332 | 0.282 | 0.303 | 0.735 | 0.292 |
-| Autoencoder, z-scored | 0.270 | 0.271 | 0.270 | 0.295 | 0.740 | 0.262 |
+| z-threshold (\|z\|>3) | 0.693 | 0.605 | **0.646** | **0.672** | 0.901 | 0.698 |
+| Isolation Forest, raw (no z-score) | 0.342 | 0.347 | 0.344 | 0.366 | 0.772 | 0.398 |
+| **Isolation Forest, z-scored (shipped)** | 0.563 | 0.665 | 0.610 | 0.629 | **0.913** | 0.709 |
+| Isolation Forest, robust z-score (trimmed baselines) | 0.565 | 0.662 | 0.609 | 0.629 | 0.912 | **0.715** |
+| OneClassSVM, z-scored | 0.479 | 0.628 | 0.543 | 0.566 | 0.892 | 0.635 |
+| Local Outlier Factor, z-scored | 0.261 | 0.342 | 0.296 | 0.314 | 0.745 | 0.294 |
+| Autoencoder, z-scored | 0.295 | 0.298 | 0.297 | 0.318 | 0.753 | 0.285 |
 
 F1@adj = point-adjusted F1 (OmniAnomaly/SMD standard): a single correctly
 flagged point inside an anomaly block counts the whole block as detected —
 the metric commonly reported in time-series anomaly detection research.
 
+Robust z-scoring (trimmed/winsorized baselines — clipping each feature to its 5th–95th percentile before computing mean/std) was tested on the same split and appears as its own row above: F1 0.609 vs 0.610 for standard z-scoring, identical point-adjusted F1 (0.629), and a marginally higher PR-AUC@adj (0.715 vs 0.709). The two are statistically indistinguishable — the fleet data is not outlier-corrupted enough for robust statistics to change the outcome — so the simpler standard z-score is retained. Another documented negative result: tested, no improvement, not adopted.
+
 Honest reading of this table: the simple z-threshold rule is competitive on
-strict F1, and even modestly ahead of Isolation Forest (0.657 vs 0.626). We
+strict F1, and even modestly ahead of Isolation Forest (0.646 vs 0.610). We
 still ship Isolation Forest for three reasons a single F1 number does not
 capture:
 

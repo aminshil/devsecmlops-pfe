@@ -24,6 +24,7 @@ from rich import box
 warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from preprocess import build_baselines, apply_zscore, save_baselines, add_window_column
+import preprocess_robust as _PR  # trimmed/winsorized baselines (robust variant)
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS_DIR = ROOT / "models" / "results"
@@ -144,6 +145,11 @@ def run():
     baselines = build_baselines(df_tr, features)
     xz_tr = apply_zscore(df_tr, baselines, features)
     xz_te = apply_zscore(df_te, baselines, features)
+    # robust (trimmed/winsorized) baselines on the SAME split — for an
+    # apples-to-apples comparison against standard z-scoring.
+    _rob_baselines = _PR.build_baselines(df_tr, features)
+    xrob_tr = _PR.apply_zscore(df_tr, _rob_baselines, features)
+    xrob_te = _PR.apply_zscore(df_te, _rob_baselines, features)
     xr_tr, xr_te = df_tr[features].copy(), df_te[features].copy()
 
     if args.time and "timestamp" in df.columns:
@@ -162,6 +168,8 @@ def run():
 
     m = IsolationForest(contamination=args.contamination, n_estimators=args.n_estimators, random_state=args.seed, n_jobs=-1).fit(xz_tr)
     rows["IsolationForest (z-scored)"] = metrics(y_te, (m.predict(xz_te) == -1).astype(int), -m.score_samples(xz_te))
+    m = IsolationForest(contamination=args.contamination, n_estimators=args.n_estimators, random_state=args.seed, n_jobs=-1).fit(xrob_tr)
+    rows["IsolationForest (robust z-score)"] = metrics(y_te, (m.predict(xrob_te) == -1).astype(int), -m.score_samples(xrob_te))
 
     fit = xz_tr.sample(n=min(args.ocsvm_cap, len(xz_tr)), random_state=args.seed)
     t = time.time()
