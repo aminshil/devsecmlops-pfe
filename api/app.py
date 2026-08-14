@@ -204,7 +204,7 @@ def _get_stats(machine: str, window: str | None, machine_type: str | None):
 
 app = FastAPI(
     title=f"DevSecMLOps — Anomaly Detector [{MODEL_NAME}]",
-    version="2.16.0",
+    version="2.17.0",
     description=(
         "Per-machine per-time-window z-score + Isolation Forest anomaly detection. "
         "Trained on a 200-machine synthetic Tunisie Telecom fleet "
@@ -283,7 +283,7 @@ def health():
     return {
         "status":          "ok",
         "model":           MODEL_NAME,
-        "version":         "2.16.0",
+        "version":         "2.17.0",
         "n_machines":      len(machines_known),
         "n_features":      len(FEATURES),
         "features":        FEATURES,
@@ -764,7 +764,7 @@ _PORT_LAYERS = [
 def ui_status():
     """Live health of every platform layer."""
     layers = [{"layer": "L0/L1", "name": "Anomaly API", "up": True,
-               "detail": f"{MODEL_NAME} v2.16.0"}]
+               "detail": f"{MODEL_NAME} v2.17.0"}]
     for host, port, layer, name, detail in _PORT_LAYERS:
         if layer == "L5":
             continue  # add L5 after the K8s layer for ordering
@@ -1098,3 +1098,223 @@ def ui_verify(body: _RunRef):
 def ui_register(body: _RunRef):
     """Register a verified run + return the real kubectl deploy commands (shown)."""
     return _training.register_run(body.run_id)
+# ===========================================================================
+# Operator-tab helpers + pipeline control (drive the Grafana-feeding pipeline
+# and the sim clock from the control panel). Demo/ops surface.
+# ===========================================================================
+import urllib.parse as _up
+
+
+def _prom_scalar(metric: str):
+    """Read a single scalar metric from Prometheus, or None if unavailable."""
+    try:
+        url = "http://localhost:9090/api/v1/query?query=" + _up.quote(metric)
+        with _ur.urlopen(url, timeout=4) as r:
+            data = json.loads(r.read().decode())
+        result = data.get("data", {}).get("result", [])
+        if result:
+            return float(result[0]["value"][1])
+    except Exception:
+        return None
+    return None
+
+
+@app.get("/ui/sim-hour")
+def ui_sim_hour():
+    """The replay exporter's CURRENT simulated hour (what the model is scored
+    against), so the panel shows the simulated clock - not wall-clock time."""
+    h = _prom_scalar("sim_replay_hour")
+    return {"sim_hour": int(h) if h is not None else None,
+            "window": hour_to_window(int(h)) if h is not None else None,
+            "source": "replay exporter via Prometheus" if h is not None else "unavailable"}
+
+
+@app.get("/ui/sample-one")
+def ui_sample_one():
+    """One real labeled reading from the test set, with its REAL hour parsed
+    from the row timestamp - for the Operator tab's 'load a real row' button.
+    The window therefore comes from the metric's own time, not an app default."""
+    try:
+        rows = ui_sample(n=1).get("rows", [])
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if not rows:
+        return {"ok": False, "error": "no sample available (test set missing?)"}
+    r = rows[0]
+    return {"ok": True, "machine": r["machine"], "hour": r.get("hour"),
+            "metrics": r["metrics"], "true_label": r.get("true_label"),
+            "true_cause": r.get("true_cause")}
+
+
+# Processes the panel can see and (re)start - the two that feed Grafana.
+_PIPELINE = {
+    "replay": {"script": "monitoring/replay_exporter.py", "port": 9200,
+               "label": "replay exporter"},
+    "bridge": {"script": "monitoring/anomaly_bridge.py", "port": 9300,
+               "label": "anomaly bridge"},
+}
+
+
+def _proc_running(script: str) -> bool:
+    try:
+        out = _sp.run(["pgrep", "-f", script], capture_output=True, text=True)
+        return out.returncode == 0 and bool(out.stdout.strip())
+    except Exception:
+        return False
+
+
+@app.get("/ui/pipeline")
+def ui_pipeline_status():
+    """Status of the Grafana-feeding pipeline processes + the sim hour."""
+    status = {}
+    for key, p in _PIPELINE.items():
+        status[key] = {"label": p["label"], "port": p["port"],
+                       "running": _proc_running(p["script"])}
+    h = _prom_scalar("sim_replay_hour")
+    return {"processes": status,
+            "sim_hour": int(h) if h is not None else None}
+
+
+class _PipelineAction(BaseModel):
+    target: str
+    action: str
+
+
+@app.post("/ui/pipeline")
+def ui_pipeline_control(body: _PipelineAction):
+    """Start or stop a pipeline process from the panel. Guarded so 'start'
+    never spawns a duplicate. Demo/ops convenience - the processes otherwise
+    run via start_control_panel.sh or the Ansible monitoring role."""
+    p = _PIPELINE.get(body.target)
+    if not p:
+        return {"ok": False, "error": f"unknown target '{body.target}'"}
+    script = p["script"]
+
+    if body.action == "start":
+        if _proc_running(script):
+            return {"ok": True, "note": f"{p['label']} already running", "running": True}
+        try:
+            logf = open(f"/tmp/{body.target}.log", "ab")
+            _sp.Popen(["python3", script], stdout=logf, stderr=logf, cwd=str(ROOT))
+            return {"ok": True, "note": f"{p['label']} started", "running": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    if body.action == "stop":
+        try:
+            _sp.run(["pkill", "-f", script], capture_output=True)
+            return {"ok": True, "note": f"{p['label']} stopped", "running": False}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    return {"ok": False, "error": f"unknown action '{body.action}'"}
+# ===========================================================================
+# Per-layer recovery ("Fix" button). A FIXED allow-list maps each layer name
+# to its known-correct recovery command — no arbitrary commands can run.
+# Container layers -> docker start; process layers -> nohup start (guarded);
+# Kubernetes -> background minikube start --force (non-blocking, ~2min).
+# ===========================================================================
+
+# layer name -> ("docker", container) | ("process", script) | ("k8s", None)
+_FIX_MAP = {
+    "Docker registry":  ("docker", "registry"),
+    "Jenkins":          ("docker", "jenkins"),
+    "SonarQube":        ("docker", "sonarqube"),
+    "Grafana":          ("docker", "grafana"),
+    "Node exporter":    ("docker", "node-exporter"),
+    "Prometheus":       ("process", "prometheus"),
+    "Replay exporter":  ("process", "monitoring/replay_exporter.py"),
+    "Anomaly bridge":   ("process", "monitoring/anomaly_bridge.py"),
+    "K8s exporter":     ("process", "monitoring/k8s_exporter.py"),
+    "Kubernetes":       ("k8s", None),
+}
+
+
+class _FixAction(BaseModel):
+    layer: str              # the layer 'name' from /ui/status
+    action: str = "start"   # "start" (fix) or "stop"
+
+
+@app.post("/ui/fix")
+def ui_fix(body: _FixAction):
+    """Run the known recovery for one down layer. Non-blocking for Kubernetes."""
+    entry = _FIX_MAP.get(body.layer)
+    if not entry:
+        return {"ok": False, "error": f"no known fix for '{body.layer}'"}
+    kind, target = entry
+
+    # --- STOP action (container/process layers only; never K8s) ---
+    if body.action == "stop":
+        if kind == "k8s":
+            return {"ok": False, "error": "stopping Kubernetes from the panel is disabled (too disruptive)"}
+        if kind == "docker":
+            try:
+                r = _sp.run(["docker", "stop", target], capture_output=True, text=True, timeout=30)
+                if r.returncode == 0:
+                    return {"ok": True, "note": f"stopped container '{target}'"}
+                return {"ok": False, "error": r.stderr.strip() or f"docker stop {target} failed"}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+        if kind == "process":
+            pat = "prometheus --config" if target == "prometheus" else target
+            try:
+                _sp.run(["pkill", "-f", pat], capture_output=True)
+                return {"ok": True, "note": f"stopped {body.layer}"}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "unknown stop kind"}
+
+    if kind == "docker":
+        try:
+            r = _sp.run(["docker", "start", target], capture_output=True, text=True, timeout=30)
+            if r.returncode == 0:
+                return {"ok": True, "note": f"started container '{target}' — may take a few seconds to be ready"}
+            return {"ok": False, "error": r.stderr.strip() or f"docker start {target} failed"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    if kind == "process":
+        if target == "prometheus":
+            script_check = "prometheus --config"
+        else:
+            script_check = target
+        # guard: already running?
+        try:
+            chk = _sp.run(["pgrep", "-f", script_check], capture_output=True, text=True)
+            if chk.returncode == 0 and chk.stdout.strip():
+                return {"ok": True, "note": f"{body.layer} already running"}
+        except Exception:
+            pass
+        try:
+            logf = open(f"/tmp/fix_{body.layer.replace(' ', '_')}.log", "ab")
+            if target == "prometheus":
+                _sp.Popen(["prometheus", "--config.file=monitoring/prometheus.yml",
+                           "--storage.tsdb.path=/tmp/prom_data"],
+                          stdout=logf, stderr=logf, cwd=str(ROOT))
+            else:
+                _sp.Popen(["python3", target], stdout=logf, stderr=logf, cwd=str(ROOT))
+            return {"ok": True, "note": f"{body.layer} started"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    if kind == "k8s":
+        # non-blocking: a wedged cluster needs stop+start, not just start.
+        # Use the full binary path (a background uvicorn process may not have
+        # /usr/local/bin on PATH). Deep wedges may still need a manual
+        # delete+recreate — this handles the common stopped/wedged cases.
+        mk = "/usr/local/bin/minikube"
+        if not _os.path.exists(mk):
+            mk = "minikube"  # fall back to PATH lookup
+        try:
+            logf = open("/tmp/fix_minikube.log", "ab")
+            _sp.Popen(f"{mk} stop; {mk} start --driver=docker --force",
+                      shell=True, stdout=logf, stderr=logf)
+            return {"ok": True, "note": "Kubernetes recovery started in the background "
+                    "(stop + start, ~2-3 min). Keep demoing other tabs; it will go "
+                    "green when ready. If it stays down, a manual "
+                    "'minikube delete && minikube start --force' may be needed.",
+                    "async": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    return {"ok": False, "error": "unknown fix kind"}

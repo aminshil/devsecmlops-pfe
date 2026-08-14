@@ -140,6 +140,10 @@
         <datalist id="machinelist"></datalist>
         <label for="op_hour">Hour of day (0–23)</label>
         <input id="op_hour" type="number" min="0" max="23" value="14">
+        <label for="op_ts">Timestamp (optional, ISO - overrides hour)</label>
+        <input id="op_ts" type="text" placeholder="2026-06-29T03:00:00">
+        <button type="button" class="btn sec" id="btnLoadRow" style="margin-top:8px">Load a real row (fills metrics + real hour)</button>
+        <div class="hint" id="op_loadnote" style="margin-top:6px"></div>
         <span class="sub" style="display:block;margin-top:10px">Metrics</span>
         <div class="row6">
           <div><label for="op_cpu">cpu</label><input id="op_cpu" type="number" value="30"></div>
@@ -203,6 +207,11 @@
       <h3>Infrastructure <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshInfra">↻ Refresh</button></h3>
       <div class="sub">Live Docker containers, images, Kubernetes pods, resource usage, autoscaling, Prometheus targets, and active anomalies.</div>
       <div id="infra_body"><div class="hint"><span class="spin"></span> loading…</div></div>
+    </div>
+    <div class="card">
+      <h3>Monitoring pipeline <span id="sim_hour_badge" class="tag" style="margin-left:auto"></span></h3>
+      <div class="sub">The processes that feed Grafana. The simulated clock is the replay's own time - what the model is scored against, not wall-clock.</div>
+      <div id="pipeline_body"><div class="hint">loading…</div></div>
     </div>
   </div>
   <div class="tabpage" id="training">
@@ -283,7 +292,14 @@
   async function getJSON(url, opts){ const r=await fetch(url,opts); const d=await r.json(); if(!r.ok){ throw new Error((d&&d.detail)?d.detail:("HTTP "+r.status)); } return d; }
   function activateTab(id){
     document.querySelectorAll(".tabpage").forEach(function(p){ p.classList.remove("on"); });
-    // ---- Training (MLOps) tab ----
+    document.querySelectorAll(".tabs button").forEach(function(b){ b.classList.toggle("on", b.dataset.tab===id); });
+    const page=document.getElementById(id); if(page){ page.classList.add("on"); }
+    if(id==="status"){ refreshStatus(); }
+    if(id==="infra"){ loadInfra(); loadPipeline(); }
+    if(id==="training"){ loadDatasets(); loadRuns(); }
+  }
+
+  // ---- Training (MLOps) tab ----
   let TR_POLL = null;
   async function loadDatasets(){
     try{
@@ -381,12 +397,88 @@
     if(t.dataset.register !== undefined){ registerRun(t.dataset.register); }
   });
 
-  document.querySelectorAll(".tabs button").forEach(function(b){ b.classList.toggle("on", b.dataset.tab===id); });
-    const page=document.getElementById(id); if(page){ page.classList.add("on"); }
-    if(id==="status"){ refreshStatus(); }
-    if(id==="infra"){ loadInfra(); }
-    if(id==="training"){ loadDatasets(); loadRuns(); }
+  // ---- Operator: load a real row (real hour from the data) ----
+  async function loadRealRow(){
+    const note=document.getElementById("op_loadnote");
+    note.textContent="loading a real reading…";
+    try{
+      const d=await getJSON(API+"/ui/sample-one");
+      if(!d.ok){ note.textContent="could not load: "+(d.error||"?"); return; }
+      document.getElementById("op_machine").value=d.machine;
+      if(d.hour!==null&&d.hour!==undefined){ document.getElementById("op_hour").value=d.hour; }
+      document.getElementById("op_ts").value="";
+      const m=d.metrics||{};
+      ["cpu","ram","network","disk_io","disk_usage","load_avg"].forEach(function(k){
+        if(m[k]!==undefined){ const el=document.getElementById("op_"+k); if(el){ el.value=m[k]; } }
+      });
+      note.textContent="loaded "+d.machine+" at hour "+d.hour+" (real "+ (d.true_cause||"?") +") - hour came from the row's timestamp";
+    }catch(e){ note.textContent="error: "+e.message; }
   }
+  document.getElementById("btnLoadRow").addEventListener("click", loadRealRow);
+
+  // ---- Infrastructure: monitoring pipeline control + sim hour ----
+  async function loadPipeline(){
+    const box=document.getElementById("pipeline_body");
+    const badge=document.getElementById("sim_hour_badge");
+    try{
+      const d=await getJSON(API+"/ui/pipeline");
+      if(d.sim_hour!==null&&d.sim_hour!==undefined){
+        const hh=String(d.sim_hour).padStart(2,"0");
+        badge.textContent="sim clock "+hh+":00";
+        badge.className="tag norm";
+      }else{ badge.textContent="sim clock —"; badge.className="tag"; }
+      let h='<table><thead><tr><th>Process</th><th>Port</th><th>Status</th><th></th></tr></thead><tbody>';
+      const procs=d.processes||{};
+      Object.keys(procs).forEach(function(key){
+        const p=procs[key];
+        const st=p.running?'<span class="tag norm">running</span>':'<span class="tag anom">stopped</span>';
+        const act=p.running?'<button type="button" class="linkbtn" data-stop="'+key+'">stop</button>':'<button type="button" class="linkbtn" data-start="'+key+'">start</button>';
+        h+='<tr><td>'+p.label+'</td><td class="mono">:'+p.port+'</td><td>'+st+'</td><td>'+act+'</td></tr>';
+      });
+      h+='</tbody></table>';
+      box.innerHTML=h;
+    }catch(e){ box.innerHTML='<div class="hint" style="color:var(--red)">could not load pipeline: '+e.message+'</div>'; }
+  }
+  async function pipelineAction(target,action){
+    try{
+      const d=await getJSON(API+"/ui/pipeline",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target:target,action:action})});
+      if(!d.ok){ alert("pipeline "+action+" failed: "+(d.error||"?")); }
+      setTimeout(loadPipeline,1200);
+    }catch(e){ alert("error: "+e.message); }
+  }
+  document.getElementById("pipeline_body").addEventListener("click", function(ev){
+    const t=ev.target;
+    if(t.dataset.start!==undefined){ pipelineAction(t.dataset.start,"start"); }
+    if(t.dataset.stop!==undefined){ pipelineAction(t.dataset.stop,"stop"); }
+  });
+
+  // ---- per-layer Fix buttons (Status tab) ----
+  async function fixLayer(layerName){
+    try{
+      const d=await getJSON(API+"/ui/fix",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({layer:layerName})});
+      if(!d.ok){ alert("Fix failed: "+(d.error||"?")); return; }
+      alert(d.note||("fixing "+layerName));
+      // refresh soon; Kubernetes takes ~2min so refresh a few times
+      setTimeout(refreshStatus, 3000);
+      if(d.async){ setTimeout(refreshStatus, 60000); setTimeout(refreshStatus, 120000); }
+    }catch(e){ alert("Fix error: "+e.message); }
+  }
+  async function stopLayer(layerName){
+    if(!confirm("Stop "+layerName+"?")){ return; }
+    try{
+      const d=await getJSON(API+"/ui/fix",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({layer:layerName,action:"stop"})});
+      if(!d.ok){ alert("Stop failed: "+(d.error||"?")); return; }
+      alert(d.note||("stopping "+layerName));
+      setTimeout(refreshStatus, 2500);
+    }catch(e){ alert("Stop error: "+e.message); }
+  }
+  document.addEventListener("click", function(ev){
+    const t=ev.target;
+    if(!t || !t.dataset){ return; }
+    if(t.dataset.fix!==undefined){ fixLayer(t.dataset.fix); }
+    if(t.dataset.stopfix!==undefined){ stopLayer(t.dataset.stopfix); }
+  });
+
   const PRESETS = {
     normal:{cpu:20,ram:45,network:30,disk_io:20,disk_usage:40,load_avg:1.0,hist:false},
     memleak:{cpu:45,ram:95,network:30,disk_io:25,disk_usage:42,load_avg:2.0,hist:true},
@@ -411,6 +503,8 @@
   async function doPredict(){
     const metrics={cpu:Number(document.getElementById("op_cpu").value),ram:Number(document.getElementById("op_ram").value),network:Number(document.getElementById("op_network").value),disk_io:Number(document.getElementById("op_disk_io").value),disk_usage:Number(document.getElementById("op_disk_usage").value),load_avg:Number(document.getElementById("op_load_avg").value)};
     const body={machine:document.getElementById("op_machine").value,hour:Number(document.getElementById("op_hour").value),metrics:metrics};
+    const _ts=document.getElementById("op_ts").value.trim();
+    if(_ts){ body.timestamp=_ts; delete body.hour; }
     if(document.getElementById("op_history").checked){ body.history=buildHistory(metrics); }
     document.getElementById("op_placeholder").style.display="none";
     document.getElementById("op_result").classList.add("show");
@@ -455,13 +549,23 @@
     h+='</tbody></table>';
     document.getElementById("rc_body").innerHTML=h;
   }
-  function statCard(name,state,val){ return '<div class="stat"><div class="sn"><span class="sd '+state+'"></span>'+name+'</div><div class="sv small">'+val+'</div></div>'; }
+  const _FIXABLE={"Docker registry":1,"Jenkins":1,"SonarQube":1,"Grafana":1,"Node exporter":1,"Prometheus":1,"Replay exporter":1,"Anomaly bridge":1,"K8s exporter":1,"Kubernetes":1};
+  const _STOPPABLE={"Docker registry":1,"Jenkins":1,"SonarQube":1,"Grafana":1,"Node exporter":1,"Prometheus":1,"Replay exporter":1,"Anomaly bridge":1,"K8s exporter":1};
+  function statCard(name,state,val,layerName){
+    let btn="";
+    if(state==="down" && layerName && _FIXABLE[layerName]){
+      btn='<button type="button" class="linkbtn" data-fix="'+layerName+'" style="margin-top:4px">Fix</button>';
+    }else if(state==="up" && layerName && _STOPPABLE[layerName]){
+      btn='<button type="button" class="linkbtn" data-stopfix="'+layerName+'" style="margin-top:4px;opacity:.7">Stop</button>';
+    }
+    return '<div class="stat"><div class="sn"><span class="sd '+state+'"></span>'+name+'</div><div class="sv small">'+val+'</div>'+btn+'</div>';
+  }
   async function refreshStatus(){
     const grid=document.getElementById("statusGrid");
     try{
       const d=await getJSON(API+"/ui/status");
       document.getElementById("upcount").textContent="("+d.up+"/"+d.total+" up)";
-      grid.innerHTML=d.layers.map(function(l){ return statCard(l.layer+" · "+l.name, l.up?"up":"down", l.detail); }).join("");
+      grid.innerHTML=d.layers.map(function(l){ return statCard(l.layer+" · "+l.name, l.up?"up":"down", l.detail, l.name); }).join("");
     }catch(e){ console.debug("status fetch failed", e); grid.innerHTML=statCard("status","down","unreachable"); }
     try{ const h=await getJSON(API+"/health"); document.getElementById("verChip").textContent="v"+(h.version||"?"); }catch(e){ console.debug("health check failed", e); document.getElementById("verChip").textContent="v?"; }
     refreshFleet();
@@ -627,6 +731,7 @@
   await refreshStatus();
   await loadMachines();
   setInterval(function(){ if(document.getElementById("status").classList.contains("on")){ refreshStatus(); } }, 10000);
+
 </script>
 </body>
 </html>
