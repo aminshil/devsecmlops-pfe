@@ -204,7 +204,7 @@ def _get_stats(machine: str, window: str | None, machine_type: str | None):
 
 app = FastAPI(
     title=f"DevSecMLOps — Anomaly Detector [{MODEL_NAME}]",
-    version="2.17.0",
+    version="2.19.0",
     description=(
         "Per-machine per-time-window z-score + Isolation Forest anomaly detection. "
         "Trained on a 200-machine synthetic Tunisie Telecom fleet "
@@ -283,7 +283,7 @@ def health():
     return {
         "status":          "ok",
         "model":           MODEL_NAME,
-        "version":         "2.17.0",
+        "version":         "2.19.0",
         "n_machines":      len(machines_known),
         "n_features":      len(FEATURES),
         "features":        FEATURES,
@@ -764,7 +764,7 @@ _PORT_LAYERS = [
 def ui_status():
     """Live health of every platform layer."""
     layers = [{"layer": "L0/L1", "name": "Anomaly API", "up": True,
-               "detail": f"{MODEL_NAME} v2.17.0"}]
+               "detail": f"{MODEL_NAME} v2.19.0"}]
     for host, port, layer, name, detail in _PORT_LAYERS:
         if layer == "L5":
             continue  # add L5 after the K8s layer for ordering
