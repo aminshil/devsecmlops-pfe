@@ -708,11 +708,14 @@ _UI_PATH = Path(__file__).resolve().parent / "static" / "control_panel.html"
 
 @app.get("/ui", response_class=_HTMLResponse)
 def ui_page():
-    """Serve the mission-control web UI."""
+    """Serve the mission-control web UI. no-store so the browser always
+    fetches the latest version (this file changes often during development
+    and a stale cached copy silently breaks buttons/JS with no visible error)."""
+    headers = {"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"}
     try:
-        return _UI_PATH.read_text(encoding="utf-8")
+        return _HTMLResponse(_UI_PATH.read_text(encoding="utf-8"), headers=headers)
     except Exception:
-        return _HTMLResponse("<h1>UI not found</h1>", status_code=404)
+        return _HTMLResponse("<h1>UI not found</h1>", status_code=404, headers=headers)
 
 
 def _port_open(host, port, timeout=2):
@@ -1238,51 +1241,58 @@ class _FixAction(BaseModel):
 @app.post("/ui/fix")
 def ui_fix(body: _FixAction):
     """Run the known recovery for one down layer. Non-blocking for Kubernetes."""
+    def _ret(ok, note=None, error=None, **extra):
+        _log_fix_action(body.layer, body.action, ok, note or error or "")
+        out = {"ok": ok}
+        if note is not None: out["note"] = note
+        if error is not None: out["error"] = error
+        out.update(extra)
+        return out
+
     entry = _FIX_MAP.get(body.layer)
     if not entry:
-        return {"ok": False, "error": f"no known fix for '{body.layer}'"}
+        return _ret(False, error=f"no known fix for '{body.layer}'")
     kind, target = entry
 
     # --- STOP action (container/process layers only; never K8s) ---
     if body.action == "stop":
         if kind == "k8s":
-            return {"ok": False, "error": "stopping Kubernetes from the panel is disabled (too disruptive)"}
+            return _ret(False, error="stopping Kubernetes from the panel is disabled (too disruptive)")
         if kind == "docker":
             try:
                 r = _sp.run(["docker", "stop", target], capture_output=True, text=True, timeout=30)
                 if r.returncode == 0:
-                    return {"ok": True, "note": f"stopped container '{target}'"}
-                return {"ok": False, "error": r.stderr.strip() or f"docker stop {target} failed"}
+                    return _ret(True, note=f"stopped container '{target}'")
+                return _ret(False, error=r.stderr.strip() or f"docker stop {target} failed")
             except Exception as e:
-                return {"ok": False, "error": str(e)}
+                return _ret(False, error=str(e))
         if kind == "process":
             pat = "prometheus --config" if target == "prometheus" else target
             try:
                 _sp.run(["pkill", "-f", pat], capture_output=True)
-                return {"ok": True, "note": f"stopped {body.layer}"}
+                return _ret(True, note=f"stopped {body.layer}")
             except Exception as e:
-                return {"ok": False, "error": str(e)}
-        return {"ok": False, "error": "unknown stop kind"}
+                return _ret(False, error=str(e))
+        return _ret(False, error="unknown stop kind")
 
     if kind == "docker":
         try:
             r = _sp.run(["docker", "start", target], capture_output=True, text=True, timeout=30)
             if r.returncode == 0:
-                return {"ok": True, "note": f"started container '{target}' — may take a few seconds to be ready"}
-            return {"ok": False, "error": r.stderr.strip() or f"docker start {target} failed"}
+                return _ret(True, note=f"started container '{target}' — may take a few seconds to be ready")
+            return _ret(False, error=r.stderr.strip() or f"docker start {target} failed")
         except Exception as e:
-            return {"ok": False, "error": str(e)}
+            return _ret(False, error=str(e))
 
     if kind == "process":
         if target == "prometheus":
             script_check = "prometheus --config"
         else:
             script_check = target
-        # guard: already running?
         try:
             chk = _sp.run(["pgrep", "-f", script_check], capture_output=True, text=True)
             if chk.returncode == 0 and chk.stdout.strip():
-                return {"ok": True, "note": f"{body.layer} already running"}
+                return _ret(True, note=f"{body.layer} already running")
         except Exception:
             pass
         try:
@@ -1293,28 +1303,80 @@ def ui_fix(body: _FixAction):
                           stdout=logf, stderr=logf, cwd=str(ROOT))
             else:
                 _sp.Popen(["python3", target], stdout=logf, stderr=logf, cwd=str(ROOT))
-            return {"ok": True, "note": f"{body.layer} started"}
+            return _ret(True, note=f"{body.layer} started")
         except Exception as e:
-            return {"ok": False, "error": str(e)}
+            return _ret(False, error=str(e))
 
     if kind == "k8s":
-        # non-blocking: a wedged cluster needs stop+start, not just start.
-        # Use the full binary path (a background uvicorn process may not have
-        # /usr/local/bin on PATH). Deep wedges may still need a manual
-        # delete+recreate — this handles the common stopped/wedged cases.
-        mk = "/usr/local/bin/minikube"
-        if not _os.path.exists(mk):
-            mk = "minikube"  # fall back to PATH lookup
+        script = os.path.join(str(ROOT), "scripts", "k8s_recover.sh")
+        if not os.path.exists(script):
+            return _ret(False, error="recovery script not found at scripts/k8s_recover.sh")
         try:
-            logf = open("/tmp/fix_minikube.log", "ab")
-            _sp.Popen(f"{mk} stop; {mk} start --driver=docker --force",
-                      shell=True, stdout=logf, stderr=logf)
-            return {"ok": True, "note": "Kubernetes recovery started in the background "
-                    "(stop + start, ~2-3 min). Keep demoing other tabs; it will go "
-                    "green when ready. If it stays down, a manual "
-                    "'minikube delete && minikube start --force' may be needed.",
-                    "async": True}
+            logf = open("/tmp/k8s_recover.log", "ab")
+            _sp.Popen(["bash", script], stdout=logf, stderr=logf)
+            return _ret(True, note="Kubernetes full recovery started in the background "
+                    "(~1-4 min: tries a gentle start, then a full rebuild if wedged). "
+                    "Keep demoing other tabs; K8s goes green when it finishes. "
+                    "Progress is in /tmp/k8s_recover.log. If even this fails, Docker "
+                    "itself may be down — that needs the terminal.", **{"async": True})
         except Exception as e:
-            return {"ok": False, "error": str(e)}
+            return _ret(False, error=str(e))
 
     return {"ok": False, "error": "unknown fix kind"}
+
+
+# ===========================================================================
+# Action log for Fix/Stop (Status tab visibility). In-memory, most-recent
+# first, capped so it doesn't grow unbounded.
+# ===========================================================================
+import datetime as _dt
+
+_FIX_LOG = []
+_FIX_LOG_MAX = 50
+
+
+def _log_fix_action(layer: str, action: str, ok: bool, note: str):
+    _FIX_LOG.insert(0, {
+        "time": _dt.datetime.now().strftime("%H:%M:%S"),
+        "layer": layer,
+        "action": action,
+        "ok": ok,
+        "note": note,
+    })
+    del _FIX_LOG[_FIX_LOG_MAX:]
+
+
+@app.get("/ui/fix-log")
+def ui_fix_log():
+    return {"entries": _FIX_LOG}
+
+
+# ===========================================================================
+# Live progress tail for an in-flight Fix/Stop action - lets the panel show
+# real lines from the action's own log file while it runs, not just a final
+# result. Read-only, capped to the last N lines.
+# ===========================================================================
+_ACTION_LOGFILES = {
+    "Kubernetes": "/tmp/k8s_recover.log",
+}
+
+
+def _action_logfile_for(layer: str) -> str:
+    if layer in _ACTION_LOGFILES:
+        return _ACTION_LOGFILES[layer]
+    return f"/tmp/fix_{layer.replace(' ', '_')}.log"
+
+
+@app.get("/ui/fix-progress")
+def ui_fix_progress(layer: str, lines: int = 12):
+    """Tail the log file for one layer's in-flight action (read-only)."""
+    path = _action_logfile_for(layer)
+    if not os.path.exists(path):
+        return {"lines": [], "exists": False}
+    try:
+        with open(path, "r", errors="replace") as f:
+            content = f.readlines()
+        tail = [ln.rstrip("\n") for ln in content[-lines:]]
+        return {"lines": tail, "exists": True}
+    except Exception as e:
+        return {"lines": [f"(could not read log: {e})"], "exists": True}

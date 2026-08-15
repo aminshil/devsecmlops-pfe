@@ -123,6 +123,16 @@
       <div class="sub">Live health of every layer (L0–L5). Auto-refreshes every 10s. <span id="upcount"></span></div>
       <div class="statgrid" id="statusGrid"><div class="stat"><div class="sn">loading…</div><div class="sv"><span class="spin"></span></div></div></div>
     </div>
+    <div class="card" style="margin-bottom:16px" id="progress_card">
+      <h3>In progress</h3>
+      <div class="sub">Live output while a Fix / Stop action runs.</div>
+      <div id="progress_body"><div class="hint">nothing running</div></div>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <h3>Action log <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshFixLog">↻ Refresh</button></h3>
+      <div class="sub">Every Fix / Stop attempt from this panel — response shown exactly as returned.</div>
+      <div id="fixlog_body"><div class="hint">no actions yet</div></div>
+    </div>
     <div class="card">
       <h3>Live fleet</h3>
       <div class="sub">Current detection state from the monitoring pipeline (via Prometheus).</div>
@@ -294,7 +304,7 @@
     document.querySelectorAll(".tabpage").forEach(function(p){ p.classList.remove("on"); });
     document.querySelectorAll(".tabs button").forEach(function(b){ b.classList.toggle("on", b.dataset.tab===id); });
     const page=document.getElementById(id); if(page){ page.classList.add("on"); }
-    if(id==="status"){ refreshStatus(); }
+    if(id==="status"){ refreshStatus(); loadFixLog(); }
     if(id==="infra"){ loadInfra(); loadPipeline(); }
     if(id==="training"){ loadDatasets(); loadRuns(); }
   }
@@ -453,25 +463,69 @@
   });
 
   // ---- per-layer Fix buttons (Status tab) ----
+  let _PROGRESS_POLL=null;
+  function progressStart(layerName,label){
+    const box=document.getElementById("progress_body");
+    box.innerHTML='<div class="hint"><span class="spin"></span> '+label+' '+layerName+'…</div><pre id="progress_lines" class="mono" style="font-size:11px;color:var(--dim);background:#0c1119;border:1px solid var(--line);border-radius:7px;padding:10px;margin-top:8px;max-height:160px;overflow:auto;white-space:pre-wrap"></pre>';
+    if(_PROGRESS_POLL){ clearInterval(_PROGRESS_POLL); }
+    _PROGRESS_POLL=setInterval(async function(){
+      try{
+        const p=await getJSON(API+"/ui/fix-progress?layer="+encodeURIComponent(layerName));
+        const el=document.getElementById("progress_lines");
+        if(el){ el.textContent=(p.lines||[]).join("\n")||"(waiting for output\u2026)"; el.scrollTop=el.scrollHeight; }
+      }catch(e){}
+    }, 1500);
+  }
+  function progressEnd(layerName,ok,note){
+    if(_PROGRESS_POLL){ clearInterval(_PROGRESS_POLL); _PROGRESS_POLL=null; }
+    const box=document.getElementById("progress_body");
+    const tag=ok?'<span class="tag norm">done</span>':'<span class="tag anom">failed</span>';
+    box.innerHTML='<div style="margin-bottom:6px">'+tag+' <b>'+layerName+'</b> — '+(note||"")+'</div>';
+    setTimeout(function(){ if(box.innerHTML.indexOf(layerName)!==-1){ box.innerHTML='<div class="hint">nothing running</div>'; } }, 15000);
+  }
   async function fixLayer(layerName){
+    progressStart(layerName,"fixing");
     try{
       const d=await getJSON(API+"/ui/fix",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({layer:layerName})});
-      if(!d.ok){ alert("Fix failed: "+(d.error||"?")); return; }
-      alert(d.note||("fixing "+layerName));
-      // refresh soon; Kubernetes takes ~2min so refresh a few times
-      setTimeout(refreshStatus, 3000);
-      if(d.async){ setTimeout(refreshStatus, 60000); setTimeout(refreshStatus, 120000); }
-    }catch(e){ alert("Fix error: "+e.message); }
+      setTimeout(loadFixLog, 800);
+      if(d.async){
+        setTimeout(refreshStatus, 60000); setTimeout(refreshStatus, 120000);
+        setTimeout(loadFixLog, 60000); setTimeout(loadFixLog, 120000);
+        setTimeout(function(){ progressEnd(layerName, d.ok, d.note||d.error); }, 150000);
+        setTimeout(refreshStatus, 3000);
+      }else{
+        setTimeout(refreshStatus, 3000);
+        progressEnd(layerName, d.ok, d.note||d.error);
+      }
+    }catch(e){ progressEnd(layerName, false, e.message); setTimeout(loadFixLog, 500); }
   }
   async function stopLayer(layerName){
     if(!confirm("Stop "+layerName+"?")){ return; }
+    progressStart(layerName,"stopping");
     try{
       const d=await getJSON(API+"/ui/fix",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({layer:layerName,action:"stop"})});
-      if(!d.ok){ alert("Stop failed: "+(d.error||"?")); return; }
-      alert(d.note||("stopping "+layerName));
       setTimeout(refreshStatus, 2500);
-    }catch(e){ alert("Stop error: "+e.message); }
+      setTimeout(loadFixLog, 800);
+      progressEnd(layerName, d.ok, d.note||d.error);
+    }catch(e){ progressEnd(layerName, false, e.message); setTimeout(loadFixLog, 500); }
   }
+  async function loadFixLog(){
+    const box=document.getElementById("fixlog_body");
+    try{
+      const d=await getJSON(API+"/ui/fix-log");
+      const entries=d.entries||[];
+      if(!entries.length){ box.innerHTML='<div class="hint">no actions yet</div>'; return; }
+      let h='<table><thead><tr><th>Time</th><th>Layer</th><th>Action</th><th>Result</th><th>Response</th></tr></thead><tbody>';
+      entries.forEach(function(e){
+        const tag=e.ok?'<span class="tag norm">ok</span>':'<span class="tag anom">failed</span>';
+        h+='<tr><td class="mono">'+e.time+'</td><td class="mono">'+e.layer+'</td><td class="mono">'+e.action+'</td><td>'+tag+'</td><td class="mono" style="font-size:11px;max-width:340px">'+(e.note||"")+'</td></tr>';
+      });
+      h+='</tbody></table>';
+      box.innerHTML=h;
+    }catch(err){ box.innerHTML='<div class="hint" style="color:var(--red)">could not load action log: '+err.message+'</div>'; }
+  }
+  document.getElementById("btnRefreshFixLog").addEventListener("click", loadFixLog);
+
   document.addEventListener("click", function(ev){
     const t=ev.target;
     if(!t || !t.dataset){ return; }
@@ -729,6 +783,7 @@
   document.getElementById("btnClearResults").addEventListener("click", clearResults);
   document.getElementById("resultsTable").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.detail!==undefined){ toggleDetail(Number(t.dataset.detail)); } if(t.dataset.page!==undefined){ gotoPage(Number(t.dataset.page)); } });
   await refreshStatus();
+  await loadFixLog();
   await loadMachines();
   setInterval(function(){ if(document.getElementById("status").classList.contains("on")){ refreshStatus(); } }, 10000);
 
