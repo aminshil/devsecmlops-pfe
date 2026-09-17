@@ -21,9 +21,12 @@
   gather_facts: true
 
   vars:
-    profile: "{{ profile | default('demo') }}"
+    _profile_default: "demo"
 
   pre_tasks:
+    - name: Resolve the profile (CLI -e profile=... takes priority)
+      ansible.builtin.set_fact:
+        profile: "{{ profile | default(_profile_default) }}"
     - name: Load the selected profile's variables
       ansible.builtin.include_vars: "group_vars/{{ profile }}.yml"
     - name: Announce the profile

@@ -33,16 +33,32 @@
   changed_when: false
   failed_when: false
 
-- name: Apply Kubernetes manifests in dependency order
+- name: Apply the demo database Secret (production uses the vault-backed one)
+  ansible.builtin.command: "{{ bin_kubectl }} apply -f {{ repo_dir }}/kubernetes/postgres-secret.yaml"
+  when: not (use_k8s_secret_for_db | default(false))
+  register: pg_secret_apply
+  changed_when: "'created' in pg_secret_apply.stdout or 'configured' in pg_secret_apply.stdout"
+
+- name: Render the deployment manifest from the profile variables
+  ansible.builtin.template:
+    src: deployment.yaml.j2
+    dest: "/tmp/anomaly-api-deployment.{{ profile }}.yaml"
+    mode: '0644'
+
+- name: Apply static Kubernetes manifests in dependency order
   ansible.builtin.command: "{{ bin_kubectl }} apply -f {{ repo_dir }}/kubernetes/{{ item }}"
   loop:
     - namespace.yaml
     - postgres.yaml
-    - deployment.yaml
     - service.yaml
     - hpa.yaml
   register: kubectl_apply
   changed_when: "'created' in kubectl_apply.stdout or 'configured' in kubectl_apply.stdout"
+
+- name: Apply the rendered deployment
+  ansible.builtin.command: "{{ bin_kubectl }} apply -f /tmp/anomaly-api-deployment.{{ profile }}.yaml"
+  register: deploy_apply
+  changed_when: "'created' in deploy_apply.stdout or 'configured' in deploy_apply.stdout"
 
 - name: Wait for the postgres pod to be Ready
   ansible.builtin.command: >

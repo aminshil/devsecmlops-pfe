@@ -1,3 +1,5 @@
+# RENDERED BY ANSIBLE from roles/kubernetes/templates/deployment.yaml.j2
+# Edit the template, not the rendered copy.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,7 +8,7 @@ metadata:
   labels:
     app: anomaly-api
 spec:
-  replicas: 2
+  replicas: {{ api_replicas | default(2) }}
   selector:
     matchLabels:
       app: anomaly-api
@@ -33,7 +35,7 @@ spec:
               echo "postgres ready, exiting init container"
       containers:
         - name: api
-          image: devsecmlops-api:2.20.0
+          image: {{ api_image }}
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
@@ -57,9 +59,11 @@ spec:
           # v3: XGBoost primary model baked into the image (3.6MB) --
           # no MinIO fetch needed, so MinIO env vars removed. Lower
           # resource footprint reflects XGBoost's much smaller size.
+{% if apply_resource_limits | default(true) %}
           resources:
-            requests: { cpu: "200m", memory: "256Mi" }
-            limits:   { cpu: "1000m", memory: "512Mi" }
+            requests: { cpu: "{{ api_cpu_request | default('200m') }}", memory: "{{ api_mem_request | default('256Mi') }}" }
+            limits:   { cpu: "{{ api_cpu_limit | default('1000m') }}", memory: "{{ api_mem_limit | default('512Mi') }}" }
+{% endif %}
           livenessProbe:
             httpGet: { path: /health, port: 8000 }
             initialDelaySeconds: 15

@@ -27,7 +27,8 @@ timeout 120 "$MK" start --driver=docker --force && {
     fi
     echo "cluster up but workloads missing — applying manifests"
     "$KC" apply -f "$ROOT/kubernetes/namespace.yaml"
-    "$KC" apply -f "$ROOT/kubernetes/postgres.yaml"
+    "$KC" apply -f "$ROOT/kubernetes/postgres-secret.yaml"
+"$KC" apply -f "$ROOT/kubernetes/postgres.yaml"
     "$KC" apply -f "$ROOT/kubernetes/deployment.yaml"
     "$KC" apply -f "$ROOT/kubernetes/service.yaml"
     "$KC" apply -f "$ROOT/kubernetes/hpa.yaml"
@@ -52,6 +53,7 @@ echo "[4/5] load image + metrics-server..."
 # 5) Apply manifests in order
 echo "[5/5] apply manifests..."
 "$KC" apply -f "$ROOT/kubernetes/namespace.yaml"
+"$KC" apply -f "$ROOT/kubernetes/postgres-secret.yaml"
 "$KC" apply -f "$ROOT/kubernetes/postgres.yaml"
 "$KC" apply -f "$ROOT/kubernetes/deployment.yaml"
 "$KC" apply -f "$ROOT/kubernetes/service.yaml"

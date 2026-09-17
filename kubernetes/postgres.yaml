@@ -19,18 +19,6 @@
 # credentials the v2 MinIO deployment used earlier in this project.
 
 apiVersion: v1
-kind: Secret
-metadata:
-  name: postgres-credentials
-  namespace: ml-serving
-type: Opaque
-stringData:
-  POSTGRES_USER: feedback
-  POSTGRES_PASSWORD: feedback-dev-password
-  POSTGRES_DB: feedback
-
----
-apiVersion: v1
 kind: Service
 metadata:
   name: postgres

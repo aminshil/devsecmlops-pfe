@@ -14,15 +14,19 @@ profile: demo
 run_support_containers: true       # registry/minio/sonarqube/jenkins up for the demo
 run_control_panel: true            # the :8000 mission-control UI
 use_systemd_services: false        # exporters + prometheus as nohup host processes
-apply_resource_limits: false       # keep the single-node VM unconstrained
+apply_resource_limits: true
 use_k8s_secret_for_db: false       # placeholder DSN is fine for the demo
 
 # --- Kubernetes serving (demo) ---
 k8s_namespace: ml-serving
-api_image: "devsecmlops-api:2.16.0"
+api_image: "devsecmlops-api:2.20.0"
 api_replicas: 2
 
 # --- control panel serving env (matches start_control_panel.sh) ---
 cp_model_name: telecom_v3
 cp_predict_threshold: "0.85"
 cp_database_url: "postgresql://x:x@localhost:9999/n"
+api_cpu_request: "200m"
+api_cpu_limit: "1000m"
+api_mem_request: "256Mi"
+api_mem_limit: "512Mi"

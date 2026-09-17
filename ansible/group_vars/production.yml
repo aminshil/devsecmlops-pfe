@@ -19,7 +19,7 @@ use_k8s_secret_for_db: true        # DB creds via a real K8s Secret, not a place
 
 # --- Kubernetes serving (production) ---
 k8s_namespace: ml-serving
-api_image: "devsecmlops-api:2.16.0"
+api_image: "devsecmlops-api:2.20.0"
 api_replicas: 3
 api_cpu_request: "250m"
 api_cpu_limit: "1000m"
