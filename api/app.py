@@ -1238,91 +1238,131 @@ class _FixAction(BaseModel):
     action: str = "start"   # "start" (fix) or "stop"
 
 
+def _fix_result(ok, note=None, error=None, **extra):
+    """Build the {ok, note/error, ...} response shape ui_fix returns."""
+    out = {"ok": ok}
+    if note is not None: out["note"] = note
+    if error is not None: out["error"] = error
+    out.update(extra)
+    return out
+
+
+def _stop_docker(target):
+    try:
+        r = _sp.run(["docker", "stop", target], capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            return _fix_result(True, note=f"stopped container '{target}'")
+        return _fix_result(False, error=r.stderr.strip() or f"docker stop {target} failed")
+    except Exception as e:
+        return _fix_result(False, error=str(e))
+
+
+def _stop_process(target, layer_name):
+    pat = "prometheus --config" if target == "prometheus" else target
+    try:
+        _sp.run(["pkill", "-f", pat], capture_output=True)
+        return _fix_result(True, note=f"stopped {layer_name}")
+    except Exception as e:
+        return _fix_result(False, error=str(e))
+
+
+def _start_docker(target):
+    try:
+        r = _sp.run(["docker", "start", target], capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            return _fix_result(True, note=f"started container '{target}' — may take a few seconds to be ready")
+        return _fix_result(False, error=r.stderr.strip() or f"docker start {target} failed")
+    except Exception as e:
+        return _fix_result(False, error=str(e))
+
+
+def _process_already_running(target):
+    script_check = "prometheus --config" if target == "prometheus" else target
+    try:
+        chk = _sp.run(["pgrep", "-f", script_check], capture_output=True, text=True)
+        return chk.returncode == 0 and bool(chk.stdout.strip())
+    except Exception:
+        return False
+
+
+def _spawn_process(target, layer_name):
+    logf = open(f"/tmp/fix_{layer_name.replace(' ', '_')}.log", "ab")
+    if target == "prometheus":
+        _sp.Popen(["prometheus", "--config.file=monitoring/prometheus.yml",
+                   "--storage.tsdb.path=/tmp/prom_data"],
+                  stdout=logf, stderr=logf, cwd=str(ROOT))
+    else:
+        _sp.Popen(["python3", target], stdout=logf, stderr=logf, cwd=str(ROOT))
+
+
+def _start_process(target, layer_name):
+    if _process_already_running(target):
+        return _fix_result(True, note=f"{layer_name} already running")
+    try:
+        _spawn_process(target, layer_name)
+        return _fix_result(True, note=f"{layer_name} started")
+    except Exception as e:
+        return _fix_result(False, error=str(e))
+
+
+def _start_k8s():
+    script = os.path.join(str(ROOT), "scripts", "k8s_recover.sh")
+    if not os.path.exists(script):
+        return _fix_result(False, error="recovery script not found at scripts/k8s_recover.sh")
+    try:
+        logf = open("/tmp/k8s_recover.log", "ab")
+        _sp.Popen(["bash", script], stdout=logf, stderr=logf)
+        return _fix_result(True, note="Kubernetes full recovery started in the background "
+                "(~1-4 min: tries a gentle start, then a full rebuild if wedged). "
+                "Keep demoing other tabs; K8s goes green when it finishes. "
+                "Progress is in /tmp/k8s_recover.log. If even this fails, Docker "
+                "itself may be down — that needs the terminal.", **{"async": True})
+    except Exception as e:
+        return _fix_result(False, error=str(e))
+
+
+def _dispatch_stop(kind, target, layer_name):
+    """STOP action — container/process layers only; K8s is never stopped from the panel."""
+    if kind == "k8s":
+        return _fix_result(False, error="stopping Kubernetes from the panel is disabled (too disruptive)")
+    if kind == "docker":
+        return _stop_docker(target)
+    if kind == "process":
+        return _stop_process(target, layer_name)
+    return _fix_result(False, error="unknown stop kind")
+
+
+def _dispatch_start(kind, target, layer_name):
+    """START/fix action, dispatched by layer kind."""
+    if kind == "docker":
+        return _start_docker(target)
+    if kind == "process":
+        return _start_process(target, layer_name)
+    if kind == "k8s":
+        return _start_k8s()
+    return _fix_result(False, error="unknown fix kind")
+
+
 @app.post("/ui/fix")
 def ui_fix(body: _FixAction):
-    """Run the known recovery for one down layer. Non-blocking for Kubernetes."""
-    def _ret(ok, note=None, error=None, **extra):
-        _log_fix_action(body.layer, body.action, ok, note or error or "")
-        out = {"ok": ok}
-        if note is not None: out["note"] = note
-        if error is not None: out["error"] = error
-        out.update(extra)
-        return out
+    """Run the known recovery for one down layer. Non-blocking for Kubernetes.
 
+    Extracted into _dispatch_stop/_dispatch_start (and their per-kind helpers)
+    so this entry point stays a thin lookup + dispatch + log, not a 50+
+    branch function — see the SonarQube S3776 finding this refactor resolves.
+    """
     entry = _FIX_MAP.get(body.layer)
     if not entry:
-        return _ret(False, error=f"no known fix for '{body.layer}'")
-    kind, target = entry
-
-    # --- STOP action (container/process layers only; never K8s) ---
-    if body.action == "stop":
-        if kind == "k8s":
-            return _ret(False, error="stopping Kubernetes from the panel is disabled (too disruptive)")
-        if kind == "docker":
-            try:
-                r = _sp.run(["docker", "stop", target], capture_output=True, text=True, timeout=30)
-                if r.returncode == 0:
-                    return _ret(True, note=f"stopped container '{target}'")
-                return _ret(False, error=r.stderr.strip() or f"docker stop {target} failed")
-            except Exception as e:
-                return _ret(False, error=str(e))
-        if kind == "process":
-            pat = "prometheus --config" if target == "prometheus" else target
-            try:
-                _sp.run(["pkill", "-f", pat], capture_output=True)
-                return _ret(True, note=f"stopped {body.layer}")
-            except Exception as e:
-                return _ret(False, error=str(e))
-        return _ret(False, error="unknown stop kind")
-
-    if kind == "docker":
-        try:
-            r = _sp.run(["docker", "start", target], capture_output=True, text=True, timeout=30)
-            if r.returncode == 0:
-                return _ret(True, note=f"started container '{target}' — may take a few seconds to be ready")
-            return _ret(False, error=r.stderr.strip() or f"docker start {target} failed")
-        except Exception as e:
-            return _ret(False, error=str(e))
-
-    if kind == "process":
-        if target == "prometheus":
-            script_check = "prometheus --config"
+        result = _fix_result(False, error=f"no known fix for '{body.layer}'")
+    else:
+        kind, target = entry
+        if body.action == "stop":
+            result = _dispatch_stop(kind, target, body.layer)
         else:
-            script_check = target
-        try:
-            chk = _sp.run(["pgrep", "-f", script_check], capture_output=True, text=True)
-            if chk.returncode == 0 and chk.stdout.strip():
-                return _ret(True, note=f"{body.layer} already running")
-        except Exception:
-            pass
-        try:
-            logf = open(f"/tmp/fix_{body.layer.replace(' ', '_')}.log", "ab")
-            if target == "prometheus":
-                _sp.Popen(["prometheus", "--config.file=monitoring/prometheus.yml",
-                           "--storage.tsdb.path=/tmp/prom_data"],
-                          stdout=logf, stderr=logf, cwd=str(ROOT))
-            else:
-                _sp.Popen(["python3", target], stdout=logf, stderr=logf, cwd=str(ROOT))
-            return _ret(True, note=f"{body.layer} started")
-        except Exception as e:
-            return _ret(False, error=str(e))
+            result = _dispatch_start(kind, target, body.layer)
 
-    if kind == "k8s":
-        script = os.path.join(str(ROOT), "scripts", "k8s_recover.sh")
-        if not os.path.exists(script):
-            return _ret(False, error="recovery script not found at scripts/k8s_recover.sh")
-        try:
-            logf = open("/tmp/k8s_recover.log", "ab")
-            _sp.Popen(["bash", script], stdout=logf, stderr=logf)
-            return _ret(True, note="Kubernetes full recovery started in the background "
-                    "(~1-4 min: tries a gentle start, then a full rebuild if wedged). "
-                    "Keep demoing other tabs; K8s goes green when it finishes. "
-                    "Progress is in /tmp/k8s_recover.log. If even this fails, Docker "
-                    "itself may be down — that needs the terminal.", **{"async": True})
-        except Exception as e:
-            return _ret(False, error=str(e))
-
-    return {"ok": False, "error": "unknown fix kind"}
+    _log_fix_action(body.layer, body.action, result["ok"], result.get("note") or result.get("error") or "")
+    return result
 
 
 # ===========================================================================
