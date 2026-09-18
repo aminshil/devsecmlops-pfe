@@ -28,6 +28,7 @@ Endpoints:
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -708,29 +709,24 @@ _UI_PATH = Path(__file__).resolve().parent / "static" / "control_panel.html"
 # ---------------------------------------------------------------------------
 # Safe logging under /tmp (SonarQube S5443: "publicly writable directories").
 # /tmp is world-writable, so a file opened there directly is exposed to two
-# real attacks from any other local user: (1) pre-creating a symlink at that
-# path to redirect our write elsewhere, and (2) racing to create the file
-# first with permissions we didn't choose. Both are closed by writing only
-# inside our OWN restricted subdirectory (mode 0700, so no other user can
-# even list or create entries in it) and opening with O_NOFOLLOW|O_EXCL-ish
-# semantics so a pre-existing symlink is refused rather than followed.
+# real attacks from any other local user: (1) pre-creating a symlink or a
+# directory at a PREDICTABLE path to redirect or intercept our writes before
+# we ever run, and (2) racing to create the file first with permissions we
+# didn't choose. A fixed name like "/tmp/devsecmlops-panel-logs" is itself
+# the weak point -- anyone can pre-create it. tempfile.mkdtemp() instead
+# creates a directory with a random, unpredictable name, atomically, at
+# mode 0700 (owner-only) with no window for another user to get there first.
+# Created once per process (module import) and reused for that process's
+# lifetime; a restart gets a fresh directory, which is fine since these are
+# ephemeral operational logs, not records that need to survive a restart.
 # ---------------------------------------------------------------------------
-_LOG_DIR = Path("/tmp/devsecmlops-panel-logs")
-
-
-def _ensure_log_dir() -> Path:
-    _LOG_DIR.mkdir(mode=0o700, exist_ok=True)
-    try:
-        os.chmod(_LOG_DIR, 0o700)  # enforce even if the dir pre-existed with looser perms
-    except OSError:
-        pass
-    return _LOG_DIR
+_LOG_DIR = Path(tempfile.mkdtemp(prefix="devsecmlops-panel-logs-"))
 
 
 def _open_safe_log(name: str):
     """Open (create/append) a log file under our restricted directory,
     refusing to follow a symlink if one is already there."""
-    path = _ensure_log_dir() / name
+    path = _LOG_DIR / name
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
