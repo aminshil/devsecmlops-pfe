@@ -1,24 +1,51 @@
 ---
 # ===========================================================================
 # control_panel: the mission-control web UI + serving API (L0/L1).
-# Runs as a host uvicorn process on :8000 so its /ui/status and /ui/infra
-# endpoints have native access to kubectl, docker, and Prometheus on the VM
-# (a container cannot reach those). Started idempotently via a pgrep guard.
+# Runs as a host process on :8000 so its /ui/status and /ui/infra endpoints
+# have native access to kubectl, docker, and Prometheus on the VM (a
+# container cannot reach those). demo profile ONLY -- production explicitly
+# sets run_control_panel: false, since this is an ops/demo convenience, not
+# a serving component (see group_vars/production.yml).
+#
+# Supervised by systemd (Restart=always) rather than a bare nohup process:
+# a plain background process does not survive a VM reboot, which is exactly
+# what happened during defense-prep testing -- every Docker-based layer
+# (Jenkins, Grafana, ...) came back on its own after a reboot, but the
+# control panel stayed down until restarted by hand. systemd closes that
+# gap the same way the monitoring_systemd role already does for production.
 # ===========================================================================
 
-- name: Start the control-panel API (uvicorn on :{{ port_control_panel }})
-  ansible.builtin.shell: |
-    cd {{ repo_dir }}
-    source venv/bin/activate
-    pgrep -f "uvicorn api.app:app.*{{ port_control_panel }}" >/dev/null || \
-      MODEL_NAME={{ cp_model_name }} \
-      PREDICT_THRESHOLD={{ cp_predict_threshold }} \
-      DATABASE_URL="{{ cp_database_url }}" \
-      nohup uvicorn api.app:app --host 0.0.0.0 --port {{ port_control_panel }} \
-        > /tmp/control_panel.log 2>&1 &
-  args:
-    executable: /bin/bash
-  changed_when: false
+- name: Install the control-panel systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/control-panel.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=DevSecMLOps control panel + serving API (:{{ port_control_panel }})
+      After=network.target docker.service
+
+      [Service]
+      Type=simple
+      User=root
+      WorkingDirectory={{ repo_dir }}
+      Environment=MODEL_NAME={{ cp_model_name }}
+      Environment=PREDICT_THRESHOLD={{ cp_predict_threshold }}
+      Environment=DATABASE_URL={{ cp_database_url }}
+      ExecStart={{ repo_dir }}/venv/bin/uvicorn api.app:app --host 0.0.0.0 --port {{ port_control_panel }}
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  become: true
+
+- name: Reload systemd, enable and start the control panel
+  ansible.builtin.systemd:
+    name: control-panel.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  become: true
 
 - name: Wait for the control panel to answer on its port
   ansible.builtin.wait_for:
