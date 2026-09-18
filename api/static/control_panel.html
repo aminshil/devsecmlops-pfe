@@ -353,7 +353,7 @@
           prog.textContent = (s.status === "done") ? "✓ training complete" : ("✗ " + s.status);
           loadRuns();
         }
-      }catch(e){ clearInterval(TR_POLL); TR_POLL = null; prog.textContent = "status error"; }
+      }catch(e){ clearInterval(TR_POLL); TR_POLL = null; prog.textContent = "status error"; console.debug("train status poll failed", e); }
     }, 1500);
   }
   function metricCell(v){ return (v === null || v === undefined) ? "—" : v; }
@@ -370,7 +370,9 @@
           return;
         }
         const m = r.metrics || {};
-        const vtag = (r.verified === true) ? '<span class="tag norm">verified</span>' : (r.verified === false ? '<span class="tag anom">rejected</span>' : '');
+        let vtag = '';
+        if(r.verified === true){ vtag = '<span class="tag norm">verified</span>'; }
+        else if(r.verified === false){ vtag = '<span class="tag anom">rejected</span>'; }
         h += '<tr><td class="mono">' + r.run_id + ' ' + vtag + '</td><td class="mono">' + r.dataset + '</td><td class="mono">' + r.model + '</td><td class="mono"><b>' + m.f1 + '</b></td><td class="mono">' + metricCell(m.precision) + '</td><td class="mono">' + metricCell(m.recall) + '</td><td class="mono">' + metricCell(m.roc_auc) + '</td><td class="mono" style="font-size:11px">' + (r.data_note || "") + '</td>';
         h += '<td><button type="button" class="linkbtn" data-verify="' + r.run_id + '">verify</button>';
         if(r.verified === true){ h += ' <button type="button" class="linkbtn" data-register="' + r.run_id + '">register</button>'; }
@@ -473,7 +475,7 @@
         const p=await getJSON(API+"/ui/fix-progress?layer="+encodeURIComponent(layerName));
         const el=document.getElementById("progress_lines");
         if(el){ el.textContent=(p.lines||[]).join("\n")||"(waiting for output\u2026)"; el.scrollTop=el.scrollHeight; }
-      }catch(e){}
+      }catch(e){ console.debug("progress poll failed", e); }
     }, 1500);
   }
   function progressEnd(layerName,ok,note){
@@ -481,7 +483,7 @@
     const box=document.getElementById("progress_body");
     const tag=ok?'<span class="tag norm">done</span>':'<span class="tag anom">failed</span>';
     box.innerHTML='<div style="margin-bottom:6px">'+tag+' <b>'+layerName+'</b> — '+(note||"")+'</div>';
-    setTimeout(function(){ if(box.innerHTML.indexOf(layerName)!==-1){ box.innerHTML='<div class="hint">nothing running</div>'; } }, 15000);
+    setTimeout(function(){ if(box.innerHTML.includes(layerName)){ box.innerHTML='<div class="hint">nothing running</div>'; } }, 15000);
   }
   async function fixLayer(layerName){
     progressStart(layerName,"fixing");

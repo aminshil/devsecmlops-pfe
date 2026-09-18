@@ -124,17 +124,17 @@ def _train_isoforest(df, features, params):
         df_tr = df_tr.copy(); df_te = df_te.copy()
         df_tr["machine"] = "__all__"; df_te["machine"] = "__all__"
     baselines = build_baselines(df_tr, features)
-    X_tr = apply_zscore(df_tr, baselines, features)
-    X_te = apply_zscore(df_te, baselines, features)
+    x_tr = apply_zscore(df_tr, baselines, features)
+    x_te = apply_zscore(df_te, baselines, features)
 
     model = IsolationForest(
         contamination=float(params.get("contamination", 0.068)),
         n_estimators=int(params.get("n_estimators", 200)),
         random_state=42, n_jobs=-1)
-    model.fit(X_tr)
+    model.fit(x_tr)
 
-    y_pred = (model.predict(X_te) == -1).astype(int)
-    y_score = -model.score_samples(X_te)
+    y_pred = (model.predict(x_te) == -1).astype(int)
+    y_score = -model.score_samples(x_te)
     y_true = df_te["label"].astype(int)
 
     metrics = {
@@ -287,14 +287,14 @@ def register_run(run_id):
 
     tag = f"devsecmlops-api:candidate-{run_id}"
     deploy_cmds = [
-        f"# 1. bake the registered model into a new image",
+        "# 1. bake the registered model into a new image",
         f"docker build -t {tag} .",
-        f"# 2. load it into the cluster",
+        "# 2. load it into the cluster",
         f"minikube image load {tag}",
-        f"# 3. roll the deployment to the new image (zero-downtime)",
+        "# 3. roll the deployment to the new image (zero-downtime)",
         f"kubectl set image deployment/anomaly-api api={tag} -n ml-serving",
-        f"# 4. watch the rollout",
-        f"kubectl rollout status deployment/anomaly-api -n ml-serving",
+        "# 4. watch the rollout",
+        "kubectl rollout status deployment/anomaly-api -n ml-serving",
     ]
     return {"ok": True, "registered": str(registered), "image_tag": tag,
             "deploy_commands": deploy_cmds}

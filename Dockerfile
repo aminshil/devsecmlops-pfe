@@ -4,6 +4,18 @@
 #            rollback = kubectl rollout undo (previous tag still in registry).
 FROM python:3.10-slim
 
+# ── Security: patch the base image's OS packages ──────────────────────────
+# python:3.10-slim's Debian packages accumulate CVEs between upstream base-
+# image rebuilds (util-linux, perl, openssl, sqlite, pcre2, gzip were all
+# flagged by Trivy). `apt-get upgrade` pulls Debian's own patched builds of
+# whatever is already installed -- it does not add packages, so image size
+# is essentially unchanged. Placed first so this layer caches independently
+# of application code and only invalidates when Debian ships new patches.
+RUN apt-get update -qq && \
+    apt-get upgrade -y -qq && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 # ── Security: run as non-root (Trivy/SonarQube quality gates will check) ──
 RUN groupadd -r appuser && useradd -r -g appuser -m -d /home/appuser appuser
 
@@ -12,9 +24,13 @@ WORKDIR /app
 # ── Install deps FIRST (layer caching: deps change less often than code) ──
 # --no-cache-dir keeps the image small
 COPY requirements-api.txt .
-RUN pip install --no-cache-dir --upgrade pip setuptools>=70.0.0 wheel>=0.46.2 && \
+# setuptools>=78.1.1 fixes CVE-2025-47273 (path traversal in PackageIndex);
+# msgpack>=1.2.1 fixes GHSA-6v7p-g79w-8964 (out-of-bounds read on Unpacker
+# reuse) -- msgpack is a transitive dep (via boto3), pinned explicitly so the
+# fix isn't silently undone by a future transitive-resolution change.
+RUN pip install --no-cache-dir --upgrade pip "setuptools>=78.1.1" wheel>=0.46.2 && \
     pip install --no-cache-dir -r requirements-api.txt && \
-    pip install --no-cache-dir boto3
+    pip install --no-cache-dir "msgpack>=1.2.1" boto3
 
 # ── Copy application code ──
 COPY api/ ./api/

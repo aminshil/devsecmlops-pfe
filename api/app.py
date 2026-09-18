@@ -705,6 +705,44 @@ from fastapi.responses import HTMLResponse as _HTMLResponse
 
 _UI_PATH = Path(__file__).resolve().parent / "static" / "control_panel.html"
 
+# ---------------------------------------------------------------------------
+# Safe logging under /tmp (SonarQube S5443: "publicly writable directories").
+# /tmp is world-writable, so a file opened there directly is exposed to two
+# real attacks from any other local user: (1) pre-creating a symlink at that
+# path to redirect our write elsewhere, and (2) racing to create the file
+# first with permissions we didn't choose. Both are closed by writing only
+# inside our OWN restricted subdirectory (mode 0700, so no other user can
+# even list or create entries in it) and opening with O_NOFOLLOW|O_EXCL-ish
+# semantics so a pre-existing symlink is refused rather than followed.
+# ---------------------------------------------------------------------------
+_LOG_DIR = Path("/tmp/devsecmlops-panel-logs")
+
+
+def _ensure_log_dir() -> Path:
+    _LOG_DIR.mkdir(mode=0o700, exist_ok=True)
+    try:
+        os.chmod(_LOG_DIR, 0o700)  # enforce even if the dir pre-existed with looser perms
+    except OSError:
+        pass
+    return _LOG_DIR
+
+
+def _open_safe_log(name: str):
+    """Open (create/append) a log file under our restricted directory,
+    refusing to follow a symlink if one is already there."""
+    path = _ensure_log_dir() / name
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(str(path), flags, 0o600)
+    return os.fdopen(fd, "ab")
+
+
+def _safe_log_path(name: str) -> str:
+    """Path string for a log under the restricted directory (for read-only
+    tailing, e.g. ui_fix_progress) — does not create the file."""
+    return str(_LOG_DIR / name)
+
 
 @app.get("/ui", response_class=_HTMLResponse)
 def ui_page():
@@ -1197,7 +1235,7 @@ def ui_pipeline_control(body: _PipelineAction):
         if _proc_running(script):
             return {"ok": True, "note": f"{p['label']} already running", "running": True}
         try:
-            logf = open(f"/tmp/{body.target}.log", "ab")
+            logf = _open_safe_log(f"{body.target}.log")
             _sp.Popen(["python3", script], stdout=logf, stderr=logf, cwd=str(ROOT))
             return {"ok": True, "note": f"{p['label']} started", "running": True}
         except Exception as e:
@@ -1286,7 +1324,7 @@ def _process_already_running(target):
 
 
 def _spawn_process(target, layer_name):
-    logf = open(f"/tmp/fix_{layer_name.replace(' ', '_')}.log", "ab")
+    logf = _open_safe_log(f"fix_{layer_name.replace(' ', '_')}.log")
     if target == "prometheus":
         _sp.Popen(["prometheus", "--config.file=monitoring/prometheus.yml",
                    "--storage.tsdb.path=/tmp/prom_data"],
@@ -1310,7 +1348,7 @@ def _start_k8s():
     if not os.path.exists(script):
         return _fix_result(False, error="recovery script not found at scripts/k8s_recover.sh")
     try:
-        logf = open("/tmp/k8s_recover.log", "ab")
+        logf = _open_safe_log("k8s_recover.log")
         _sp.Popen(["bash", script], stdout=logf, stderr=logf)
         return _fix_result(True, note="Kubernetes full recovery started in the background "
                 "(~1-4 min: tries a gentle start, then a full rebuild if wedged). "
@@ -1397,14 +1435,15 @@ def ui_fix_log():
 # result. Read-only, capped to the last N lines.
 # ===========================================================================
 _ACTION_LOGFILES = {
-    "Kubernetes": "/tmp/k8s_recover.log",
+    "Kubernetes": "k8s_recover.log",
 }
 
 
 def _action_logfile_for(layer: str) -> str:
-    if layer in _ACTION_LOGFILES:
-        return _ACTION_LOGFILES[layer]
-    return f"/tmp/fix_{layer.replace(' ', '_')}.log"
+    """Path under the restricted log directory (see _open_safe_log above) —
+    these names are the same ones _open_safe_log writes to."""
+    name = _ACTION_LOGFILES.get(layer, f"fix_{layer.replace(' ', '_')}.log")
+    return _safe_log_path(name)
 
 
 @app.get("/ui/fix-progress")
