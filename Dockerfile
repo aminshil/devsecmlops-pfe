@@ -32,6 +32,12 @@ RUN pip install --no-cache-dir --upgrade pip "setuptools>=78.1.1" wheel>=0.46.2 
     pip install --no-cache-dir -r requirements-api.txt && \
     pip install --no-cache-dir "msgpack>=1.2.1" boto3
 
+# ensurepip bundles its own frozen setuptools wheel purely to bootstrap
+# pip in brand-new virtualenvs -- it is never imported or run by this
+# image (pip is already installed above). Removing it drops a dead,
+# outdated copy that Trivy otherwise flags as a live dependency.
+RUN find /usr/local/lib/python3.10/ensurepip/_bundled -name "setuptools-*.whl" -delete
+
 # ── Copy application code ──
 COPY api/ ./api/
 COPY ml-model/preprocess.py ./ml-model/preprocess.py
