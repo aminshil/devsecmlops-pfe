@@ -1232,7 +1232,7 @@ def ui_pipeline_control(body: _PipelineAction):
             return {"ok": True, "note": f"{p['label']} already running", "running": True}
         try:
             logf = _open_safe_log(f"{body.target}.log")
-            _sp.Popen(["python3", script], stdout=logf, stderr=logf, cwd=str(ROOT))
+            _sp.Popen([str(ROOT / "venv" / "bin" / "python3"), script], stdout=logf, stderr=logf, cwd=str(ROOT))
             return {"ok": True, "note": f"{p['label']} started", "running": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}
@@ -1326,7 +1326,7 @@ def _spawn_process(target, layer_name):
                    "--storage.tsdb.path=/tmp/prom_data"],
                   stdout=logf, stderr=logf, cwd=str(ROOT))
     else:
-        _sp.Popen(["python3", target], stdout=logf, stderr=logf, cwd=str(ROOT))
+        _sp.Popen([str(ROOT / "venv" / "bin" / "python3"), target], stdout=logf, stderr=logf, cwd=str(ROOT))
 
 
 def _start_process(target, layer_name):
