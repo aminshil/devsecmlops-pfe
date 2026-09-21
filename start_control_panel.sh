@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# start_control_panel.sh — launches the DevSecMLOps control panel + dependencies
+# start_control_panel.sh
+# NOTE: this is the MANUAL/interactive startup (nohup-based), handy for a
+# quick local bring-up. The SUPERVISED path is the systemd unit installed
+# by the Ansible control_panel role (control-panel.service, Restart=always),
+# which survives reboots. Do not run both at once -- they compete for :8000. — launches the DevSecMLOps control panel + dependencies
 set -u
 cd "$(dirname "$0")"
 
