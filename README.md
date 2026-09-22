@@ -14,7 +14,7 @@ victims when multiple machines alert at once.
 A production-deployed anomaly detection platform for a simulated 200-machine
 telecom fleet, built end-to-end across seven infrastructure layers (L0-L5,
 all seven now built, L6 being an idempotent Ansible playbook). Currently serving live in Kubernetes at
-version 2.15.0 (v4 rolling-features XGBoost primary + IsolationForest safety
+version 2.20.2 (v4 rolling-features XGBoost primary + IsolationForest safety
 net, with a hybrid v3/v4 serving path), verified through a 33,600-request
 two-week load test with zero errors.
 
@@ -1239,16 +1239,17 @@ register call refused because the run had not passed verification.
 - Local registry (`registry:2`, port 5000) for Jenkins to push to
 
 ```bash
-docker build -t devsecmlops-api:2.15.0 .
-docker run -p 8000:8000 devsecmlops-api:2.15.0
+docker build -t devsecmlops-api:2.20.2 .
+docker run -p 8000:8000 devsecmlops-api:2.20.2
 ```
 
 ---
 
 ## CI/CD (L3)
 
-9-stage Jenkins pipeline, triggered from `git push` (private repo, PAT
-credential):
+10-stage Jenkins pipeline, triggered from `git push` (private repo, PAT
+credential) -- genuinely end-to-end, push-to-serving, with zero manual
+step in between:
 
 1. Checkout
 2. Unit tests (pytest) -- 15 tests, fail-fast: a broken commit stops the
@@ -1260,7 +1261,18 @@ credential):
 6. Container smoke test -- runs the image standalone and curls `/health`
 7. Trivy CVE scan (HIGH/CRITICAL)
 8. Push to local registry
-9. Deploy placeholder (pull-back verification; real K8s deploy is L4)
+9. **Deploy to Kubernetes** -- loads the freshly-built image into the
+   running Minikube cluster and rolls out `kubectl set image`, blocking
+   on `kubectl rollout status` until the update genuinely completes (not
+   just accepted). See "Automated deployment from Jenkins" below for how
+   Jenkins -- a separate container with no built-in path to the cluster --
+   was wired up to do this, and the SSH-based limitation of
+   `minikube image load` that had to be routed around.
+10. **Post-deploy smoke test** -- `kubectl exec`s into the freshly-rolled-
+    out pod and calls its own `/health` endpoint, failing the build if the
+    new pods aren't genuinely serving correctly. This is the gate that
+    proves stage 9 didn't just update a Kubernetes object -- the new code
+    is actually live and responding.
 
 **Security + quality fixes verified through this pipeline, not just manually:**
 
@@ -1284,6 +1296,13 @@ credential):
   the container on startup when no PostgreSQL was reachable -- which broke the
   standalone smoke test. Made non-fatal (Engineering Decision #22), so the
   container serves `/health` and `/predict` even with the DB down.
+- **Automated deployment, verified live end-to-end:** build `2.20.2-b61`
+  ran all 10 stages to `Finished: SUCCESS` -- Quality Gate OK, Trivy 0
+  OS CVEs, image loaded into the live cluster, `kubectl rollout status`
+  confirmed the update, and the stage-10 smoke test's in-pod `/health`
+  call returned `{'status': 'ok', ... 'version': '2.20.2'}`, matching the
+  build that was just deployed. No manual step between `git push` and a
+  verified-serving update.
 
 Requires: SonarQube Scanner plugin, `sonarqube-token` credential (Secret
 text), `sonar-scanner` CLI installed in the Jenkins container, a dedicated
@@ -1299,7 +1318,7 @@ Minikube, single-node, Docker driver. Single namespace: `ml-serving`
 outside the cluster, not in a K8s namespace -- see MLOps section below
 for why.
 
-- **Deployment:** 2 replicas of `devsecmlops-api:2.15.0`
+- **Deployment:** 2 replicas of `devsecmlops-api:<version>-b<build>`, built, scanned, and rolled out automatically by the CI/CD pipeline (see "Automated deployment from Jenkins" above)
 - **Service:** NodePort 30080
 - **HorizontalPodAutoscaler:** 2–5 replicas, target 70% CPU
 - **Security:** non-root `securityContext` (`runAsUser: 1000`,
@@ -1422,7 +1441,7 @@ likely_root_causes=['router-01']
 ```bash
 minikube start --driver=docker --force
 minikube addons enable metrics-server
-minikube image load devsecmlops-api:2.15.0
+minikube image load devsecmlops-api:2.20.2
 kubectl apply -f kubernetes/namespace.yaml
 kubectl apply -f kubernetes/postgres.yaml     # PostgreSQL StatefulSet for the feedback loop
 kubectl apply -f kubernetes/deployment.yaml
@@ -1838,8 +1857,8 @@ python ml-model/zscore_demo.py
 MODEL_NAME=telecom uvicorn api.app:app --host 0.0.0.0 --port 8000
 
 # Or containerized
-docker build -t devsecmlops-api:2.15.0 .
-docker run -p 8000:8000 devsecmlops-api:2.15.0
+docker build -t devsecmlops-api:2.20.2 .
+docker run -p 8000:8000 devsecmlops-api:2.20.2
 
 # Test endpoints
 curl localhost:8000/health
