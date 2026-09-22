@@ -1332,6 +1332,74 @@ rule adopted: always run `minikube start` (not `docker start minikube`)
 after any Docker daemon restart, since only `minikube start` properly
 re-establishes cluster networking and certificates.
 
+**Operational incident, documented: swap exhaustion masquerading as a
+Kubernetes hang.** After several hours of repeated cluster rebuilds,
+`minikube start` began timing out during Docker container creation
+(`create host timed out in 360 seconds`) with CPU load near zero — not
+the resource contention that number would suggest. Diagnosis: system
+swap was ~97% full (1.9 GB of a 2 GB swap file), and any process
+allocating memory, including Docker's own container-creation path, was
+stalling on swap I/O rather than genuinely lacking resources (8+ GB of
+real RAM was free at the same moment). `swapoff -a && swapon -a` forces
+everything back into RAM with zero disruption to running processes and
+resolved it immediately. This is a distinct failure mode from the
+Docker-daemon-restart networking issue above — same symptom (a "stuck"
+cluster), different root cause — and is a plausible explanation for at
+least some earlier incidents in this project that were attributed only
+to networking.
+
+**Operational incident, documented: Minikube's own image cache is
+separate from Docker's.** Even with the 1.9 GB `kicbase` base image
+already present in `docker images`, `minikube start` re-downloaded it on
+every fresh cluster creation. Cause: `minikube delete` clears
+`~/.minikube/cache/images/`, a cache Minikube consults *before* checking
+the Docker daemon's own image store — so having the image in Docker does
+not prevent a re-fetch from that separate cache being empty. Fixed by
+pre-populating it once (`docker save <image> -o
+~/.minikube/cache/images/amd64/<name>`); confirmed to survive subsequent
+`minikube delete --all --purge` cycles, making every later recovery
+network-free and consistently fast (`minikube start` completing in
+well under a minute rather than several).
+
+### Automated deployment from Jenkins (no manual step)
+
+Jenkins and Minikube are separate, sibling Docker containers on the same
+host — Jenkins has no built-in path to the cluster. The pipeline's final
+stage (replacing an earlier placeholder that only verified the image was
+pullable from the registry) now performs a real, automated rollout:
+
+1. `minikube image load` — loads the freshly-built image directly into
+   the cluster's own image store (the same mechanism used manually
+   throughout development; Minikube's Docker driver does not pull from
+   the registry, see above)
+2. `kubectl set image` — points the Deployment at the new tag
+3. `kubectl rollout status --timeout=180s` — blocks until the rolling
+   update genuinely completes, not just until the command is accepted
+4. A post-deploy smoke test execs into the live pod and calls `/health`,
+   failing the build if the new pods aren't actually serving correctly
+
+To make this possible, the Jenkins container was given its own copy of
+the tooling and credentials needed to reach the cluster — installed into
+`/var/jenkins_home` (the container's persistent volume) rather than
+`/tmp`, so the setup survives a Jenkins container restart:
+
+- `kubectl` and the `minikube` CLI, copied from the host's already-
+  verified binaries (Jenkins has no general outbound internet access on
+  this network — confirmed via a direct connection test — so package-
+  manager installs inside the container don't work here)
+- A working kubeconfig plus the full Minikube certificate directory,
+  copied from the host and connected to the `minikube` Docker network so
+  Jenkins can reach the cluster's API server directly
+- `KUBECONFIG` and `MINIKUBE_HOME` set explicitly in the deploy stage —
+  `kubectl` and the `minikube` CLI each need their own, separate piece of
+  cluster state to know it exists
+
+Deployment is intentionally **unauthenticated**: a single-VM PFE demo
+environment with no public exposure does not carry the same threat model
+as a multi-tenant production cluster, and API-key/JWT auth on `/predict`
+and `/feedback` is named explicitly as future work rather than left
+unaddressed — see "Limitations and future work."
+
 Verified end-to-end through the K8s-managed service (not just a bare
 Docker container):
 
