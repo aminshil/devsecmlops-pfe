@@ -105,8 +105,8 @@ pipeline {
             steps {
                 echo "Deploying ${IMAGE_NAME}:${IMAGE_TAG} to the ml-serving namespace"
                 sh '''
-                    export KUBECONFIG=/var/jenkins_home/.kube/config
-                    export MINIKUBE_HOME=/var/jenkins_home/.minikube-certs/.minikube
+                    export KUBECONFIG=/home/pfe/.kube/config
+                    export MINIKUBE_HOME=/home/pfe/.minikube
 
                     # Minikube (Docker driver) does not pull from the registry --
                     # it needs the image loaded directly into its own image store.
@@ -129,7 +129,7 @@ pipeline {
             steps {
                 echo "Verifying the newly-deployed pods actually serve correctly"
                 sh '''
-                    export KUBECONFIG=/var/jenkins_home/.kube/config
+                    export KUBECONFIG=/home/pfe/.kube/config
 
                     kubectl exec -n ml-serving deploy/anomaly-api -- \
                         python3 -c "import urllib.request,json,sys; \
