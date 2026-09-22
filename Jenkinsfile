@@ -101,14 +101,41 @@ pipeline {
             }
         }
 
-        stage('7. Deploy (K8s placeholder)') {
+        stage('7. Deploy to Kubernetes') {
             steps {
-                echo "Deploy stage — will apply K8s manifests in L4"
-                echo "For now: verify image is pullable from registry"
+                echo "Deploying ${IMAGE_NAME}:${IMAGE_TAG} to the ml-serving namespace"
                 sh '''
-                    docker rmi ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} || true
-                    docker pull ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-                    echo "Pipeline complete — image ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} ready for K8s deployment"
+                    export KUBECONFIG=/var/jenkins_home/.kube/config
+                    export MINIKUBE_HOME=/var/jenkins_home/.minikube-certs/.minikube
+
+                    # Minikube (Docker driver) does not pull from the registry --
+                    # it needs the image loaded directly into its own image store.
+                    # This mirrors exactly the `minikube image load` step used
+                    # manually throughout this project's development.
+                    minikube image load ${IMAGE_NAME}:${IMAGE_TAG} --profile=minikube
+
+                    # Point the deployment at this build's image and wait for the
+                    # rolling update to actually finish -- not just "kubectl accepted
+                    # the command", but pods genuinely Ready on the new version.
+                    kubectl set image deployment/anomaly-api \
+                        api=${IMAGE_NAME}:${IMAGE_TAG} -n ml-serving
+
+                    kubectl rollout status deployment/anomaly-api \
+                        -n ml-serving --timeout=180s
+                '''
+            }
+        }
+        stage('8. Post-deploy smoke test') {
+            steps {
+                echo "Verifying the newly-deployed pods actually serve correctly"
+                sh '''
+                    export KUBECONFIG=/var/jenkins_home/.kube/config
+
+                    kubectl exec -n ml-serving deploy/anomaly-api -- \
+                        python3 -c "import urllib.request,json,sys; \
+                        d=json.load(urllib.request.urlopen('http://localhost:8000/health', timeout=10)); \
+                        print('health:', d); \
+                        sys.exit(0 if d.get('status')=='ok' else 1)"
                 '''
             }
         }
