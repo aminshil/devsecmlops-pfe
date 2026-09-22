@@ -71,8 +71,24 @@ ensure_image_loaded() {
 # Jenkins before a (re)start and reconnecting it after is what actually
 # fixes this -- confirmed live via `docker network inspect minikube`,
 # which showed Jenkins (not a leftover minikube container) holding .2.
-disconnect_jenkins() {
-  docker network disconnect minikube jenkins >/dev/null 2>&1 || true
+disconnect_ip_holder() {
+  # Generalized fix: any container that has ever been connected to the
+  # 'minikube' network could be squatting on the fixed IP the cluster
+  # container always wants for itself. Named-container disconnects
+  # (e.g. "always disconnect jenkins") are fragile -- tonight alone,
+  # jenkins, its renamed jenkins-old rollback copy, AND registry each
+  # independently ended up holding it at different points, and none of
+  # them share a name. Find whoever CURRENTLY holds .2 and evict them,
+  # regardless of what they're called -- this is the actual invariant
+  # that matters, not any one container's identity.
+  local holder
+  holder="$(docker network inspect minikube \
+    --format '{{range $k,$v := .Containers}}{{if eq $v.IPv4Address "192.168.49.2/24"}}{{$v.Name}}{{end}}{{end}}' \
+    2>/dev/null)"
+  if [ -n "$holder" ]; then
+    echo "disconnecting '$holder' from the minikube network (holding 192.168.49.2, which the cluster container needs for itself)"
+    docker network disconnect minikube "$holder" >/dev/null 2>&1 || true
+  fi
 }
 reconnect_jenkins() {
   docker network connect minikube jenkins >/dev/null 2>&1 || true
@@ -100,12 +116,26 @@ ensure_base_image_cached() {
 }
 ensure_base_image_cached
 
+# Jenkins bind-mounts $MINIKUBE_HOME and $KUBECONFIG's directory directly
+# (read-write, so `minikube image load` triggered from a Jenkins pipeline
+# stage can write to the cache -- see the automated-deployment work).
+# Minikube runs its start/create logic as root, so a fresh cluster keeps
+# recreating profile files (config.json, cache entries, etc.) owned only
+# by root -- silently undoing any earlier chmod fix and breaking Jenkins'
+# write access again on the VERY NEXT rebuild. Re-asserting this after
+# every successful start, unconditionally, means it never has to be done
+# by hand again.
+fix_minikube_home_perms() {
+  chmod -R a+rwX "$MINIKUBE_HOME" 2>/dev/null || true
+}
+
 # 1) Try a gentle start first (handles a merely-stopped cluster, fast)
 echo "[1/5] gentle start attempt..."
 timeout 120 "$MK" start --driver=docker --force && {
   if timeout 15 "$KC" get nodes >/dev/null 2>&1; then
     echo "gentle start worked — cluster responding"
     reconnect_jenkins
+    fix_minikube_home_perms
     ensure_image_loaded
     if ! "$KC" get pods -n "$NS" 2>/dev/null | grep -q anomaly-api; then
       echo "workloads missing — applying manifests"
@@ -129,7 +159,7 @@ timeout 120 "$MK" start --driver=docker --force && {
 }
 
 echo "[2/5] gentle start failed or cluster still not serving — full rebuild"
-# 2) Disconnect Jenkins (frees 192.168.49.2 -- see disconnect_jenkins above),
+# 2) Free 192.168.49.2 (see disconnect_ip_holder above -- evicts whoever
 # then delete the wedged cluster and force-clear any leftover Docker
 # network/container/volume state. Deliberately PLAIN `minikube delete`,
 # NOT `--all --purge`: purge wipes the entire ~/.minikube directory,
@@ -139,7 +169,7 @@ echo "[2/5] gentle start failed or cluster still not serving — full rebuild"
 # kubernetes/minikube#13074, #12894, #13729) -- there is no single flag
 # that prevents it; force-removing the container/network/volume before
 # the next start is the fix across those threads.
-disconnect_jenkins
+disconnect_ip_holder
 timeout 120 "$MK" delete 2>&1 | tail -10
 docker rm -f minikube >/dev/null 2>&1 || true
 docker network rm minikube >/dev/null 2>&1 || true
@@ -149,6 +179,7 @@ docker volume rm minikube >/dev/null 2>&1 || true
 echo "[3/5] fresh start..."
 timeout 180 "$MK" start --driver=docker --force || { echo "FATAL: fresh start failed"; exit 1; }
 reconnect_jenkins
+fix_minikube_home_perms
 
 # 4) Load image + metrics-server
 echo "[4/5] load image + metrics-server..."
