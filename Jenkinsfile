@@ -106,13 +106,20 @@ pipeline {
                 echo "Deploying ${IMAGE_NAME}:${IMAGE_TAG} to the ml-serving namespace"
                 sh '''
                     export KUBECONFIG=/home/pfe/.kube/config
-                    export MINIKUBE_HOME=/home/pfe/.minikube
 
-                    # Minikube (Docker driver) does not pull from the registry --
-                    # it needs the image loaded directly into its own image store.
-                    # This mirrors exactly the `minikube image load` step used
-                    # manually throughout this project's development.
-                    minikube image load ${IMAGE_NAME}:${IMAGE_TAG} --profile=minikube
+                    # `minikube image load` uses SSH internally to transfer the
+                    # image into the node -- via a host-loopback address
+                    # (127.0.0.1:<forwarded-ssh-port>) that only resolves
+                    # correctly on the real host, never from inside ANY
+                    # container. From Jenkins it fails structurally (confirmed
+                    # live: cached the image correctly every time but never
+                    # actually injected it, leaving pods stuck
+                    # ErrImageNeverPull). Piping through the shared Docker
+                    # socket instead -- the same mechanism Jenkins already
+                    # uses for every other docker command in this pipeline --
+                    # bypasses SSH entirely and loads the image directly into
+                    # the node's own Docker daemon.
+                    docker save ${IMAGE_NAME}:${IMAGE_TAG} | docker exec -i minikube docker load
 
                     # Point the deployment at this build's image and wait for the
                     # rolling update to actually finish -- not just "kubectl accepted
