@@ -96,7 +96,7 @@ pipeline {
                     docker push ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
                     docker push ${REGISTRY}/${IMAGE_NAME}:latest
                     echo "── Registry catalog ──"
-                    curl -s http://${REGISTRY}/v2/${IMAGE_NAME}/tags/list || echo "(registry catalog unreachable from Jenkins container)"
+                    curl -s http://registry:5000/v2/${IMAGE_NAME}/tags/list || echo "(registry catalog unreachable from Jenkins container)"
                 '''
             }
         }
