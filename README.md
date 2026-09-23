@@ -1380,6 +1380,40 @@ pre-populating it once (`docker save <image> -o
 network-free and consistently fast (`minikube start` completing in
 well under a minute rather than several).
 
+**Operational incident, documented: `minikube image load` cannot run
+from inside any container.** The automated Jenkins deploy stage
+consistently reported success (exit code 0, cache populated correctly)
+but the image never actually reached the cluster's runtime -- new pods
+stayed `ErrImageNeverPull` indefinitely. Root cause: `minikube image
+load`'s Docker driver uses SSH internally to reach the node, via a
+host-loopback address (`127.0.0.1:<forwarded-ssh-port>`). That address
+only resolves to the real Minikube node from the actual host -- from
+inside Jenkins (or any other container), `127.0.0.1` means that
+container's own loopback, so the SSH connection fails structurally
+(confirmed directly: `minikube status` from inside Jenkins reproduced
+`dial tcp 127.0.0.1:<port>: connect: connection refused`, the same
+signature reported in kubernetes/minikube#16293 and #15260 for nested-
+container Minikube access). Fixed by routing around SSH entirely --
+`docker save <image> | docker exec -i minikube docker load` pipes the
+image through the Docker socket already shared between Jenkins and the
+cluster (the same mechanism used for every other docker command in the
+pipeline), bypassing the broken path completely.
+
+**Operational incident, documented: Docker network conflicts on
+`192.168.49.2`, from more than one source.** Minikube always wants this
+fixed address for its own node container. Across one evening alone,
+three *different*, unrelated containers ended up holding it at various
+points -- the Jenkins container in normal operation, a `jenkins-old`
+container kept temporarily as a rollback safety net during an
+infrastructure change, and the registry container (connected during an
+unrelated, since-reverted experiment) -- none sharing a name. A
+recovery step that disconnects one hardcoded container name is blind to
+the other two. Fixed by looking up whichever container *currently*
+holds the address (`docker network inspect minikube --format
+'{{range $k,$v := .Containers}}{{if eq $v.IPv4Address
+"192.168.49.2/24"}}{{$v.Name}}{{end}}{{end}}'`) and evicting it by IP,
+not by name -- robust to any future container ending up there too.
+
 ### Automated deployment from Jenkins (no manual step)
 
 Jenkins and Minikube are separate, sibling Docker containers on the same
