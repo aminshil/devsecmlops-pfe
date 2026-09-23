@@ -33,7 +33,7 @@ spec:
               echo "postgres ready, exiting init container"
       containers:
         - name: api
-          image: devsecmlops-api:2.20.0
+          image: devsecmlops-api:2.20.3
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
