@@ -24,3 +24,23 @@ scrape_configs:
     scrape_interval: 30s
     static_configs:
       - targets: ["localhost:9400"]
+
+  # Self-instrumented /metrics on the serving API itself (see api/app.py) --
+  # two targets so Grafana can show predictions served by the host process
+  # AND predictions actually served by a Kubernetes pod separately, not
+  # just whatever the anomaly bridge happened to poll secondhand.
+  - job_name: "anomaly-api-host"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["localhost:8000"]
+        labels:
+          served_by: "host"
+
+  - job_name: "anomaly-api-k8s"
+    scrape_interval: 15s
+    static_configs:
+      # NodePort -- Prometheus runs as a host process, outside the cluster,
+      # so it reaches the pods the same way any external client would.
+      - targets: ["192.168.49.2:30080"]
+        labels:
+          served_by: "kubernetes"

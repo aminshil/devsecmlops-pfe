@@ -32,9 +32,12 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+import time
+
 import joblib
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from pydantic import BaseModel
 
 ROOT       = Path(__file__).resolve().parent.parent
@@ -218,6 +221,33 @@ app = FastAPI(
         "model over time. See README section 'Feedback loop and online learning'."
     ),
 )
+
+# ---------------------------------------------------------------------------
+# Self-instrumentation: this endpoint (and everyone who ends up serving it --
+# the host process directly, or a Kubernetes pod behind the NodePort) reports
+# its OWN prediction activity as Prometheus metrics, rather than relying on
+# an external process (the anomaly bridge) to reconstruct it secondhand.
+# This is what lets Grafana show K8s-served predictions specifically, not
+# just whatever the bridge happened to poll from the host API -- point
+# Prometheus at the NodePort and pod-side activity shows up on its own.
+# Label cardinality kept deliberately low: machine_type (11 values) x
+# is_anomaly (2) x likely_cause (a handful of known causes) -- not per-
+# machine, which would be 200x larger for no real analytical benefit.
+# ---------------------------------------------------------------------------
+PREDICTIONS_TOTAL = Counter(
+    "api_predictions_total",
+    "Total /predict calls this process has answered",
+    ["machine_type", "is_anomaly", "likely_cause"],
+)
+PREDICTION_LATENCY = Histogram(
+    "api_prediction_latency_seconds",
+    "Time to compute and return a /predict response",
+)
+
+
+@app.get("/metrics")
+def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 # Global flag: is the feedback DB available? Set at startup, checked before
@@ -568,6 +598,7 @@ def _predict_fallback(reading, X, z_scores, window, machine_type, baseline_used)
     responses={400: {"description": "Invalid input: missing metric, bad hour/timestamp"}},
 )
 def predict(reading: Reading):
+    _predict_start = time.time()
     window = _resolve_window(reading)
 
     machine_data = baselines.get(reading.machine, {})
@@ -588,10 +619,19 @@ def predict(reading: Reading):
     z_scores = {c: round(float(v), 2) for c, v in zip(FEATURES, X.to_numpy()[0])}
 
     if IS_V2:
-        return _predict_v2(reading, X, z_scores, window, machine_type, baseline_used)
-    if IS_V3:
-        return _predict_v3_v4(reading, X, z_scores, window, machine_type, baseline_used)
-    return _predict_fallback(reading, X, z_scores, window, machine_type, baseline_used)
+        result = _predict_v2(reading, X, z_scores, window, machine_type, baseline_used)
+    elif IS_V3:
+        result = _predict_v3_v4(reading, X, z_scores, window, machine_type, baseline_used)
+    else:
+        result = _predict_fallback(reading, X, z_scores, window, machine_type, baseline_used)
+
+    PREDICTION_LATENCY.observe(time.time() - _predict_start)
+    PREDICTIONS_TOTAL.labels(
+        machine_type=result.get("machine_type") or "unknown",
+        is_anomaly=str(result.get("is_anomaly", 0)),
+        likely_cause=result.get("likely_cause") or "normal",
+    ).inc()
+    return result
 
 
 @app.post(
