@@ -55,13 +55,79 @@
   # CI pipeline reaches it as http://sonarqube:9000 (Docker name resolution).
   # Both are correct in their respective network contexts.
 
+- name: Build the custom Jenkins image (python3, kubectl, minikube, sonar-scanner, docker CLI, trivy)
+  community.docker.docker_image:
+    name: devsecmlops-jenkins
+    tag: "2.0"
+    build:
+      path: "{{ repo_dir }}/jenkins"
+      pull: false
+    source: build
+    force_source: false
+
 - name: Ensure Jenkins (CI/CD) is running
   community.docker.docker_container:
     name: jenkins
-    image: "jenkins/jenkins:lts"
+    image: "devsecmlops-jenkins:2.0"
     state: started
     restart_policy: always
     ports: ["8080:8080", "50000:50000"]
     volumes:
       - "jenkins_home:/var/jenkins_home"
       - "/var/run/docker.sock:/var/run/docker.sock"
+      # The K8s automated-deploy pipeline stage bind-mounts the host's LIVE
+      # kubeconfig/certs directly (not a one-time copy) -- Minikube
+      # regenerates its CA on every full cluster rebuild, which silently
+      # broke a copy-based setup every single time. A bind mount always
+      # reflects whatever is currently valid on disk, with zero action
+      # needed after either a gentle restart or a full rebuild.
+      - "/home/pfe/.kube:/home/pfe/.kube"
+      - "/home/pfe/.minikube:/home/pfe/.minikube"
+  # networks left to the "Attach Jenkins to its required networks" task
+  # below, which is also what jenkins-networks.service re-asserts on every
+  # boot -- see that task for why a static `networks:` list here isn't
+  # enough on its own.
+
+- name: Attach Jenkins to its required networks (devsecmlops-net for SonarQube/registry DNS, minikube for the K8s API)
+  community.docker.docker_network:
+    name: "{{ item }}"
+    connected: ["jenkins"]
+    appends: true
+  loop:
+    - devsecmlops-net
+    - minikube
+
+- name: Install the jenkins-networks systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/jenkins-networks.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Ensure Jenkins is attached to devsecmlops-net and minikube networks
+      After=docker.service
+      Requires=docker.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/bin/bash -c 'for i in $(seq 1 30); do docker inspect jenkins >/dev/null 2>&1 && break; sleep 2; done; docker network connect devsecmlops-net jenkins 2>/dev/null; docker network connect minikube jenkins 2>/dev/null; exit 0'
+
+      [Install]
+      WantedBy=multi-user.target
+  become: true
+  # Ansible re-attaching the networks above only fixes THIS playbook run.
+  # A later `minikube delete` recreates the 'minikube' Docker network from
+  # scratch, silently dropping Jenkins' connection again -- and Ansible
+  # isn't re-run on every such event. This unit is the boot-time (and,
+  # since docker network connect is idempotent, effectively any-time-it's-
+  # started) safety net for that ongoing case: confirmed live, tonight,
+  # to fix a real recurring "sonarqube: Name or service not known" /
+  # Kubernetes-API-unreachable failure without any manual step.
+
+- name: Reload systemd, enable and start jenkins-networks
+  ansible.builtin.systemd:
+    name: jenkins-networks.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  become: true
