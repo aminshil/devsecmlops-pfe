@@ -37,7 +37,7 @@ import time
 import joblib
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Response
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from pydantic import BaseModel
 
 ROOT       = Path(__file__).resolve().parent.parent
@@ -243,6 +243,66 @@ PREDICTION_LATENCY = Histogram(
     "api_prediction_latency_seconds",
     "Time to compute and return a /predict response",
 )
+
+# --- Current-state gauges (distinct from the Counter above) ----------------
+# A Counter only ever grows -- good for "how many predictions total", wrong
+# for "how many machines are anomalous RIGHT NOW", which several dashboard
+# panels need. These are set on every /predict call and simply toggle, so
+# they always reflect each machine's most recent verdict, not a running sum.
+# Labeled by machine (bounded at ~200 distinct values in this project, so
+# well within reasonable cardinality) rather than machine_type, since "is
+# THIS machine currently anomalous" is inherently a per-machine question.
+CURRENTLY_ANOMALOUS = Gauge(
+    "api_currently_anomalous",
+    "1 if this machine's most recent prediction was anomalous, else 0",
+    ["machine", "machine_type"],
+)
+ANOMALY_SCORE = Gauge(
+    "api_anomaly_score",
+    "This machine's most recent anomaly severity score (model-specific scale)",
+    ["machine", "machine_type"],
+)
+INPUT_METRIC = Gauge(
+    "api_input_metric",
+    "Most recent raw input value received for this machine, per feature",
+    ["machine", "machine_type", "feature"],
+)
+ANOMALY_SEEN = Counter(
+    "api_anomaly_seen_total",
+    "Incremented once per /predict call where this machine was anomalous "
+    "-- count(api_anomaly_seen_total) gives distinct machines ever seen "
+    "anomalous this session",
+    ["machine"],
+)
+ROOT_CAUSE_ROLE = Gauge(
+    "api_root_cause_role",
+    "This machine's most recent /root-cause role: 1=isolated, "
+    "2=downstream_effect, 3=likely_root_cause",
+    ["machine"],
+)
+ROOT_CAUSE_INCIDENTS = Counter(
+    "api_root_cause_incidents_total",
+    "Incremented once per /root-cause call where this machine was ranked "
+    "likely_root_cause -- count(api_root_cause_incidents_total) gives "
+    "distinct machines ever identified as a root cause this session",
+    ["machine"],
+)
+_ROLE_CODE = {"isolated": 1, "downstream_effect": 2, "likely_root_cause": 3}
+
+
+def _extract_anomaly_score(result):
+    """Not every internal model path (v2/v3/v4/fallback) exposes the same
+    field for 'how anomalous is this' -- same fallback-chain philosophy
+    already used elsewhere in this file for baseline resolution. Prefers a
+    top-level anomaly_score (the fallback path's own field), then the
+    Isolation Forest's own score (present on every path as the safety-net
+    vote), then falls back to the raw is_anomaly flag as a last resort."""
+    if "anomaly_score" in result:
+        return float(result["anomaly_score"])
+    iso = result.get("iso_vote") or {}
+    if "score" in iso:
+        return float(iso["score"])
+    return float(result.get("is_anomaly", 0))
 
 
 @app.get("/metrics")
@@ -626,11 +686,25 @@ def predict(reading: Reading):
         result = _predict_fallback(reading, X, z_scores, window, machine_type, baseline_used)
 
     PREDICTION_LATENCY.observe(time.time() - _predict_start)
+    _result_machine_type = result.get("machine_type") or "unknown"
     PREDICTIONS_TOTAL.labels(
-        machine_type=result.get("machine_type") or "unknown",
+        machine_type=_result_machine_type,
         is_anomaly=str(result.get("is_anomaly", 0)),
         likely_cause=result.get("likely_cause") or "normal",
     ).inc()
+    CURRENTLY_ANOMALOUS.labels(
+        machine=reading.machine, machine_type=_result_machine_type
+    ).set(1 if result.get("is_anomaly") else 0)
+    if result.get("is_anomaly"):
+        ANOMALY_SEEN.labels(machine=reading.machine).inc()
+    ANOMALY_SCORE.labels(
+        machine=reading.machine, machine_type=_result_machine_type
+    ).set(_extract_anomaly_score(result))
+    for _feat in FEATURES:
+        if _feat in reading.metrics:
+            INPUT_METRIC.labels(
+                machine=reading.machine, machine_type=_result_machine_type, feature=_feat
+            ).set(reading.metrics[_feat])
     return result
 
 
@@ -654,6 +728,12 @@ def root_cause(batch: AnomalyBatch):
 
     graph = load_graph()
     ranked = score_root_causes(batch.anomalies, graph)
+
+    for r in ranked:
+        ROOT_CAUSE_ROLE.labels(machine=r["machine"]).set(_ROLE_CODE.get(r["role"], 1))
+        if r["role"] == "likely_root_cause":
+            ROOT_CAUSE_INCIDENTS.labels(machine=r["machine"]).inc()
+
     return {
         "input_count": len(batch.anomalies),
         "ranked": ranked,
