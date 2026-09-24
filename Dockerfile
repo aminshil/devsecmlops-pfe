@@ -17,7 +17,7 @@ RUN apt-get update -qq && \
     rm -rf /var/lib/apt/lists/*
 
 # ── Security: run as non-root (Trivy/SonarQube quality gates will check) ──
-RUN groupadd -r appuser && useradd -r -g appuser -m -d /home/appuser appuser
+RUN groupadd -r -g 10001 appuser && useradd -r -u 10001 -g appuser -m -d /home/appuser appuser
 
 WORKDIR /app
 

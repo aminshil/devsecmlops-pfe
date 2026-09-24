@@ -42,10 +42,14 @@ from psycopg.rows import dict_row
 
 FEATURES = ["cpu", "ram", "network", "disk_io", "disk_usage", "load_avg"]
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://feedback:feedback-dev-password@localhost:5432/feedback",
-)
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    sys.exit(
+        "FATAL: DATABASE_URL is not set. Refusing to fall back to a "
+        "guessable default credential -- export DATABASE_URL explicitly, "
+        "e.g.:\n"
+        "  export DATABASE_URL='postgresql://feedback:<real-password>@localhost:5432/feedback'"
+    )
 
 TRAINING_DATA_PATH   = Path("data/telecom_fleet_v2_labeled.csv")
 TEST_DATA_PATH       = Path("data/telecom_fleet_v2_test.csv")

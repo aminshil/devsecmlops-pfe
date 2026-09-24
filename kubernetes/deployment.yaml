@@ -70,5 +70,6 @@ spec:
             periodSeconds: 10
           securityContext:
             runAsNonRoot: true
-            runAsUser: 999
+            runAsUser: 10001
+            runAsGroup: 10001
             allowPrivilegeEscalation: false

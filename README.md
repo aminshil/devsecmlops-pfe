@@ -1706,14 +1706,14 @@ K8s namespace.
 # MinIO
 docker run -d --name minio --restart=always \
   -p 9001:9000 -p 9002:9001 \
-  -e "MINIO_ROOT_USER=admin" -e "MINIO_ROOT_PASSWORD=minioadmin123" \
+  -e "MINIO_ROOT_USER=${MINIO_ROOT_USER:?set MINIO_ROOT_USER first}" -e "MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD first}" \
   -v minio_data:/data \
   minio/minio server /data --console-address ":9001"
 
 # MLflow (create the mlflow-artifacts bucket in MinIO's console first)
 export MLFLOW_S3_ENDPOINT_URL=http://localhost:9001
-export AWS_ACCESS_KEY_ID=admin
-export AWS_SECRET_ACCESS_KEY=minioadmin123
+export AWS_ACCESS_KEY_ID="${MINIO_ROOT_USER:?}"
+export AWS_SECRET_ACCESS_KEY="${MINIO_ROOT_PASSWORD:?}"
 mlflow server --host 0.0.0.0 --port 5001 \
   --backend-store-uri sqlite:///mlflow.db \
   --default-artifact-root s3://mlflow-artifacts/
