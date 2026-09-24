@@ -8,4 +8,3 @@ joblib==1.5.3
 xgboost==3.2.0
 psycopg[binary]==3.2.3
 prometheus-client==0.25.0
-prometheus-client==0.25.0

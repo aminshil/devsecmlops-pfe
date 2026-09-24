@@ -1296,13 +1296,17 @@ step in between:
   the container on startup when no PostgreSQL was reachable -- which broke the
   standalone smoke test. Made non-fatal (Engineering Decision #22), so the
   container serves `/health` and `/predict` even with the DB down.
-- **Automated deployment, verified live end-to-end:** build `2.20.2-b61`
-  ran all 10 stages to `Finished: SUCCESS` -- Quality Gate OK, Trivy 0
-  OS CVEs, image loaded into the live cluster, `kubectl rollout status`
-  confirmed the update, and the stage-10 smoke test's in-pod `/health`
-  call returned `{'status': 'ok', ... 'version': '2.20.2'}`, matching the
-  build that was just deployed. No manual step between `git push` and a
-  verified-serving update.
+- **Automated deployment, verified live end-to-end:** build `2.20.3-b70`
+  ran all 10 stages to `Finished: SUCCESS` -- Quality Gate OK, image
+  loaded into the live cluster, `kubectl rollout status` confirmed the
+  update, and the stage-10 smoke test's in-pod `/health` call returned
+  `{'status': 'ok', ... 'version': '2.20.3'}`, matching the build that
+  was just deployed. Also the first fully clean run after two real fixes
+  landed: the registry-catalog verification (previously always failed
+  with "unreachable from Jenkins container" -- cosmetic, never affected
+  pass/fail, but now genuinely succeeds too) and the self-instrumented
+  `/metrics` path, both confirmed working inside this same run. No
+  manual step between `git push` and a verified-serving update.
 
 Requires: SonarQube Scanner plugin, `sonarqube-token` credential (Secret
 text), `sonar-scanner` CLI installed in the Jenkins container, a dedicated
@@ -1489,7 +1493,7 @@ kubectl top pods -n ml-serving
 
 ## Monitoring (L5)
 
-Full-stack observability: Prometheus + Grafana (20 panels) + a real-data
+Full-stack observability: Prometheus + Grafana (21 panels) + a real-data
 replay engine + Kubernetes monitoring, all built on top of the trained
 model and the root-cause endpoint.
 
@@ -1556,6 +1560,77 @@ different schedules — the kind of silent failure that only surfaces when
 you actually run the full stack end-to-end, which is exactly why the live
 monitoring integration is valuable beyond the dashboard itself.
 
+### Self-instrumented API metrics + production_agent.py (the current default)
+
+A second, independently-built path to the same dashboards, added later
+in the project: rather than an external process polling the API and
+re-publishing its own copy of the result, the API **instruments itself**.
+`GET /metrics` (via `prometheus_client`) exposes:
+
+- `api_predictions_total` (Counter) / `api_prediction_latency_seconds`
+  (Histogram) -- overall serving volume and latency
+- `api_currently_anomalous` (Gauge) -- each machine's MOST RECENT verdict,
+  toggling 0/1 (not a running total: correctly flips back to 0 the
+  moment a machine returns to normal)
+- `api_anomaly_score` (Gauge) -- a severity score normalized across every
+  internal model path (v2/v3/v4/fallback don't all expose the same
+  field for "how anomalous"; resolved via the same fallback-chain
+  philosophy already used elsewhere in this file for baselines)
+- `api_input_metric` (Gauge) -- the raw reading each machine last sent,
+  per feature, so Grafana can show fleet-wide averages sourced from what
+  the API itself received, with no separate sensor-simulation process
+- `api_anomaly_seen_total` / `api_root_cause_incidents_total` (Counters,
+  labeled by machine) -- session-distinct-machine counts; a deliberate,
+  narrow exception to the "no per-machine labels" cardinality discipline
+  used everywhere else, since "how many DISTINCT machines" structurally
+  requires it
+- `api_root_cause_role` (Gauge, ordinal-encoded 1/2/3) -- `/root-cause`
+  is instrumented too, not just `/predict`. Ordinal rather than
+  role-as-a-label specifically to avoid a machine's OLD role leaving a
+  permanently-stale series behind once its role changes.
+
+`monitoring/production_agent.py` is the traffic source for this path:
+**one independent thread per machine** (not a single shared loop), each
+on its own ~30s cycle with random jitter -- in a real fleet, every
+machine's monitoring agent runs on its own schedule, not synchronized
+with the others. Threads are cheap here (almost entirely idle / waiting
+on network I/O), so ~200 of them costs essentially nothing. Each reads
+only from `data/telecom_fleet_v2_test.csv` -- the INDEPENDENT, held-out
+test set the model was never trained on, not the training data
+`replay_exporter.py` replays -- the more honest "production realism"
+choice: it proves genuine generalization to unseen readings, not
+recognition of memorized rows. A separate background thread periodically
+relays currently-anomalous machines to `/root-cause`, reading "who is
+anomalous" straight FROM Prometheus (the API's own report) rather than
+tracking it itself -- no scoring or causality logic lives in the script,
+it only decides WHEN to ask.
+
+**A real bug found and fixed during testing:** the initial version seeked
+to evenly-spaced byte offsets (`size * k / N_SEEKS`) to sample the file
+without reading it in full. This can silently ALIAS against any periodic
+structure in how the file was written -- confirmed directly with a
+reproduction file where evenly-spaced seeks landed on only 2 of 20
+machines repeatedly, because the seek stride shared a common factor with
+the file's machine-assignment cycle (the same effect as a strobe light
+synced to a rotating wheel). Fixed with genuinely random seek positions,
+immune to this regardless of the underlying file's structure. Verified
+at full scale after the fix: 200/200 machines found in 0.017s on a
+2-million-row reproduction file.
+
+Verified live against the real deployment: ~199 of 200 machines tracked,
+139 distinct machines seen anomalous across a session, and 7 real
+root-cause incidents correctly attributed to 6 different routers -- the
+only machine type that structurally CAN be a root cause in
+`dependency_graph.json`, confirming the correlation logic, not just the
+counting, is working.
+
+**This is the default demo mode as of this addition** --
+`replay_exporter.py` and `anomaly_bridge.py` (documented above) remain
+fully in the repo and fully functional as an alternative: they are not
+deleted, just not started by default, in favor of the architecturally
+simpler self-instrumented path (no separate re-publishing process, the
+serving API is the only source of truth for its own activity).
+
 ### Kubernetes monitoring
 
 `monitoring/k8s_exporter.py` publishes pod readiness, restart counts,
@@ -1564,7 +1639,7 @@ using `kubectl` as the data source rather than scraping the K8s API
 server directly — a deliberate choice after Minikube's internal
 networking proved fragile (see Kubernetes section above).
 
-### Grafana dashboard (20 panels)
+### Grafana dashboard (21 panels)
 
 Live anomaly detection, root-cause event history (proved all 8 routers
 triggered real incidents this session), fleet-wide averages for all 6
