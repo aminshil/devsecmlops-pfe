@@ -216,6 +216,26 @@ def rolling_feature_names(base_cols=ROLLING_FEATURE_BASE_COLS):
         names.append(f"{col}_delta")
     return names
 
+def rolling_features_from_history(history, base_cols=ROLLING_FEATURE_BASE_COLS):
+    """
+    Rolling features for ONE reading from its explicit history window, in
+    rolling_feature_names() order. history = {col: [v1..vN]}, last value =
+    current reading. Used by the API (caller-supplied history) and by the
+    trainer for feedback rows (history stored with the prediction).
+
+    Identical to add_rolling_features() at a row with a full window:
+      mean = window mean; std = sample std (ddof=1), 0.0 if < 2 values;
+      delta = last - first (diff over window-1 periods).
+    Checked by tests/test_api.py::test_rolling_features_match_training_pipeline.
+    """
+    import statistics
+    feats = []
+    for col in base_cols:
+        vals = [float(v) for v in history[col]]
+        feats.append(sum(vals) / len(vals))
+        feats.append(statistics.stdev(vals) if len(vals) >= 2 else 0.0)
+        feats.append(vals[-1] - vals[0])
+    return feats
 
 def add_rolling_features(df, machine_col="machine", timestamp_col="timestamp",
                          base_cols=ROLLING_FEATURE_BASE_COLS,

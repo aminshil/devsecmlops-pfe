@@ -1,26 +1,105 @@
 {
-  "current_production_model": {
-    "path": "models/telecom_xgb_classifier_v2.pkl",
-    "docker_image_tag": "devsecmlops-api:2.12.0",
-    "trained_at": "2026-07-15T00:00:00Z",
-    "source": "initial_v3_training",
-    "training_rows": 3165947,
-    "feedback_rows_used": 0,
+  "schema": 2,
+  "production": {
+    "source": "initial training, July-August 2026 (before ml-model/train_production.py existed)",
+    "datasets": {
+      "train": {
+        "file": "data/telecom_fleet_v2_labeled.csv",
+        "generator": "ml-model/generate_telecom_fleet.py --machines 200 --days 30 --seed 42",
+        "rows": 17280000
+      },
+      "test": {
+        "file": "data/telecom_fleet_v2_test.csv",
+        "generator": "ml-model/generate_telecom_fleet.py --machines 200 --days 30 --seed 123"
+      }
+    },
+    "params": {
+      "classifier_training_rows": 3165947,
+      "composition": "all 1,165,947 anomaly rows + 2,000,000 sampled normal rows (seed 42); cascade labelled normal",
+      "xgb": {
+        "objective": "multi:softprob",
+        "n_estimators": 150,
+        "max_depth": 6,
+        "learning_rate": 0.1,
+        "random_state": 42
+      },
+      "iso": {
+        "n_estimators": 200,
+        "contamination": 0.06747378472222222,
+        "random_state": 42
+      },
+      "rolling_window": 10,
+      "rolling_base_cols": [
+        "cpu",
+        "ram",
+        "load_avg"
+      ],
+      "note": "hyperparameters read back from the committed pickles"
+    },
+    "artifacts": {
+      "models/telecom_xgb_classifier_v2.pkl": "e141d1fac786c01e1967d4fc0300c6ceba28251aa998cfa6d0e78dde31458b33",
+      "models/telecom_xgb_label_encoder_v2.pkl": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
+      "models/telecom_xgb_v4_rolling.pkl": "181c8880ae8c3e75e346dcb89866a225f2df318e56bdea0326160325077cda8f",
+      "models/telecom_xgb_v4_rolling_encoder.pkl": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
+      "models/telecom_iso_v2.pkl": "570495a0f15ffe4d3c99e947202c36ee3f97e6696f0fbe245b3730a96d7b6ba2",
+      "models/telecom_baselines_v2.json": "616210d4c29ffeb6e5a91a2a61ea7984119b5d690495b9b13a41cd51478aa09d"
+    },
+    "evaluated_at": "2026-09-25T15:44:51.713812+00:00",
     "evaluation": {
-      "offline_f1": 0.718,
-      "offline_precision": 0.775,
-      "offline_recall": 0.67,
-      "per_cause_recall": {
-        "cpu_spike": 0.894,
-        "memory_leak": 0.736,
-        "network_flood": 0.915,
-        "disk_saturation": 0.977,
-        "silent_failure": 0.906,
-        "cascade": 0.042
+      "test_set": {
+        "file": "data/telecom_fleet_v2_test.csv",
+        "sha256": "3b6b6e2144100d43522a79a9a685eecc49e2bcecc573b001584614f0a5a8894a",
+        "rows": 17280000
+      },
+      "threshold": 0.85,
+      "v3": {
+        "f1": 0.5398,
+        "precision": 0.4094,
+        "recall": 0.7919,
+        "classifier_only_f1": 0.5555,
+        "per_cause_recall": {
+          "cascade": 0.3324,
+          "cpu_spike": 0.9503,
+          "disk_saturation": 0.9906,
+          "memory_leak": 0.8599,
+          "network_flood": 0.9812,
+          "silent_failure": 0.964
+        },
+        "cause_accuracy": 0.9923
+      },
+      "v4": {
+        "f1": 0.6845,
+        "precision": 0.5929,
+        "recall": 0.8097,
+        "classifier_only_f1": 0.7477,
+        "per_cause_recall": {
+          "cascade": 0.2848,
+          "cpu_spike": 0.993,
+          "disk_saturation": 0.9981,
+          "memory_leak": 0.965,
+          "network_flood": 0.9967,
+          "silent_failure": 0.9907
+        },
+        "cause_accuracy": 0.9985
+      },
+      "v4_at_0.5": {
+        "f1": 0.7288,
+        "precision": 0.6744,
+        "recall": 0.7928,
+        "classifier_only_f1": 0.8153,
+        "per_cause_recall": {
+          "cascade": 0.2676,
+          "cpu_spike": 0.9843,
+          "disk_saturation": 0.9952,
+          "memory_leak": 0.9142,
+          "network_flood": 0.9865,
+          "silent_failure": 0.9805
+        },
+        "cause_accuracy": 0.9989
       }
     }
   },
-  "retrain_history": [
+  "history": [
     {
       "attempted_at": "2026-07-22T12:45:06.004068+00:00",
       "history_path": "models/history/telecom_xgb_v3_20260722T124505Z.pkl",
@@ -40,7 +119,7 @@
           "cascade": 0.04143017378848077
         }
       },
-      "promoted_to_production": false
+      "promoted": false
     }
   ]
 }
