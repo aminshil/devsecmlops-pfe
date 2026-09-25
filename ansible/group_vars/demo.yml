@@ -24,7 +24,7 @@ api_replicas: 2
 
 # --- control panel serving env (matches start_control_panel.sh) ---
 cp_model_name: telecom_v3
-cp_predict_threshold: "0.85"
+cp_predict_threshold: "0.6"
 cp_database_url: "postgresql://x:x@localhost:9999/n"
 api_cpu_request: "200m"
 api_cpu_limit: "1000m"

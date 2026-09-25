@@ -389,7 +389,10 @@ def parse_args(argv=None):
     ap.add_argument("--test", type=Path, default=ROOT / "data/telecom_fleet_v2_test.csv")
     ap.add_argument("--feedback", type=Path, nargs="*", default=[])
     ap.add_argument("--normal-sample", type=int, default=2_000_000)
-    ap.add_argument("--threshold", type=float, default=float(os.environ.get("PREDICT_THRESHOLD", "0.85")))
+    ap.add_argument("--threshold", type=float, default=None,
+                    help="decision threshold; default: production.decision_threshold from the "
+                         "manifest (chosen by ml-model/select_threshold.py), else "
+                         "$PREDICT_THRESHOLD, else 0.85")
     ap.add_argument("--max-f1-drop", type=float, default=0.0)
     ap.add_argument("--max-recall-drop", type=float, default=0.02)
     ap.add_argument("--models-dir", type=Path, default=MODELS)
@@ -399,7 +402,12 @@ def parse_args(argv=None):
     ap.add_argument("--evaluate-production", action="store_true",
                     help="no training: evaluate the committed production artifacts on the "
                          "test set and record the result + artifact hashes in the manifest")
-    return ap.parse_args(argv)
+    args = ap.parse_args(argv)
+    if args.threshold is None:
+        selected = (read_manifest(args.models_dir).get("production") or {}).get("decision_threshold")
+        args.threshold = float(selected if selected is not None
+                               else os.environ.get("PREDICT_THRESHOLD", "0.85"))
+    return args
 
 
 def run_pipeline(args) -> int:

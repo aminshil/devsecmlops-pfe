@@ -42,15 +42,17 @@ from pydantic import BaseModel
 
 ROOT       = Path(__file__).resolve().parent.parent
 MODELS_DIR = ROOT / "models"
-MODEL_NAME = os.environ.get("MODEL_NAME", "telecom").lower()
+MODEL_NAME = os.environ.get("MODEL_NAME", "telecom_v3").lower()
 
-# v3 threshold tuning: flag as anomaly if P(normal) < PREDICT_THRESHOLD.
-# Default 0.5 = original argmax behavior. Higher = more aggressive detection
-# (more anomalies caught, more false positives). 0.85 chosen for production
-# to match operational priority: catch as many real incidents as possible,
-# accept increased false-alarm investigation cost. See README "Engineering
-# decisions" section for the full recall/precision sweep.
-PREDICT_THRESHOLD = float(os.environ.get("PREDICT_THRESHOLD", "0.85"))
+# v3/v4 threshold: flag as anomaly if P(normal) < PREDICT_THRESHOLD.
+# 0.6 selected by ml-model/select_threshold.py: the threshold that maximises
+# F2 (recall weighted twice precision, since a missed incident costs more
+# than an unnecessary check) of the SERVED decision (classifier OR
+# IsolationForest), measured on an independent validation fleet the models
+# were never trained or tested on. See models/manifest.json ->
+# production.threshold_selection for the full precision/recall/F curve this
+# was chosen from, and README "Engineering decisions" for the write-up.
+PREDICT_THRESHOLD = float(os.environ.get("PREDICT_THRESHOLD", "0.6"))
 
 # Per-class thresholds (v4, optional). When PER_CLASS_THRESHOLDS is set to a
 # JSON map like {"cpu_spike":0.65,"memory_leak":0.7,...}, the v4 path flags an

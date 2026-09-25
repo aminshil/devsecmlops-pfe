@@ -44,43 +44,196 @@
       "models/telecom_iso_v2.pkl": "570495a0f15ffe4d3c99e947202c36ee3f97e6696f0fbe245b3730a96d7b6ba2",
       "models/telecom_baselines_v2.json": "616210d4c29ffeb6e5a91a2a61ea7984119b5d690495b9b13a41cd51478aa09d"
     },
-    "evaluated_at": "2026-09-25T15:44:51.713812+00:00",
+    "evaluated_at": "2026-09-25T20:14:31.949697+00:00",
+    "decision_threshold": 0.6,
+    "threshold_selection": {
+      "selected_at": "2026-09-25T19:48:21.658005+00:00",
+      "method": "maximise F2 of the served decision (classifier OR IsolationForest) on an independent validation fleet",
+      "validation_set": {
+        "file": "data/telecom_fleet_v2_val.csv",
+        "sha256": "ea0a20c29f8d3e34a77c8db79abc43ccd0d051d5049003cda659e0194c1148a0",
+        "rows": 8064000
+      },
+      "beta": 2.0,
+      "selected": {
+        "threshold": 0.6,
+        "precision": 0.6632,
+        "recall": 0.8005,
+        "f1": 0.7254,
+        "f2": 0.7687
+      },
+      "curve": [
+        {
+          "threshold": 0.05,
+          "precision": 0.6849,
+          "recall": 0.7554,
+          "f1": 0.7184,
+          "f2": 0.7401
+        },
+        {
+          "threshold": 0.1,
+          "precision": 0.6868,
+          "recall": 0.7676,
+          "f1": 0.725,
+          "f2": 0.7499
+        },
+        {
+          "threshold": 0.15,
+          "precision": 0.6872,
+          "recall": 0.7744,
+          "f1": 0.7282,
+          "f2": 0.7553
+        },
+        {
+          "threshold": 0.2,
+          "precision": 0.6867,
+          "recall": 0.7793,
+          "f1": 0.7301,
+          "f2": 0.7588
+        },
+        {
+          "threshold": 0.25,
+          "precision": 0.6856,
+          "recall": 0.7832,
+          "f1": 0.7311,
+          "f2": 0.7615
+        },
+        {
+          "threshold": 0.3,
+          "precision": 0.6841,
+          "recall": 0.7864,
+          "f1": 0.7317,
+          "f2": 0.7636
+        },
+        {
+          "threshold": 0.35,
+          "precision": 0.6822,
+          "recall": 0.7893,
+          "f1": 0.7318,
+          "f2": 0.7652
+        },
+        {
+          "threshold": 0.4,
+          "precision": 0.6798,
+          "recall": 0.7916,
+          "f1": 0.7314,
+          "f2": 0.7664
+        },
+        {
+          "threshold": 0.45,
+          "precision": 0.6769,
+          "recall": 0.794,
+          "f1": 0.7308,
+          "f2": 0.7674
+        },
+        {
+          "threshold": 0.5,
+          "precision": 0.6733,
+          "recall": 0.7962,
+          "f1": 0.7296,
+          "f2": 0.7682
+        },
+        {
+          "threshold": 0.55,
+          "precision": 0.6688,
+          "recall": 0.7984,
+          "f1": 0.7279,
+          "f2": 0.7686
+        },
+        {
+          "threshold": 0.6,
+          "precision": 0.6632,
+          "recall": 0.8005,
+          "f1": 0.7254,
+          "f2": 0.7687
+        },
+        {
+          "threshold": 0.65,
+          "precision": 0.6562,
+          "recall": 0.8026,
+          "f1": 0.7221,
+          "f2": 0.7683
+        },
+        {
+          "threshold": 0.7,
+          "precision": 0.647,
+          "recall": 0.8048,
+          "f1": 0.7173,
+          "f2": 0.7674
+        },
+        {
+          "threshold": 0.75,
+          "precision": 0.6349,
+          "recall": 0.8073,
+          "f1": 0.7108,
+          "f2": 0.7657
+        },
+        {
+          "threshold": 0.8,
+          "precision": 0.6178,
+          "recall": 0.8099,
+          "f1": 0.7009,
+          "f2": 0.7625
+        },
+        {
+          "threshold": 0.85,
+          "precision": 0.5924,
+          "recall": 0.8133,
+          "f1": 0.6855,
+          "f2": 0.7568
+        },
+        {
+          "threshold": 0.9,
+          "precision": 0.5495,
+          "recall": 0.8178,
+          "f1": 0.6574,
+          "f2": 0.7451
+        },
+        {
+          "threshold": 0.95,
+          "precision": 0.4599,
+          "recall": 0.8258,
+          "f1": 0.5908,
+          "f2": 0.7124
+        }
+      ]
+    },
     "evaluation": {
       "test_set": {
         "file": "data/telecom_fleet_v2_test.csv",
         "sha256": "3b6b6e2144100d43522a79a9a685eecc49e2bcecc573b001584614f0a5a8894a",
         "rows": 17280000
       },
-      "threshold": 0.85,
+      "threshold": 0.6,
       "v3": {
-        "f1": 0.5398,
-        "precision": 0.4094,
-        "recall": 0.7919,
-        "classifier_only_f1": 0.5555,
+        "f1": 0.6496,
+        "precision": 0.5721,
+        "recall": 0.7513,
+        "classifier_only_f1": 0.6945,
         "per_cause_recall": {
-          "cascade": 0.3324,
-          "cpu_spike": 0.9503,
-          "disk_saturation": 0.9906,
-          "memory_leak": 0.8599,
-          "network_flood": 0.9812,
-          "silent_failure": 0.964
+          "cascade": 0.284,
+          "cpu_spike": 0.9163,
+          "disk_saturation": 0.9839,
+          "memory_leak": 0.774,
+          "network_flood": 0.9579,
+          "silent_failure": 0.9275
         },
-        "cause_accuracy": 0.9923
+        "cause_accuracy": 0.9946
       },
       "v4": {
-        "f1": 0.6845,
-        "precision": 0.5929,
-        "recall": 0.8097,
-        "classifier_only_f1": 0.7477,
+        "f1": 0.7246,
+        "precision": 0.6642,
+        "recall": 0.797,
+        "classifier_only_f1": 0.808,
         "per_cause_recall": {
-          "cascade": 0.2848,
-          "cpu_spike": 0.993,
-          "disk_saturation": 0.9981,
-          "memory_leak": 0.965,
-          "network_flood": 0.9967,
-          "silent_failure": 0.9907
+          "cascade": 0.2699,
+          "cpu_spike": 0.9867,
+          "disk_saturation": 0.9961,
+          "memory_leak": 0.9286,
+          "network_flood": 0.9897,
+          "silent_failure": 0.9833
         },
-        "cause_accuracy": 0.9985
+        "cause_accuracy": 0.9988
       },
       "v4_at_0.5": {
         "f1": 0.7288,

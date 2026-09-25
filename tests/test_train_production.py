@@ -46,7 +46,8 @@ def test_initial_training_is_promoted_with_lineage(promoted):
 
 def test_ci_gate_accepts_promoted_model(promoted):
     res = subprocess.run([sys.executable, str(ROOT / "scripts" / "verify_model_manifest.py"),
-                          "--min-f1", "0.0", "--manifest", str(promoted["models"] / "manifest.json")],
+                          "--min-f1", "0.0", "--manifest", str(promoted["models"] / "manifest.json"),
+                          "--skip-deploy-check"],
                          capture_output=True, text=True)
     assert res.returncode == 0, res.stdout
 
@@ -56,14 +57,16 @@ def test_ci_gate_rejects_tampered_artifact(promoted, tmp_path):
     shutil.copytree(promoted["models"], copy)
     (copy / tp.ARTIFACTS["iso_model"]).write_bytes(b"tampered")
     res = subprocess.run([sys.executable, str(ROOT / "scripts" / "verify_model_manifest.py"),
-                          "--min-f1", "0.0", "--manifest", str(copy / "manifest.json")],
+                          "--min-f1", "0.0", "--manifest", str(copy / "manifest.json"),
+                          "--skip-deploy-check"],
                          capture_output=True, text=True)
     assert res.returncode == 1 and "hash mismatch" in res.stdout
 
 
 def test_ci_gate_rejects_low_f1(promoted):
     res = subprocess.run([sys.executable, str(ROOT / "scripts" / "verify_model_manifest.py"),
-                          "--min-f1", "1.01", "--manifest", str(promoted["models"] / "manifest.json")],
+                          "--min-f1", "1.01", "--manifest", str(promoted["models"] / "manifest.json"),
+                          "--skip-deploy-check"],
                          capture_output=True, text=True)
     assert res.returncode == 1
 
