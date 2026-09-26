@@ -15,6 +15,14 @@ spec:
       labels:
         app: anomaly-api
     spec:
+      # The API never talks to the Kubernetes API server.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       # Feedback loop (v2.12.0): wait for PostgreSQL to accept connections
       # before starting the API. Prevents crash-loops on cold cluster boot
       # where PostgreSQL takes ~30s to initialize while the API can start
@@ -22,11 +30,19 @@ spec:
       initContainers:
         - name: wait-for-postgres
           image: postgres:16-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          envFrom:
+            - secretRef:
+                name: postgres-credentials
           command:
             - sh
             - -c
             - |
-              until pg_isready -h postgres.ml-serving.svc.cluster.local -U feedback -d feedback; do
+              until pg_isready -h postgres.ml-serving.svc.cluster.local -U "$POSTGRES_USER" -d "$POSTGRES_DB"; do
                 echo "waiting for postgres..."
                 sleep 2
               done
@@ -42,18 +58,28 @@ spec:
               value: "telecom_v3"
             - name: PREDICT_THRESHOLD
               value: "0.6"
-            # Feedback loop DB connection (v2.12.0). Points at the PostgreSQL
-            # StatefulSet in the same namespace. Password from Secret.
-            # POSTGRES_PASSWORD must come BEFORE DATABASE_URL: K8s substitutes
-            # $(VAR) references in env var values, but only from vars defined
-            # EARLIER in the same env array. Order matters.
+            # User, password and database all come from the Secret, so the
+            # demo (generated) and production (Vault) credentials work
+            # without editing this manifest. They must come BEFORE
+            # DATABASE_URL: K8s substitutes $(VAR) only from vars defined
+            # EARLIER in the same env array.
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_USER
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: postgres-credentials
                   key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_DB
             - name: DATABASE_URL
-              value: "postgresql://feedback:$(POSTGRES_PASSWORD)@postgres.ml-serving.svc.cluster.local:5432/feedback"
+              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres.ml-serving.svc.cluster.local:5432/$(POSTGRES_DB)"
           # v3: XGBoost primary model baked into the image (3.6MB) --
           # no MinIO fetch needed, so MinIO env vars removed. Lower
           # resource footprint reflects XGBoost's much smaller size.
@@ -73,3 +99,19 @@ spec:
             runAsUser: 10001
             runAsGroup: 10001
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          # The root filesystem is read-only; /tmp is the only writable
+          # path the API needs (tempfile usage), backed by a memory-capped
+          # emptyDir.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi

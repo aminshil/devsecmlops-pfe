@@ -39,7 +39,7 @@ echo "target image: $IMG"
 
 apply_manifests() {
   "$KC" apply -f "$ROOT/kubernetes/namespace.yaml"
-  "$KC" apply -f "$ROOT/kubernetes/postgres-secret.yaml"
+  KC="$KC" NS="$NS" "$ROOT/scripts/ensure_db_secret.sh"
   "$KC" apply -f "$ROOT/kubernetes/postgres.yaml"
   "$KC" apply -f "$ROOT/kubernetes/deployment.yaml"
   "$KC" apply -f "$ROOT/kubernetes/service.yaml"
@@ -116,17 +116,26 @@ ensure_base_image_cached() {
 }
 ensure_base_image_cached
 
-# Jenkins bind-mounts $MINIKUBE_HOME and $KUBECONFIG's directory directly
-# (read-write, so `minikube image load` triggered from a Jenkins pipeline
-# stage can write to the cache -- see the automated-deployment work).
-# Minikube runs its start/create logic as root, so a fresh cluster keeps
-# recreating profile files (config.json, cache entries, etc.) owned only
-# by root -- silently undoing any earlier chmod fix and breaking Jenkins'
-# write access again on the VERY NEXT rebuild. Re-asserting this after
-# every successful start, unconditionally, means it never has to be done
-# by hand again.
+# Jenkins bind-mounts $MINIKUBE_HOME and $KUBECONFIG's directory so its
+# deploy stage can reach the cluster. Minikube runs as root, so every fresh
+# cluster recreates its profile files owned by root only, which removes
+# Jenkins' access again. This re-grants access after every successful start.
+#
+# Access is granted with a POSIX ACL to ONE uid only -- the jenkins user
+# inside the Jenkins container (uid 1000, which is also the VM's login
+# user) -- never world-readable/writable: this directory holds the cluster
+# CA private key and admin client credentials. The default ACL (-d) makes
+# files that Minikube creates later inherit the same grant. "Other" users
+# get nothing.
+JENKINS_UID="${JENKINS_UID:-1000}"
 fix_minikube_home_perms() {
-  chmod -R a+rwX "$MINIKUBE_HOME" 2>/dev/null || true
+  if ! command -v setfacl >/dev/null 2>&1; then
+    echo "WARNING: setfacl missing (apt install acl) -- Jenkins deploy access not granted"
+    return 0
+  fi
+  chmod -R o-rwx "$MINIKUBE_HOME" "$(dirname "$KUBECONFIG")" 2>/dev/null || true
+  setfacl -R -m "u:${JENKINS_UID}:rwX" -m "d:u:${JENKINS_UID}:rwX" \
+    "$MINIKUBE_HOME" "$(dirname "$KUBECONFIG")" 2>/dev/null || true
 }
 
 # 1) Try a gentle start first (handles a merely-stopped cluster, fast)

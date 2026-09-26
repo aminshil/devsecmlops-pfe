@@ -40,9 +40,9 @@ metadata:
   namespace: ml-serving
 spec:
   serviceName: postgres
-  replicas: 1              # Single-writer for this demo. Multi-primary Postgres
-                           # (e.g. via Patroni or Citus) is real production work,
-                           # documented as future scope in the README.
+  replicas: 1              # Single writer: the feedback store's write rate
+                           # (one row per prediction) is well within one
+                           # PostgreSQL instance.
   selector:
     matchLabels:
       app: postgres
@@ -51,6 +51,17 @@ spec:
       labels:
         app: postgres
     spec:
+      automountServiceAccountToken: false
+      # postgres:16-alpine's "postgres" user is uid/gid 70. Running as that
+      # user from the start (instead of root + gosu) is supported by the
+      # official entrypoint when the data directory is writable by it.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           image: postgres:16-alpine
@@ -62,9 +73,19 @@ spec:
           env:
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
+            # writable paths PostgreSQL needs besides its data directory
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: "100m"
@@ -75,23 +96,24 @@ spec:
           readinessProbe:
             exec:
               command:
-                - pg_isready
-                - -U
-                - feedback
-                - -d
-                - feedback
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
             initialDelaySeconds: 5
             periodSeconds: 5
           livenessProbe:
             exec:
               command:
-                - pg_isready
-                - -U
-                - feedback
-                - -d
-                - feedback
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
             initialDelaySeconds: 30
             periodSeconds: 15
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: postgres-data
