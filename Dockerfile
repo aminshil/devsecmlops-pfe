@@ -42,6 +42,7 @@ RUN find /usr/local/lib/python3.10/ensurepip/_bundled -name "setuptools-*.whl" -
 COPY api/ ./api/
 COPY ml-model/preprocess.py ./ml-model/preprocess.py
 COPY ml-model/root_cause.py ./ml-model/root_cause.py
+COPY ml-model/decision.py ./ml-model/decision.py
 
 # ── Copy the ONE shipped model artifact ──
 COPY models/telecom_serving_model.pkl     ./models/
@@ -63,6 +64,10 @@ COPY models/telecom_baselines_v2.json        ./models/
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 COPY models/dependency_graph.json ./models/
+# Lineage + SHA-256 of every production artifact; verified by the API
+# before any model file is unpickled.
+COPY models/manifest.json ./models/
+COPY VERSION ./VERSION
 
 # ── Runtime config (override at run/deploy time with -e MODEL_NAME=...) ──
 ENV MODEL_NAME=telecom \
