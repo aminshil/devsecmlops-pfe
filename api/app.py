@@ -1343,12 +1343,18 @@ def _read_run(f, header):
 
 
 def _collect_samples(path, header, size, n_seeks=800):
-    """Seek to n_seeks positions across the file; at each, read one machine's
-    run and keep it if it yields at least 10 rows (current + 10-row history)."""
+    """Seek to n_seeks RANDOM positions (never evenly-spaced -- confirmed
+    directly in monitoring/production_agent.py that evenly-spaced offsets
+    can alias against periodic structure in how a file was written, the
+    same effect as a strobe light synced to a rotating wheel). At each
+    seek, read one machine's run and keep it if it yields at least 10
+    rows (current + 10-row history)."""
+    import random as _random
+    rng = _random.Random()
     samples = []
     with open(path, "r") as f:
-        for k in range(n_seeks):
-            f.seek(int(size * k / n_seeks))
+        for _ in range(n_seeks):
+            f.seek(rng.randint(0, max(size - 1, 0)))
             f.readline()  # discard partial line
             run = _read_run(f, header)
             if len(run) >= 10:

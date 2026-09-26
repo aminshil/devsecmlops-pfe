@@ -1,7 +1,17 @@
 """
-Final benchmark with strict + point-adjusted F1.
-Point-adjusted = OmniAnomaly/SMD standard: if ANY tick inside an anomaly block
-is flagged, the WHOLE block counts as detected. Matches how production alerts work.
+Benchmark of anomaly detectors with strict and point-adjusted metrics.
+
+Split: TIME-ORDERED per machine -- each machine's earlier readings train,
+its later readings test (--test-size is the fraction of each machine's
+timeline held out). Nothing is shuffled, so test rows stay in time order.
+
+Point-adjusted metrics (OmniAnomaly/SMD convention): if ANY reading inside a
+contiguous anomaly block is flagged, the whole block counts as detected.
+Blocks are computed per machine, on that machine's test readings in time
+order -- a block never spans two machines or a gap created by sampling.
+
+--max-rows limits size by keeping a seeded subset of whole machines
+(complete timelines), never by sampling individual rows.
 """
 import argparse, json, sys, time, warnings
 from datetime import datetime
@@ -15,7 +25,6 @@ from sklearn.neighbors import LocalOutlierFactor
 from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import (average_precision_score, f1_score, precision_score,
                               recall_score, roc_auc_score)
-from sklearn.model_selection import train_test_split
 
 from rich.console import Console
 from rich.table import Table
@@ -29,8 +38,19 @@ import preprocess_robust as _PR  # trimmed/winsorized baselines (robust variant)
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS_DIR = ROOT / "models" / "results"
 MODELS_DIR = ROOT / "models"
-META_COLS = {"timestamp", "machine", "label", "type", "hour", "window"}
+META_COLS = {"timestamp", "machine", "label", "type", "hour", "window", "anomaly_type", "_order"}
 console = Console()
+
+
+def _per_group(fn, y_true, values, groups):
+    """Apply a block-based adjustment separately inside each group (machine);
+    rows of a group are contiguous and time-ordered."""
+    out = np.asarray(values).copy()
+    groups = np.asarray(groups)
+    bounds = np.flatnonzero(np.r_[True, groups[1:] != groups[:-1], True])
+    for a, b in zip(bounds[:-1], bounds[1:]):
+        out[a:b] = fn(np.asarray(y_true)[a:b], out[a:b])
+    return out
 
 
 def point_adjust(y_true, y_pred):
@@ -63,13 +83,16 @@ def adjusted_scores(y_true, scores):
     return scores
 
 
+GROUPS = None   # machine id of every test row, set by run() (time-ordered split)
+
+
 def metrics(y_true, y_pred, scores):
     y_true_s = pd.Series(y_true).reset_index(drop=True)
     y_pred_s = pd.Series(y_pred).reset_index(drop=True)
     scores_s = pd.Series(scores).reset_index(drop=True)
 
-    y_pred_adj = point_adjust(y_true_s.values, y_pred_s.values)
-    scores_adj = adjusted_scores(y_true_s.values, scores_s.values)
+    y_pred_adj = _per_group(point_adjust, y_true_s.values, y_pred_s.values, GROUPS)
+    scores_adj = _per_group(adjusted_scores, y_true_s.values, scores_s.values.astype(float), GROUPS)
 
     return {
         "precision": float(precision_score(y_true_s, y_pred_s, zero_division=0)),
@@ -109,7 +132,9 @@ def render_table(rows, tag):
                       f"{mt['f1']:.3f}", f"{mt['f1_adj']:.3f}", auc, pr, pra, style=style)
     console.print(table)
     console.print("[dim]bold cyan = shipped model · bold green = best strict F1 · red = worst strict F1[/dim]")
-    console.print("[dim]@adj = point-adjusted (OmniAnomaly/SMD standard): any tick flagged in an anomaly block → whole block counted as detected[/dim]\n")
+    console.print("[dim]split: time-ordered per machine (earlier readings train, later readings test); "
+                  "@adj = point-adjusted per machine: any reading flagged in a contiguous anomaly block "
+                  "-> whole block counted as detected[/dim]\n")
 
 
 def run():
@@ -125,19 +150,30 @@ def run():
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
+    global GROUPS
     df = pd.read_csv(args.data)
     if "machine" not in df.columns: df["machine"] = "single"
     features = [c for c in df.columns if c not in META_COLS]
-    y_full = df["label"].astype(int)
+    df["_order"] = np.arange(len(df))          # file order = time order if no timestamp
+    sort_cols = ["machine", "timestamp"] if "timestamp" in df.columns else ["machine", "_order"]
+    df = df.sort_values(sort_cols, kind="stable").reset_index(drop=True)
     if args.max_rows and len(df) > args.max_rows:
-        df, _ = train_test_split(df, train_size=args.max_rows, random_state=args.seed, stratify=y_full)
-        df = df.reset_index(drop=True)
+        # whole machines only, so every kept timeline stays contiguous
+        rng = np.random.default_rng(args.seed)
+        machines = df["machine"].unique()
+        per_machine = max(1, int(len(df) / len(machines)))
+        keep = rng.choice(machines, size=max(1, min(len(machines), args.max_rows // per_machine)), replace=False)
+        df = df[df["machine"].isin(keep)].reset_index(drop=True)
     y = df["label"].astype(int)
     tag = "WITH time features" if args.time else "no time features"
     console.print(f"[bold]{tag}[/bold]  ·  {len(df):,} rows × {len(features)} features  "
                   f"({df['machine'].nunique()} machines · anomaly {y.mean()*100:.2f}%)")
 
-    idx_tr, idx_te = train_test_split(df.index, test_size=args.test_size, random_state=args.seed, stratify=y)
+    pos = df.groupby("machine").cumcount()
+    size = df.groupby("machine")["machine"].transform("size")
+    is_test = pos >= (size * (1 - args.test_size)).astype(int)
+    idx_tr, idx_te = df.index[~is_test], df.index[is_test]
+    GROUPS = df.loc[idx_te, "machine"].to_numpy()
     df_tr, df_te = df.loc[idx_tr], df.loc[idx_te]
     _, y_te = y.loc[idx_tr], y.loc[idx_te]
     df_tr = add_window_column(df_tr)

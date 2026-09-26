@@ -28,8 +28,6 @@ mlruns/
 !models/telecom_iso_v2.pkl
 !models/telecom_xgb_classifier_v2.pkl
 !models/telecom_xgb_label_encoder_v2.pkl
-!models/telecom_lgbm_classifier_v2.pkl
-!models/telecom_lgbm_label_encoder_v2.pkl
 !models/telecom_serving_baselines.json
 
 # Screenshots — defense evidence, tracked in git
@@ -50,4 +48,9 @@ coverage.xml
 # pipeline / validation outputs (reports are archived by Jenkins)
 build/
 data/feedback/
+
+# benchmark.py run outputs -- regenerate by running the script; not the
+# real served baselines (those are the allow-listed telecom_*.json above)
+models/results/
+models/baselines_*.json
 .prometheus-data/

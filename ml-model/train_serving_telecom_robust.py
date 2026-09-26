@@ -36,7 +36,7 @@ from preprocess_robust import (build_baselines, apply_zscore, save_baselines,
 ROOT   = Path(__file__).resolve().parent.parent
 DATA   = ROOT / "data" / "telecom_fleet.csv"
 MODELS = ROOT / "models"
-META_COLS = {"timestamp", "machine", "label", "type", "hour", "window"}
+META_COLS = {"timestamp", "machine", "label", "type", "hour", "window", "anomaly_type"}
 
 mlflow.set_tracking_uri("http://localhost:5001")
 mlflow.set_experiment("telecom-anomaly-detection")
