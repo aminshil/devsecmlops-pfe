@@ -36,12 +36,22 @@ import time
 
 import joblib
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Response
+import base64
+import hmac
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
-from pydantic import BaseModel
+import math
+
+from pydantic import BaseModel, ConfigDict, field_validator
 
 ROOT       = Path(__file__).resolve().parent.parent
 MODELS_DIR = ROOT / "models"
+# Single source of truth for the version: the VERSION file (also used for
+# the Jenkins image tag and the Ansible deploy tag).
+APP_VERSION = (ROOT / "VERSION").read_text().strip() if (ROOT / "VERSION").exists() else "unknown"
 MODEL_NAME = os.environ.get("MODEL_NAME", "telecom_v3").lower()
 
 # v3/v4 threshold: flag as anomaly if P(normal) < PREDICT_THRESHOLD.
@@ -65,10 +75,13 @@ PER_CLASS_THRESHOLDS = json.loads(_pct_raw) if _pct_raw.strip() else None
 
 # Reported cause when only the IsolationForest safety net flags an anomaly
 # (the supervised classifier said normal). Defined once to avoid duplication.
-SAFETY_NET_CAUSE = "unknown (flagged by safety-net model only)"
 
 sys.path.insert(0, str(ROOT / "ml-model"))
 from root_cause import score_root_causes, load_graph
+import decision as _decision
+from preprocess import rolling_features_from_history
+
+SAFETY_NET_CAUSE = _decision.SAFETY_NET_CAUSE
 
 # Feedback loop: prediction logging + operator verdicts (v2.12.0).
 # See README 'Feedback loop and online learning' section for design.
@@ -81,15 +94,44 @@ from api.feedback_db import (
     VALID_VERDICTS,
 )
 
+# MODEL_NAME=telecom: the v1 IsolationForest-only model, kept as the baseline
+# the later versions are compared against. Production is telecom_v3.
 ARTIFACTS = {
     "telecom": ("telecom_serving_model.pkl", "telecom_serving_baselines.json"),
-    "smd":     ("smd_serving_model.pkl",     "smd_serving_baselines.json"),
-    "serving": ("serving_model.pkl",          "serving_baselines.json"),
 }
 
 # v2: dual-model (RandomForest cause classifier + IsolationForest safety net),
 # trained on labeled anomaly_type data. See ml-model/train tonight's session.
 IS_V2 = MODEL_NAME == "telecom_v2"
+
+MANIFEST_PATH = MODELS_DIR / "manifest.json"
+MODEL_LINEAGE: dict = {}
+
+
+def _verify_artifact_integrity() -> None:
+    """Refuse to serve artifacts that differ from the promoted ones: every
+    file listed in models/manifest.json must match its recorded SHA-256
+    before it is unpickled (unpickling executes code, so a swapped file must
+    never be loaded). Also records the lineage reported by /health."""
+    import hashlib
+    if not MANIFEST_PATH.exists():
+        raise RuntimeError(f"model manifest not found: {MANIFEST_PATH}")
+    prod = json.loads(MANIFEST_PATH.read_text()).get("production") or {}
+    for rel, expected in (prod.get("artifacts") or {}).items():
+        path = ROOT / rel
+        h = hashlib.sha256(path.read_bytes()).hexdigest()
+        if h != expected:
+            raise RuntimeError(f"artifact integrity check failed: {rel}")
+    ev = prod.get("evaluation") or {}
+    MODEL_LINEAGE.update({
+        "source": prod.get("source"),
+        "promoted_at": prod.get("promoted_at"),
+        "mlflow_run_id": prod.get("mlflow_run_id"),
+        "train_dataset": (prod.get("datasets") or {}).get("train", {}).get("file"),
+        "test_dataset_sha256": (ev.get("test_set") or {}).get("sha256"),
+        "served_v4_f1": (ev.get("v4") or {}).get("f1"),
+        "artifacts_sha256": {Path(k).name: v[:12] for k, v in (prod.get("artifacts") or {}).items()},
+    })
 IS_V3 = MODEL_NAME == "telecom_v3"
 
 if IS_V2:
@@ -115,6 +157,7 @@ elif IS_V3:
     for path in (XGB_PATH, LE_PATH, ISO_PATH, BASELINES_PATH):
         if not path.exists():
             raise RuntimeError(f"v3 artifact not found: {path}")
+    _verify_artifact_integrity()
     xgb_model = joblib.load(XGB_PATH)
     xgb_label_encoder = joblib.load(LE_PATH)
     iso_model = joblib.load(ISO_PATH)
@@ -158,6 +201,11 @@ HAS_WINDOWS = baselines.get("__has_windows__", False)
 machines_known = sorted(
     m for m in baselines
     if not m.startswith("__") and "|" not in m
+)
+_KNOWN_MACHINES = frozenset(machines_known)
+_KNOWN_TYPES = frozenset(
+    baselines[m].get("__type__") for m in machines_known
+    if isinstance(baselines.get(m), dict) and baselines[m].get("__type__")
 )
 FEATURES = (baselines["__feature_order__"]
             if "__feature_order__" in baselines
@@ -208,9 +256,16 @@ def _get_stats(machine: str, window: str | None, machine_type: str | None):
     return baselines["__global__"], "global"
 
 
+@asynccontextmanager
+async def _lifespan(_app):
+    _init_feedback_db_on_startup()
+    yield
+
+
 app = FastAPI(
+    lifespan=_lifespan,
     title=f"DevSecMLOps — Anomaly Detector [{MODEL_NAME}]",
-    version="2.20.3",
+    version=APP_VERSION,
     description=(
         "Per-machine per-time-window z-score + Isolation Forest anomaly detection. "
         "Trained on a 200-machine synthetic Tunisie Telecom fleet "
@@ -239,29 +294,44 @@ app = FastAPI(
 PREDICTIONS_TOTAL = Counter(
     "api_predictions_total",
     "Total /predict calls this process has answered",
-    ["machine_type", "is_anomaly", "likely_cause"],
+    ["model", "machine_type", "is_anomaly", "likely_cause"],
 )
 PREDICTION_LATENCY = Histogram(
     "api_prediction_latency_seconds",
-    "Time to compute and return a /predict response",
+    "End-to-end /predict handler time (z-scoring + inference + best-effort "
+    "feedback-DB write); see api_feedback_db_write_seconds for the DB share",
+)
+DB_WRITE_LATENCY = Histogram(
+    "api_feedback_db_write_seconds",
+    "Time spent writing one prediction to the feedback DB",
+)
+HTTP_REQUESTS = Counter(
+    "api_http_requests_total",
+    "HTTP requests by route template and status class",
+    ["route", "status_class"],
 )
 
-# --- Current-state gauges (distinct from the Counter above) ----------------
+# --- Current-state gauges (distinct from the Counters above) ---------------
 # A Counter only ever grows -- good for "how many predictions total", wrong
-# for "how many machines are anomalous RIGHT NOW", which several dashboard
-# panels need. These are set on every /predict call and simply toggle, so
-# they always reflect each machine's most recent verdict, not a running sum.
-# Labeled by machine (bounded at ~200 distinct values in this project, so
-# well within reasonable cardinality) rather than machine_type, since "is
-# THIS machine currently anomalous" is inherently a per-machine question.
+# for "how many machines are anomalous RIGHT NOW". These are set on every
+# /predict call and reflect each machine's most recent verdict. The machine
+# label is bounded to the known fleet (~200 values, see _KNOWN_MACHINES);
+# unknown names are recorded as "unknown".
 CURRENTLY_ANOMALOUS = Gauge(
     "api_currently_anomalous",
     "1 if this machine's most recent prediction was anomalous, else 0",
     ["machine", "machine_type"],
 )
-ANOMALY_SCORE = Gauge(
-    "api_anomaly_score",
-    "This machine's most recent anomaly severity score (model-specific scale)",
+CLASSIFIER_P_ANOMALY = Gauge(
+    "api_classifier_p_anomaly",
+    "XGBoost probability that this machine's most recent reading is "
+    "anomalous (1 - P(normal)); 0-1, same scale for v3 and v4",
+    ["machine", "machine_type"],
+)
+ISO_SCORE = Gauge(
+    "api_iso_score",
+    "IsolationForest anomaly score of this machine's most recent reading "
+    "(higher = more anomalous); the unsupervised safety-net signal",
     ["machine", "machine_type"],
 )
 INPUT_METRIC = Gauge(
@@ -273,38 +343,40 @@ ANOMALY_SEEN = Counter(
     "api_anomaly_seen_total",
     "Incremented once per /predict call where this machine was anomalous "
     "-- count(api_anomaly_seen_total) gives distinct machines ever seen "
-    "anomalous this session",
+    "anomalous by this process",
     ["machine"],
 )
-ROOT_CAUSE_ROLE = Gauge(
-    "api_root_cause_role",
-    "This machine's most recent /root-cause role: 1=isolated, "
-    "2=downstream_effect, 3=likely_root_cause",
+MACHINE_LAST_SEEN = Gauge(
+    "api_machine_last_seen_timestamp_seconds",
+    "Unix time this process last served a prediction for the machine. Each "
+    "replica only knows the readings it served; dashboards use this to take "
+    "every per-machine gauge from the replica that saw the machine last.",
     ["machine"],
 )
 ROOT_CAUSE_INCIDENTS = Counter(
     "api_root_cause_incidents_total",
     "Incremented once per /root-cause call where this machine was ranked "
-    "likely_root_cause -- count(api_root_cause_incidents_total) gives "
-    "distinct machines ever identified as a root cause this session",
+    "likely_root_cause",
     ["machine"],
 )
-_ROLE_CODE = {"isolated": 1, "downstream_effect": 2, "likely_root_cause": 3}
 
 
-def _extract_anomaly_score(result):
-    """Not every internal model path (v2/v3/v4/fallback) exposes the same
-    field for 'how anomalous is this' -- same fallback-chain philosophy
-    already used elsewhere in this file for baseline resolution. Prefers a
-    top-level anomaly_score (the fallback path's own field), then the
-    Isolation Forest's own score (present on every path as the safety-net
-    vote), then falls back to the raw is_anomaly flag as a last resort."""
-    if "anomaly_score" in result:
-        return float(result["anomaly_score"])
-    iso = result.get("iso_vote") or {}
-    if "score" in iso:
-        return float(iso["score"])
-    return float(result.get("is_anomaly", 0))
+@app.middleware("http")
+async def _count_requests(request: Request, call_next):
+    """Request/error accounting. The route label is the matched route
+    TEMPLATE (e.g. /feedback/{prediction_id}), never the raw path, so it
+    stays bounded."""
+    try:
+        response = await call_next(request)
+        status = response.status_code
+    except Exception:
+        status = 500
+        raise
+    finally:
+        route = request.scope.get("route")
+        tmpl = getattr(route, "path", "unmatched")
+        HTTP_REQUESTS.labels(route=tmpl, status_class=f"{status // 100}xx").inc()
+    return response
 
 
 @app.get("/metrics")
@@ -312,47 +384,125 @@ def metrics():
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
+# ---------------------------------------------------------------------------
+# Operations UI access control.
+#
+# The /ui/* routes are an operator console: they can start/stop host
+# services, launch training jobs and trigger recovery. They therefore:
+#   * do not exist at all unless ENABLE_OPS_UI=1 (404 otherwise) -- the
+#     Kubernetes serving pods never set it, so the serving surface is only
+#     /predict, /root-cause, /feedback, /health, /machines, /metrics;
+#   * require HTTP Basic authentication (OPS_UI_USER / OPS_UI_PASSWORD) when
+#     enabled, compared in constant time; enabled without a password configured
+#     fails closed (503) rather than open.
+# Browsers cache Basic credentials per origin, so the panel's own fetch()
+# calls are authenticated automatically after the first prompt.
+# ---------------------------------------------------------------------------
+OPS_UI_ENABLED = os.environ.get("ENABLE_OPS_UI") == "1"
+_OPS_UI_USER = os.environ.get("OPS_UI_USER", "operator")
+_OPS_UI_PASSWORD = os.environ.get("OPS_UI_PASSWORD", "")
+
+
+def _ops_ui_authorized(header: str | None) -> bool:
+    if not header or not header.startswith("Basic "):
+        return False
+    try:
+        user, _, pw = base64.b64decode(header[6:]).decode("utf-8").partition(":")
+    except Exception:
+        return False
+    return (hmac.compare_digest(user.encode(), _OPS_UI_USER.encode())
+            and hmac.compare_digest(pw.encode(), _OPS_UI_PASSWORD.encode()))
+
+
+@app.middleware("http")
+async def _ops_ui_guard(request: Request, call_next):
+    path = request.url.path
+    if path == "/ui" or path.startswith("/ui/"):
+        if not OPS_UI_ENABLED:
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        if not _OPS_UI_PASSWORD:
+            return JSONResponse({"detail": "ops UI enabled without OPS_UI_PASSWORD"},
+                                status_code=503)
+        if not _ops_ui_authorized(request.headers.get("authorization")):
+            return JSONResponse({"detail": "authentication required"}, status_code=401,
+                                headers={"WWW-Authenticate": 'Basic realm="devsecmlops-ops"'})
+    return await call_next(request)
+
+
 # Global flag: is the feedback DB available? Set at startup, checked before
 # every write. The model-serving path (/health, /predict predictions) is the
 # critical function -- the feedback DB is secondary. If the DB is unreachable
 # the API still serves predictions; feedback logging just becomes best-effort.
 FEEDBACK_DB_AVAILABLE = False
+_DB_RETRY_INTERVAL_S = 30.0
+_db_next_retry = 0.0
+
+
+def _mark_db_down(reason: str) -> None:
+    global FEEDBACK_DB_AVAILABLE, _db_next_retry
+    FEEDBACK_DB_AVAILABLE = False
+    _db_next_retry = time.monotonic() + _DB_RETRY_INTERVAL_S
+    print(f"WARNING: feedback DB unavailable ({reason}); retrying in "
+          f"{int(_DB_RETRY_INTERVAL_S)}s. Predictions continue to be served.")
+
+
+def _db_ready() -> bool:
+    """True if the feedback DB is usable. When it is marked down, attempt a
+    reconnect at most once per retry interval, so a transient PostgreSQL
+    outage recovers automatically instead of disabling logging until the
+    API restarts."""
+    global FEEDBACK_DB_AVAILABLE
+    if FEEDBACK_DB_AVAILABLE:
+        return True
+    if time.monotonic() < _db_next_retry:
+        return False
+    try:
+        init_feedback_db()
+    except Exception as e:
+        _mark_db_down(str(e))
+        return False
+    FEEDBACK_DB_AVAILABLE = True
+    print("Feedback DB reachable -- prediction logging enabled")
+    return True
+
+
+def _require_db() -> None:
+    if not _db_ready():
+        raise HTTPException(status_code=503, detail="feedback DB unavailable")
 
 
 def _safe_insert_prediction(**kwargs):
     """Best-effort prediction logging: never let a DB failure break /predict."""
-    global FEEDBACK_DB_AVAILABLE
-    if not FEEDBACK_DB_AVAILABLE:
+    if not _db_ready():
         return None
     try:
-        return insert_prediction(**kwargs)
+        with DB_WRITE_LATENCY.time():
+            return insert_prediction(**kwargs)
     except Exception as e:
-        print(f"WARNING: feedback DB write failed ({e}). Prediction served without logging.")
-        FEEDBACK_DB_AVAILABLE = False
+        _mark_db_down(str(e))
         return None
 
 
-@app.on_event("startup")
 def _init_feedback_db_on_startup():
     """
     Try to initialize the feedback DB. Non-fatal: if the DB is unreachable
     (e.g. PostgreSQL not yet up, or running the container standalone without
     a DB, as in CI smoke tests), log a warning and continue. The API will
     still serve predictions; prediction logging is skipped until the DB
-    becomes reachable.
+    becomes reachable (retried every _DB_RETRY_INTERVAL_S seconds).
     """
-    global FEEDBACK_DB_AVAILABLE
-    try:
-        init_feedback_db()
-        FEEDBACK_DB_AVAILABLE = True
-        print("Feedback DB initialized -- prediction logging enabled")
-    except Exception as e:
-        FEEDBACK_DB_AVAILABLE = False
-        print(f"WARNING: feedback DB unreachable at startup ({e}). "
-              f"Serving predictions without feedback logging.")
+    _db_ready()
+
+
+HISTORY_WINDOW = 10                      # must equal preprocess.ROLLING_WINDOW_SIZE
+HISTORY_KEYS = ("cpu", "ram", "load_avg")
 
 
 class Reading(BaseModel):
+    # NaN/inf are rejected at parse time: a non-finite value would silently
+    # propagate through the z-score into the models.
+    model_config = ConfigDict(allow_inf_nan=False)
+
     machine: str
     metrics: dict[str, float]
     machine_type: str | None = None   # optional hint for unknown machines
@@ -366,6 +516,38 @@ class Reading(BaseModel):
     # where the LAST value in each list is the most recent (current) reading.
     history: dict[str, list[float]] | None = None
 
+    @field_validator("machine")
+    @classmethod
+    def _machine_bounded(cls, v: str) -> str:
+        if not v or len(v) > 64:
+            raise ValueError("machine must be 1-64 characters")
+        return v
+
+    @field_validator("metrics")
+    @classmethod
+    def _metrics_bounded(cls, v: dict) -> dict:
+        if len(v) > 32:
+            raise ValueError("too many metrics")
+        return v
+
+    @field_validator("history")
+    @classmethod
+    def _history_matches_training_window(cls, v):
+        """v4 was trained on rolling statistics over exactly HISTORY_WINDOW
+        readings (delta = last - first over that window). A shorter or longer
+        list would compute features on a different scale than training, so
+        it is rejected rather than silently accepted."""
+        if v is None:
+            return v
+        if set(v) != set(HISTORY_KEYS):
+            raise ValueError(f"history must contain exactly the keys {list(HISTORY_KEYS)}")
+        for key, vals in v.items():
+            if len(vals) != HISTORY_WINDOW:
+                raise ValueError(f"history[{key!r}] must contain exactly {HISTORY_WINDOW} values")
+            if not all(math.isfinite(x) for x in vals):
+                raise ValueError(f"history[{key!r}] contains a non-finite value")
+        return v
+
 
 class AnomalyBatch(BaseModel):
     anomalies: dict[str, float]   # {machine_name: anomaly_score, ...}
@@ -376,7 +558,7 @@ def health():
     return {
         "status":          "ok",
         "model":           MODEL_NAME,
-        "version":         "2.20.3",
+        "version":         APP_VERSION,
         "n_machines":      len(machines_known),
         "n_features":      len(FEATURES),
         "features":        FEATURES,
@@ -386,6 +568,7 @@ def health():
         "machines_total":  len(machines_known),
         "fallback_chain":  ["machine+window", "machine", "type", "global"],
         "root_cause_analysis": True,
+        "model_lineage": MODEL_LINEAGE or None,
     }
 
 
@@ -451,8 +634,8 @@ def _predict_v2(reading, X, z_scores, window, machine_type, baseline_used):
     
     # IsolationForest: independent unsupervised vote (safety net for
     # patterns the classifier wasn't trained to recognize, e.g. cascade)
-    iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
-    iso_score = float(-iso_model.score_samples(X)[0])
+    iso_is_anomaly = bool(iso_model.predict(X.to_numpy())[0] == -1)
+    iso_score = float(-iso_model.score_samples(X.to_numpy())[0])
     
     is_anomaly = rf_is_anomaly or iso_is_anomaly
     if rf_is_anomaly:
@@ -530,8 +713,8 @@ def _predict_v4(reading, X, z_scores, window, machine_type, baseline_used):
     v4_non_normal = [(v4_classes[i], v4_proba[i]) for i in range(len(v4_classes)) if i != v4_normal_idx]
     v4_is_anomaly, v4_cause = _decide_v4_anomaly(v4_p_normal, v4_non_normal)
     # IsolationForest safety net still runs on the base 6 features
-    iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
-    iso_score = float(-iso_model.score_samples(X)[0])
+    iso_is_anomaly = bool(iso_model.predict(X.to_numpy())[0] == -1)
+    iso_score = float(-iso_model.score_samples(X.to_numpy())[0])
     is_anomaly = v4_is_anomaly or iso_is_anomaly
     if v4_is_anomaly:
         likely_cause = v4_cause
@@ -561,7 +744,8 @@ def _predict_v4(reading, X, z_scores, window, machine_type, baseline_used):
         "window":         window or "not-supplied",
         "is_anomaly":     int(is_anomaly),
         "likely_cause":   likely_cause,
-        "xgb_vote":       {"is_anomaly": int(v4_is_anomaly), "cause": v4_cause},
+        "xgb_vote":       {"is_anomaly": int(v4_is_anomaly), "cause": v4_cause,
+                           "p_anomaly": round(1.0 - v4_p_normal, 4)},
         "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
         "z_scores":       z_scores,
         "rolling_features_used": True,
@@ -598,8 +782,8 @@ def _predict_v3_v4(reading, X, z_scores, window, machine_type, baseline_used):
         cause = "normal"
     
     # IsolationForest: unchanged safety net for novel patterns.
-    iso_is_anomaly = bool(iso_model.predict(X)[0] == -1)
-    iso_score = float(-iso_model.score_samples(X)[0])
+    iso_is_anomaly = bool(iso_model.predict(X.to_numpy())[0] == -1)
+    iso_score = float(-iso_model.score_samples(X.to_numpy())[0])
     
     is_anomaly = xgb_is_anomaly or iso_is_anomaly
     if xgb_is_anomaly:
@@ -631,7 +815,8 @@ def _predict_v3_v4(reading, X, z_scores, window, machine_type, baseline_used):
         "window":         window or "not-supplied",
         "is_anomaly":     int(is_anomaly),
         "likely_cause":   likely_cause,
-        "xgb_vote":       {"is_anomaly": int(xgb_is_anomaly), "cause": cause},
+        "xgb_vote":       {"is_anomaly": int(xgb_is_anomaly), "cause": cause,
+                           "p_anomaly": round(1.0 - p_normal, 4)},
         "iso_vote":       {"is_anomaly": int(iso_is_anomaly), "score": round(iso_score, 4)},
         "z_scores":       z_scores,
         "machine_known":  reading.machine in baselines,
@@ -654,6 +839,37 @@ def _predict_fallback(reading, X, z_scores, window, machine_type, baseline_used)
         "machine_known":  reading.machine in baselines,
         "baseline_used":  baseline_used,   # machine+window | machine | type | global
     }
+
+def _record_prediction_metrics(reading: Reading, result: dict) -> None:
+    """Publish this prediction on /metrics. Label values are bounded to the
+    known fleet: an arbitrary client-supplied machine name would otherwise
+    create a new time series per request (unbounded cardinality)."""
+    machine = reading.machine if reading.machine in _KNOWN_MACHINES else "unknown"
+    mtype = result.get("machine_type") or "unknown"
+    if mtype not in _KNOWN_TYPES:
+        mtype = "unknown"
+    PREDICTIONS_TOTAL.labels(
+        model=str(result.get("model", MODEL_NAME)),
+        machine_type=mtype,
+        is_anomaly=str(result.get("is_anomaly", 0)),
+        likely_cause=result.get("likely_cause") or "normal",
+    ).inc()
+    MACHINE_LAST_SEEN.labels(machine=machine).set(time.time())
+    CURRENTLY_ANOMALOUS.labels(machine=machine, machine_type=mtype).set(
+        1 if result.get("is_anomaly") else 0)
+    if result.get("is_anomaly"):
+        ANOMALY_SEEN.labels(machine=machine).inc()
+    p_anomaly = (result.get("xgb_vote") or {}).get("p_anomaly")
+    if p_anomaly is not None:
+        CLASSIFIER_P_ANOMALY.labels(machine=machine, machine_type=mtype).set(p_anomaly)
+    iso_score = (result.get("iso_vote") or {}).get("score")
+    if iso_score is not None:
+        ISO_SCORE.labels(machine=machine, machine_type=mtype).set(iso_score)
+    for feat in FEATURES:
+        if feat in reading.metrics:
+            INPUT_METRIC.labels(machine=machine, machine_type=mtype, feature=feat).set(
+                reading.metrics[feat])
+
 
 @app.post(
     "/predict",
@@ -688,25 +904,7 @@ def predict(reading: Reading):
         result = _predict_fallback(reading, X, z_scores, window, machine_type, baseline_used)
 
     PREDICTION_LATENCY.observe(time.time() - _predict_start)
-    _result_machine_type = result.get("machine_type") or "unknown"
-    PREDICTIONS_TOTAL.labels(
-        machine_type=_result_machine_type,
-        is_anomaly=str(result.get("is_anomaly", 0)),
-        likely_cause=result.get("likely_cause") or "normal",
-    ).inc()
-    CURRENTLY_ANOMALOUS.labels(
-        machine=reading.machine, machine_type=_result_machine_type
-    ).set(1 if result.get("is_anomaly") else 0)
-    if result.get("is_anomaly"):
-        ANOMALY_SEEN.labels(machine=reading.machine).inc()
-    ANOMALY_SCORE.labels(
-        machine=reading.machine, machine_type=_result_machine_type
-    ).set(_extract_anomaly_score(result))
-    for _feat in FEATURES:
-        if _feat in reading.metrics:
-            INPUT_METRIC.labels(
-                machine=reading.machine, machine_type=_result_machine_type, feature=_feat
-            ).set(reading.metrics[_feat])
+    _record_prediction_metrics(reading, result)
     return result
 
 
@@ -732,8 +930,9 @@ def root_cause(batch: AnomalyBatch):
     ranked = score_root_causes(batch.anomalies, graph)
 
     for r in ranked:
-        ROOT_CAUSE_ROLE.labels(machine=r["machine"]).set(_ROLE_CODE.get(r["role"], 1))
-        if r["role"] == "likely_root_cause":
+        # counter (not a per-replica state gauge): aggregates correctly across
+        # replicas; label bounded to the known fleet, as in /predict
+        if r["role"] == "likely_root_cause" and r["machine"] in _KNOWN_MACHINES:
             ROOT_CAUSE_INCIDENTS.labels(machine=r["machine"]).inc()
 
     return {
@@ -774,6 +973,7 @@ def submit_feedback(prediction_id: str, feedback: FeedbackIn):
     Idempotent: submitting a second verdict for the same prediction_id
     overwrites the first with the newer timestamp.
     """
+    _require_db()
     try:
         row = update_verdict(prediction_id, feedback.verdict, feedback.notes)
     except ValueError as e:
@@ -801,10 +1001,9 @@ def get_recent_predictions(limit: int = 100):
     Defaults to 100, capped at 1000. Useful for inspecting accumulated
     data and for feeding the retrain pipeline.
     """
-    return {
-        "count": limit,
-        "predictions": recent_predictions(limit=limit),
-    }
+    _require_db()
+    rows = recent_predictions(limit=limit)
+    return {"count": len(rows), "predictions": rows}
 
 
 @app.get("/feedback/stats")
@@ -815,6 +1014,7 @@ def get_feedback_stats():
     Useful for monitoring how much labeled data has been collected for
     the retrain pipeline.
     """
+    _require_db()
     return verdict_stats()
 
 

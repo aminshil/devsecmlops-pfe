@@ -1,16 +1,16 @@
 """
-Training console backend for the control panel (MLOps tab).
+Experiment console backend for the control panel (MLOps tab).
 
-This is a DEMO/OPS tool, not part of the production serving path. It lets the
-operator pick a dataset, a model, and hyperparameters, train for real on a
-capped sample (so it is fast and cannot OOM the VM), compare runs, verify a
-new model against the production baseline with the SAME guardrail the retrain
-pipeline uses, and — only if the guardrail passes — register the artifact and
-surface the exact kubectl deploy commands (shown, never executed here).
+Scope: the unsupervised safety-net component (IsolationForest). The operator
+picks a training dataset, a random sample size and hyperparameters, trains
+for real, and compares the candidate against the PRODUCTION IsolationForest
+evaluated on the same held-out rows of the independent test set, each model
+z-scoring with its own baselines -- a like-for-like comparison.
 
-Real training: reuses ml-model/preprocess.py (build_baselines, apply_zscore,
-add_window_column) so the z-scoring is identical to production. Nothing here
-is faked.
+This console does not promote or deploy anything. The only path to
+production is the model pipeline (ml-model/train_production.py, run by the
+Jenkins model job), which retrains all serving components together, applies
+the guardrail on the full independent test set and records the lineage.
 """
 from __future__ import annotations
 
@@ -25,21 +25,15 @@ import pandas as pd
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import (f1_score, precision_score, recall_score,
                              roc_auc_score)
-from sklearn.model_selection import train_test_split
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 MODELS_DIR = ROOT / "models"
 
-# Production baseline to verify against (the shipped v4 offline numbers).
-# Sourced from the README/model card; used only as the guardrail reference.
-PRODUCTION_BASELINE = {
-    "model": "v4 XGBoost + IsolationForest (production)",
-    "f1": 0.816,
-    "precision": 0.931,
-    "recall": 0.726,
-}
-GUARDRAIL_MIN_F1_RATIO = 1.0  # new F1 must be >= production F1
+TEST_DATASET = "telecom_fleet_v2_test.csv"   # independent evaluation set (seed 123)
+EVAL_ROWS = 200_000                           # held-out rows used by every comparison
+PRODUCTION_ISO = MODELS_DIR / "telecom_iso_v2.pkl"
+PRODUCTION_BASELINES = MODELS_DIR / "telecom_baselines_v2.json"
 
 META_COLS = {"timestamp", "machine", "label", "type", "hour", "window",
              "anomaly_type"}
@@ -72,23 +66,35 @@ def list_datasets() -> list[dict]:
     return out
 
 
-def _load_sampled(dataset: str, sample_rows: int):
+def _resolve_dataset(dataset: str) -> Path:
+    """Only files listed by list_datasets() are accepted: the name is matched
+    against that list, never joined into a path, so '../', absolute paths
+    and other files cannot be read through this API."""
+    allowed = {d["name"] for d in list_datasets()}
+    if dataset not in allowed:
+        raise ValueError(f"unknown dataset: {dataset!r}")
+    return DATA_DIR / dataset
+
+
+def _load_sampled(dataset: str, sample_rows: int, seed: int = 42):
     """
-    Load up to sample_rows from the dataset. For big files we read the head
-    (fast, bounded memory); sample_rows<=0 means the full file.
+    Uniform random sample of about sample_rows rows across the WHOLE file
+    (not the first N rows, which would cover only the first machines/days of a
+    time-ordered file). Rows are kept with probability sample_rows/total while
+    streaming, so memory stays bounded. sample_rows<=0 reads the full file.
     Returns (df, note).
     """
-    path = DATA_DIR / dataset
-    if not path.exists():
-        raise FileNotFoundError(f"dataset not found: {dataset}")
-
-    if sample_rows and sample_rows > 0:
-        df = pd.read_csv(path, nrows=sample_rows)
-        note = f"sampled first {len(df):,} rows"
-    else:
+    import random
+    path = _resolve_dataset(dataset)
+    if not sample_rows or sample_rows <= 0:
         df = pd.read_csv(path)
-        note = f"full dataset ({len(df):,} rows)"
-    return df, note
+        return df, f"full dataset ({len(df):,} rows)"
+    with open(path, "rb") as f:
+        total = sum(1 for _ in f) - 1
+    frac = min(1.0, sample_rows / max(total, 1))
+    rng = random.Random(seed)
+    df = pd.read_csv(path, skiprows=lambda i: i > 0 and rng.random() >= frac)
+    return df, f"uniform random sample of {len(df):,} / {total:,} rows (seed {seed})"
 
 
 def _prep_features(df):
@@ -106,47 +112,49 @@ def _prep_features(df):
     return df, features
 
 
-def _train_isoforest(df, features, params):
-    """Real IsolationForest training on z-scored features (reuses preprocess)."""
-    from preprocess import build_baselines, apply_zscore  # noqa: E402
-
-    if "label" not in df.columns:
-        raise ValueError("dataset has no 'label' column to evaluate against")
-
-    df_tr, df_te = train_test_split(
-        df, test_size=0.3, random_state=42,
-        stratify=df["label"] if df["label"].nunique() > 1 else None)
-
-    # Schema-adaptive: build_baselines needs a 'machine' column. If the
-    # dataset has none (e.g. SMD), synthesize a single global machine so the
-    # same per-machine z-scoring code path still works honestly.
-    if "machine" not in df_tr.columns:
-        df_tr = df_tr.copy(); df_te = df_te.copy()
-        df_tr["machine"] = "__all__"; df_te["machine"] = "__all__"
-    baselines = build_baselines(df_tr, features)
-    x_tr = apply_zscore(df_tr, baselines, features)
-    x_te = apply_zscore(df_te, baselines, features)
-
-    model = IsolationForest(
-        contamination=float(params.get("contamination", 0.068)),
-        n_estimators=int(params.get("n_estimators", 200)),
-        random_state=42, n_jobs=-1)
-    model.fit(x_tr)
-
-    y_pred = (model.predict(x_te) == -1).astype(int)
-    y_score = -model.score_samples(x_te)
-    y_true = df_te["label"].astype(int)
-
-    metrics = {
+def _eval_iso(model, baselines, features, df_eval):
+    from preprocess import apply_zscore  # noqa: E402
+    x = apply_zscore(df_eval, baselines, features).to_numpy()
+    y_true = df_eval["label"].astype(int).to_numpy()
+    y_pred = (model.predict(x) == -1).astype(int)
+    y_score = -model.score_samples(x)
+    m = {
         "f1": round(float(f1_score(y_true, y_pred, zero_division=0)), 4),
         "precision": round(float(precision_score(y_true, y_pred, zero_division=0)), 4),
         "recall": round(float(recall_score(y_true, y_pred, zero_division=0)), 4),
     }
     try:
-        metrics["roc_auc"] = round(float(roc_auc_score(y_true, y_score)), 4)
-    except Exception:
-        metrics["roc_auc"] = None
-    return model, baselines, metrics, len(df_tr), len(df_te)
+        m["roc_auc"] = round(float(roc_auc_score(y_true, y_score)), 4)
+    except ValueError:
+        m["roc_auc"] = None
+    return m
+
+
+def _train_isoforest(df, features, params):
+    """Train on the chosen sample; evaluate the candidate AND the production
+    IsolationForest on the same held-out rows of the independent test set."""
+    from preprocess import add_window_column, build_baselines  # noqa: E402
+
+    if "label" not in df.columns:
+        raise ValueError("dataset has no 'label' column to evaluate against")
+    if "machine" not in df.columns:
+        raise ValueError("dataset has no 'machine' column (per-machine baselines required)")
+
+    baselines = build_baselines(df, features)
+    from preprocess import apply_zscore  # noqa: E402
+    x_tr = apply_zscore(df, baselines, features).to_numpy()
+    contamination = float(params.get("contamination", df["label"].mean() or 0.068))
+    model = IsolationForest(contamination=contamination,
+                            n_estimators=int(params.get("n_estimators", 200)),
+                            random_state=42, n_jobs=-1)
+    model.fit(x_tr)
+
+    df_eval, _ = _load_sampled(TEST_DATASET, EVAL_ROWS, seed=123)
+    df_eval = add_window_column(df_eval)
+    metrics = _eval_iso(model, baselines, features, df_eval)
+    prod = _eval_iso(joblib.load(PRODUCTION_ISO), json.load(open(PRODUCTION_BASELINES)),
+                     features, df_eval)
+    return model, baselines, metrics, prod, len(df), len(df_eval)
 
 
 def _run_training(run_id, dataset, model_name, params, sample_rows):
@@ -163,15 +171,16 @@ def _run_training(run_id, dataset, model_name, params, sample_rows):
         _ACTIVE["status"] = f"training {model_name}…"
         t0 = time.time()
         if model_name == "isolation_forest":
-            model, baselines, metrics, n_tr, n_te = _train_isoforest(
+            model, baselines, metrics, prod_metrics, n_tr, n_te = _train_isoforest(
                 df, features, params)
         else:
-            raise ValueError(f"model '{model_name}' not supported in the live "
-                             f"trainer yet (use isolation_forest)")
+            raise ValueError("this console trains the IsolationForest safety net only; "
+                             "the full serving model is trained by ml-model/train_production.py")
         train_secs = round(time.time() - t0, 1)
 
-        # save the trained artifact to a run-scoped file (gitignored *.pkl)
-        art = MODELS_DIR / f"run_{run_id}.pkl"
+        # experiment artifact, outside models/ (never served)
+        art = ROOT / "build" / "experiments" / f"run_{run_id}.pkl"
+        art.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump({"model": model, "baselines": baselines,
                      "features": features}, art)
 
@@ -183,6 +192,7 @@ def _run_training(run_id, dataset, model_name, params, sample_rows):
             "params": {"contamination": float(params.get("contamination", 0.068)),
                        "n_estimators": int(params.get("n_estimators", 200))},
             "metrics": metrics,
+            "production_metrics": prod_metrics,
             "n_train": n_tr,
             "n_test": n_te,
             "train_secs": train_secs,
@@ -226,7 +236,7 @@ def training_status():
 
 def list_runs():
     with _RUNS_LOCK:
-        return {"production": PRODUCTION_BASELINE, "runs": list(_RUNS)}
+        return {"runs": list(_RUNS)}
 
 
 def _find_run(run_id):
@@ -238,63 +248,20 @@ def _find_run(run_id):
 
 
 def verify_run(run_id):
-    """
-    Guardrail: the same principle as scripts/retrain_from_feedback.py —
-    a new model may only be promoted if its F1 does not regress against the
-    production baseline. Returns a PASS/REJECT verdict with reasoning.
-    """
+    """Compare the candidate with the production IsolationForest measured on
+    the same held-out rows in the same run. Informational: a better safety
+    net is promoted by retraining through the model pipeline, not from here."""
     run = _find_run(run_id)
     if not run or not run.get("metrics"):
         return {"ok": False, "error": "run not found or has no metrics"}
-
     new_f1 = run["metrics"]["f1"]
-    prod_f1 = PRODUCTION_BASELINE["f1"]
-    passed = new_f1 >= prod_f1 * GUARDRAIL_MIN_F1_RATIO
-
-    if passed:
-        reason = (f"new F1 {new_f1:.3f} ≥ production {prod_f1:.3f} — "
-                  f"no regression, safe to register")
-    else:
-        reason = (f"new F1 {new_f1:.3f} < production {prod_f1:.3f} — "
-                  f"REJECTED to protect production (this is the guardrail working)")
-
-    run["verified"] = passed
-    return {"ok": True, "passed": passed, "reason": reason,
+    prod_f1 = run["production_metrics"]["f1"]
+    better = new_f1 >= prod_f1
+    reason = (f"candidate F1 {new_f1:.3f} vs production IsolationForest {prod_f1:.3f} "
+              f"on the same {run['n_test']:,} independent test rows -- "
+              + ("candidate is at least as good; retrain through the model pipeline to promote"
+                 if better else "candidate is worse; production keeps its safety net"))
+    run["verified"] = better
+    run["verify_reason"] = reason
+    return {"ok": True, "passed": better, "reason": reason,
             "new_f1": new_f1, "production_f1": prod_f1}
-
-
-def register_run(run_id):
-    """
-    Register a verified run: copy its artifact to a registered filename and
-    return the EXACT kubectl deploy commands a real rollout would run. The
-    commands are shown, never executed here — deploying to live pods is a
-    deliberate manual step (safety).
-    """
-    run = _find_run(run_id)
-    if not run or not run.get("metrics"):
-        return {"ok": False, "error": "run not found"}
-    if not run.get("verified"):
-        return {"ok": False,
-                "error": "run has not passed the guardrail — verify first"}
-
-    registered = MODELS_DIR / f"registered_{run_id}.pkl"
-    try:
-        src = Path(run["artifact"])
-        if src.exists():
-            registered.write_bytes(src.read_bytes())
-    except Exception as e:
-        return {"ok": False, "error": f"could not write artifact: {e}"}
-
-    tag = f"devsecmlops-api:candidate-{run_id}"
-    deploy_cmds = [
-        "# 1. bake the registered model into a new image",
-        f"docker build -t {tag} .",
-        "# 2. load it into the cluster",
-        f"minikube image load {tag}",
-        "# 3. roll the deployment to the new image (zero-downtime)",
-        f"kubectl set image deployment/anomaly-api api={tag} -n ml-serving",
-        "# 4. watch the rollout",
-        "kubectl rollout status deployment/anomaly-api -n ml-serving",
-    ]
-    return {"ok": True, "registered": str(registered), "image_tag": tag,
-            "deploy_commands": deploy_cmds}

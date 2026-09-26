@@ -61,7 +61,9 @@ def _iso_now() -> str:
 
 def _connect():
     """Open a connection to PostgreSQL. Callers are responsible for closing."""
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+    # Bounded connect timeout: an unreachable DB must fail fast so /predict
+    # (which logs best-effort) is never held up waiting on a dead host.
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=3)
 
 
 def init_db() -> None:
@@ -89,6 +91,10 @@ def init_db() -> None:
                     verdict_notes      TEXT
                 )
             """)
+            # Added after the first release: the request's rolling-history
+            # window, so feedback on a v4 prediction can be turned back into
+            # an exact v4 training example.
+            cur.execute("ALTER TABLE predictions ADD COLUMN IF NOT EXISTS history_json TEXT")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON predictions(timestamp DESC)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_verdict ON predictions(operator_verdict)")
         conn.commit()
@@ -107,11 +113,12 @@ def insert_prediction(
     iso_score: Optional[float],
     final_is_anomaly: int,
     final_cause: Optional[str],
+    history: Optional[dict] = None,
 ) -> str:
     """
     Insert a new prediction row. Returns the generated prediction_id (UUIDv4).
-    Called synchronously from /predict; if this raises, the /predict call
-    will 500 -- fail-loud by design for data integrity.
+    Called synchronously from /predict through _safe_insert_prediction,
+    which catches failures so a DB problem never breaks serving.
     """
     pid = str(uuid4())
     with _connect() as conn:
@@ -122,14 +129,15 @@ def insert_prediction(
                     features_json, raw_metrics_json,
                     model_version, predict_threshold,
                     xgb_p_normal, xgb_cause, iso_score,
-                    final_is_anomaly, final_cause
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    final_is_anomaly, final_cause, history_json
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 pid, _iso_now(), machine, machine_type, window,
                 json.dumps(features), json.dumps(raw_metrics),
                 model_version, predict_threshold,
                 xgb_p_normal, xgb_cause, iso_score,
                 final_is_anomaly, final_cause,
+                json.dumps(history) if history is not None else None,
             ))
         conn.commit()
     return pid
