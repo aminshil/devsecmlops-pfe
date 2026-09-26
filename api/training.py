@@ -84,6 +84,11 @@ def _load_sampled(dataset: str, sample_rows: int, seed: int = 42):
     streaming, so memory stays bounded. sample_rows<=0 reads the full file.
     Returns (df, note).
     """
+    # NOSONAR (python:S2245): random, not secrets -- used only for reproducible
+    # statistical row sampling (seeded for determinism), never for anything
+    # security-sensitive. A cryptographic RNG would be the wrong tool here:
+    # it cannot be seeded, so the "seed 42" reproducibility this function
+    # documents would be impossible.
     import random
     path = _resolve_dataset(dataset)
     if not sample_rows or sample_rows <= 0:

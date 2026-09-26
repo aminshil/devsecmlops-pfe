@@ -994,7 +994,10 @@ def submit_feedback(prediction_id: str, feedback: FeedbackIn):
     }
 
 
-@app.get("/predictions/recent")
+@app.get(
+    "/predictions/recent",
+    responses={503: {"description": "Feedback DB unavailable"}},
+)
 def get_recent_predictions(limit: int = 100):
     """
     Return the N most recent predictions from the feedback DB.
@@ -1134,7 +1137,7 @@ def ui_status():
             layers.append({"layer": layer, "name": name,
                            "up": _port_open(host, port), "detail": detail})
     layers.append({"layer": "L5", "name": "Production agent",
-                   "up": _process_already_running("monitoring/production_agent.py"),
+                   "up": _process_already_running(_AGENT_SCRIPT),
                    "detail": "demo traffic -> /predict"})
     return {"layers": layers, "up": sum(1 for lyr in layers if lyr["up"]), "total": len(layers)}
 
@@ -1560,7 +1563,7 @@ _FIX_MAP = {
     "Node exporter":    ("docker", "node-exporter"),
     "Prometheus":       ("process", "prometheus"),
     "K8s exporter":     ("process", "monitoring/k8s_exporter.py"),
-    "Production agent": ("process", "monitoring/production_agent.py"),
+    "Production agent": ("process", _AGENT_SCRIPT),
     "Kubernetes":       ("k8s", None),
 }
 

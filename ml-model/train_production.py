@@ -71,7 +71,8 @@ from preprocess import (add_rolling_features, add_window_column,  # noqa: E402
 FEATURES = ["cpu", "ram", "network", "disk_io", "disk_usage", "load_avg"]
 ROLLING = rolling_feature_names()
 MODELS = ROOT / "models"
-MANIFEST = MODELS / "manifest.json"
+MANIFEST_FILENAME = "manifest.json"
+MANIFEST = MODELS / MANIFEST_FILENAME
 
 # Serving artifact file names (what api/app.py loads for MODEL_NAME=telecom_v3)
 ARTIFACTS = {
@@ -85,6 +86,12 @@ ARTIFACTS = {
 
 # Hyperparameters of the models currently in production (read back from the
 # committed pickles: XGBClassifier.get_params(), IsolationForest.get_params()).
+# NOSONAR (python:S6711): random_state=42 IS set on both, passed via **dict
+# unpacking at the constructor call sites below -- static analysis cannot
+# trace a keyword through dict unpacking back to its literal definition here,
+# so it reports these constructors as unseeded. Verified directly: both
+# XGBClassifier(**XGB_PARAMS, ...) calls and IsolationForest(**ISO_PARAMS, ...)
+# genuinely receive random_state=42 at runtime.
 XGB_PARAMS = dict(objective="multi:softprob", n_estimators=150, max_depth=6,
                   learning_rate=0.1, random_state=42, n_jobs=-1, verbosity=0)
 ISO_PARAMS = dict(n_estimators=200, random_state=42, n_jobs=-1)
@@ -239,12 +246,12 @@ def fingerprint(paths: dict[str, Path]) -> dict:
 
 
 def read_manifest(models_dir: Path) -> dict:
-    path = models_dir / "manifest.json"
+    path = models_dir / MANIFEST_FILENAME
     return json.load(open(path)) if path.exists() else {}
 
 
 def write_manifest(models_dir: Path, manifest: dict) -> None:
-    with open(models_dir / "manifest.json", "w") as f:
+    with open(models_dir / MANIFEST_FILENAME, "w") as f:
         json.dump(manifest, f, indent=2)
 
 
