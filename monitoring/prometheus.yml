@@ -3,6 +3,7 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
+  # Host VM hardware (node-exporter container, host network)
   - job_name: "node-exporter"
     static_configs:
       - targets: ["localhost:9100"]
@@ -10,37 +11,52 @@ scrape_configs:
           machine: "pfe-vm"
           type: "web"
 
-  - job_name: "fleet-simulator"
-    scrape_interval: 30s
-    static_configs:
-      - targets: ["localhost:9200"]
-
-  - job_name: "anomaly-bridge"
-    scrape_interval: 30s
-    static_configs:
-      - targets: ["localhost:9300"]
-
+  # Kubernetes object state (pods ready, restarts, replicas, HPA)
   - job_name: "k8s-exporter"
     scrape_interval: 30s
     static_configs:
       - targets: ["localhost:9400"]
 
-  # Self-instrumented /metrics on the serving API itself (see api/app.py) --
-  # two targets so Grafana can show predictions served by the host process
-  # AND predictions actually served by a Kubernetes pod separately, not
-  # just whatever the anomaly bridge happened to poll secondhand.
+  # The API process on the host (control panel + operations console)
   - job_name: "anomaly-api-host"
-    scrape_interval: 15s
     static_configs:
       - targets: ["localhost:8000"]
         labels:
           served_by: "host"
 
-  - job_name: "anomaly-api-k8s"
-    scrape_interval: 15s
-    static_configs:
-      # NodePort -- Prometheus runs as a host process, outside the cluster,
-      # so it reaches the pods the same way any external client would.
-      - targets: ["192.168.49.2:30080"]
-        labels:
-          served_by: "kubernetes"
+  # Every serving pod, scraped INDIVIDUALLY. Pods are discovered through the
+  # Kubernetes API (so replicas added by the HPA or by a rollout appear on
+  # their own) and scraped through the API server's pod proxy -- the pod IPs
+  # are not routable from the host. Scraping the NodePort instead would hit
+  # a random replica on each scrape and mix their counters.
+  - job_name: "anomaly-api-pods"
+    scheme: https
+    tls_config: &minikube_tls
+      ca_file: /home/pfe/.minikube/ca.crt
+      cert_file: /home/pfe/.minikube/profiles/minikube/client.crt
+      key_file: /home/pfe/.minikube/profiles/minikube/client.key
+    kubernetes_sd_configs:
+      - role: pod
+        api_server: https://192.168.49.2:8443
+        tls_config: *minikube_tls
+        namespaces:
+          names: ["ml-serving"]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        regex: anomaly-api
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        regex: "8000"
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_phase]
+        regex: Running
+        action: keep
+      - target_label: __address__
+        replacement: 192.168.49.2:8443
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: __metrics_path__
+        replacement: /api/v1/namespaces/ml-serving/pods/${1}:8000/proxy/metrics
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - target_label: served_by
+        replacement: kubernetes

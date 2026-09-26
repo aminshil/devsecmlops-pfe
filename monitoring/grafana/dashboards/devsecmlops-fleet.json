@@ -1,0 +1,982 @@
+{
+  "title": "DevSecMLOps \u2014 Anomaly Detection Fleet",
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "schemaVersion": 39,
+  "uid": "devsecmlops-fleet",
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Serving (Kubernetes pods, scraped individually)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "id": 2,
+      "title": "Predictions/s by served model",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "description": "Requests answered per second, split by which model served them. telecom_v4_rolling = the caller supplied a 10-reading history (rolling features used); telecom_v3 = no history yet, or the caller never sends one. A demo agent always starts on v3 and switches to v4 after its 10th reading -- v3-only forever means history is never reaching the API.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "sum by (model) (rate(api_predictions_total{job=\"anomaly-api-pods\"}[1m]))",
+          "legendFormat": "{{model}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "id": 3,
+      "title": "/predict requests/s per pod",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "description": "Traffic per pod. Kubernetes' Service load-balances round-robin, so with N healthy pods each should carry roughly 1/N of total traffic. One pod flat at 0 while others show traffic usually means it failed readiness and was pulled from the Service, not that it is idle.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "sum by (pod) (rate(api_http_requests_total{job=\"anomaly-api-pods\", route=\"/predict\"}[1m]))",
+          "legendFormat": "{{pod}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "id": 4,
+      "title": "/predict latency p95 per pod",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "description": "95th-percentile time to answer one /predict call, per pod (inference + best-effort DB write). Normal is well under 200ms on this hardware. A sustained rise usually traces to the Feedback DB write p95 panel below -- PostgreSQL contention, not the model itself, is the usual cause.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, pod) (rate(api_prediction_latency_seconds_bucket{job=\"anomaly-api-pods\"}[5m])))",
+          "legendFormat": "{{pod}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "id": 5,
+      "title": "Error ratio (4xx / 5xx)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "description": "Share of requests answered with an error. 4xx = the request itself was invalid (e.g. history not exactly 10 finite values) -- a caller-side problem, not a service failure. ANY sustained 5xx is a real server-side problem and should be investigated immediately; 0% is the expected steady state.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "(sum by (status_class) (rate(api_http_requests_total{job=\"anomaly-api-pods\", status_class=~\"4xx|5xx\"}[5m])) / scalar(sum(rate(api_http_requests_total{job=\"anomaly-api-pods\"}[5m])))) or on() vector(0)",
+          "legendFormat": "{{status_class}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 6,
+      "title": "Serving pods scraped",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 17
+      },
+      "description": "How many serving pods Prometheus is currently able to reach. Should equal your replica count (kubectl get deploy anomaly-api -n ml-serving). Lower than that means a pod exists but Prometheus cannot scrape it -- check kubectl get pods and the Kubernetes API server connectivity.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "count(up{job=\"anomaly-api-pods\"} == 1)",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 7,
+      "title": "API uptime (currently-serving process, minutes)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 17
+      },
+      "description": "Minutes since the OLDEST currently-running pod started. Resets to 0 on every rollout or pod restart -- this is informational, not a health signal by itself. A value that keeps resetting every few minutes without you deploying anything indicates pods are crash-looping.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "(time() - min(process_start_time_seconds{job=\"anomaly-api-pods\"})) / 60",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "id": 8,
+      "title": "Feedback DB write p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 17
+      },
+      "description": "95th-percentile time spent writing ONE prediction to PostgreSQL (a slice of total /predict latency, see the p95-per-pod panel). Typically a few ms to tens of ms. If this climbs, /predict latency climbs with it even though the model itself is unchanged.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(api_feedback_db_write_seconds_bucket{job=\"anomaly-api-pods\"}[5m])))",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Detection (freshest replica per machine)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 10,
+      "title": "Anomalous machines over time",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "description": "How many of the 200 machines are CURRENTLY flagged anomalous (a Gauge, reflecting the latest verdict per machine -- not a running total). The synthetic generator injects anomalies at roughly a 5% base rate (README), so with the full fleet reporting, single digits to ~15 is ordinary background noise; a sustained spike well above that suggests a real correlated event worth checking in Root cause spotlight below.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "count((api_currently_anomalous{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) == 1) or vector(0)",
+          "legendFormat": "anomalous machines"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 11,
+      "title": "Currently anomalous machines",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "description": "The actual list behind the count above: every machine whose most recent prediction was anomalous, right now, per the freshest pod that has reported on it.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "(api_currently_anomalous{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) == 1",
+          "legendFormat": "",
+          "instant": true,
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 12,
+      "title": "Classifier anomaly probability by machine (top 25)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "description": "XGBoost's own P(anomaly) = 1 - P(normal) for each machine's most recent reading, 0-1, same scale whether v3 or v4 served it. The production decision threshold is 0.6 (chosen by ml-model/select_threshold.py on an independent validation set) -- values clustered just under 0.6 are 'nearly flagged' and worth watching. The served verdict also OR's in the IsolationForest safety net, so a machine can be anomalous here even with a low bar shown.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "sort_desc(topk(25, (api_classifier_p_anomaly{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"})))))",
+          "legendFormat": "{{machine}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 13,
+      "title": "Fleet-wide average CPU",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "description": "Average of the raw CPU % each machine's most recent request actually reported (not a synthetic value -- literally what the API received). Purely descriptive of current fleet load; there is no fixed 'bad' threshold here since machine types have very different normal baselines (a database server idles hotter than a web server, by design of the synthetic generator).",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "avg((api_input_metric{job=\"anomaly-api-pods\",feature=\"cpu\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))))",
+          "legendFormat": "avg cpu %"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 14,
+      "title": "Fleet-wide average network",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "description": "Average of the raw network MB/s each machine's most recent request reported. Same caveat as CPU: descriptive only, no universal threshold, since normal ranges differ by machine type.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "avg((api_input_metric{job=\"anomaly-api-pods\",feature=\"network\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))))",
+          "legendFormat": "avg network MB/s"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 15,
+      "title": "Fleet-wide average load",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "description": "Average of the raw load-average value each machine's most recent request reported. Same caveat: descriptive, not a threshold -- a machine's OWN per-machine, per-time-window baseline (not this fleet-wide average) is what the model actually scores it against.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "avg((api_input_metric{job=\"anomaly-api-pods\",feature=\"load_avg\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))))",
+          "legendFormat": "avg load"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "row",
+      "title": "Root cause",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 17,
+      "title": "Root cause spotlight (last 5 minutes)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 57
+      },
+      "description": "Machines the /root-cause endpoint identified as the LIKELY ORIGIN of a correlated failure (not just anomalous themselves) in the last 5 minutes. Structurally, only machines with real downstream dependents in dependency_graph.json can appear here -- in this project, that means routers. Empty is the normal state; a router appearing here means multiple dependent machines are anomalous at once and this is the one the graph points to as the cause.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "sum by (machine) (increase(api_root_cause_incidents_total{job=\"anomaly-api-pods\"}[5m])) > 0",
+          "legendFormat": "{{machine}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 18,
+      "title": "Root cause events over time",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 63
+      },
+      "description": "The same signal as the spotlight above, over time, so a recurring root cause (the same machine repeatedly implicated) stands out from a one-off.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "sum by (machine) (increase(api_root_cause_incidents_total{job=\"anomaly-api-pods\"}[1m])) > 0",
+          "legendFormat": "{{machine}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 19,
+      "title": "Distinct anomalous machines (since pods started)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 71
+      },
+      "description": "How many DIFFERENT machines have been anomalous at least once since the current pods started (a Counter, so it only grows -- unlike the 'currently anomalous' panels above). Resets to 0 on every rollout. High relative to 200 over a long session is expected; a high value within minutes of startup would be unusual.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "count(sum by (machine) (api_anomaly_seen_total{job=\"anomaly-api-pods\"}))",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "id": 20,
+      "title": "Distinct root-cause machines (since pods started)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 71
+      },
+      "description": "Same idea as the panel to its left, but for root-cause incidents specifically: how many distinct machines have been identified as a likely root cause since the pods started.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "count(sum by (machine) (api_root_cause_incidents_total{job=\"anomaly-api-pods\"}))",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "row",
+      "title": "Host VM (node-exporter)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 77
+      },
+      "panels": []
+    },
+    {
+      "id": 22,
+      "title": "Host VM \u2014 CPU usage (real)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 78
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\",job=\"node-exporter\"}[1m])) * 100)",
+          "legendFormat": "real VM cpu %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15
+          }
+        }
+      },
+      "description": "Real CPU usage of the VM itself, not a machine in the simulated fleet. Sustained above ~90% is worth attention -- this VM also runs Jenkins, SonarQube, Minikube and every service at once, so high-but-brief spikes during a build or a training run are normal."
+    },
+    {
+      "id": 23,
+      "title": "Host VM \u2014 RAM available",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 78
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "node_memory_MemAvailable_bytes{job=\"node-exporter\"} / 1e9",
+          "legendFormat": "available RAM (GB)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decgbytes",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15
+          }
+        }
+      },
+      "description": "Real RAM still available on the VM. This project has hit genuine out-of-memory failures before (documented in the README's operational incidents) -- treat low single-digit GB as a real warning, not just a number."
+    },
+    {
+      "id": 24,
+      "title": "Host VM \u2014 Disk free (root)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 86
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "node_filesystem_avail_bytes{mountpoint=\"/\",job=\"node-exporter\"} / 1e9",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decgbytes",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        }
+      },
+      "options": {
+        "textMode": "value_and_name"
+      },
+      "description": "Real free disk space on the VM's root filesystem. This has genuinely caused a real incident before: Elasticsearch (inside SonarQube) went read-only and failed the Quality Gate when this dropped too low, fixed with docker image/builder prune. Below a few GB free is a real, previously-experienced risk on this exact VM, not a theoretical one."
+    },
+    {
+      "id": 25,
+      "title": "Host VM \u2014 Load average (1m)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 86
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "node_load1{job=\"node-exporter\"}",
+          "legendFormat": ""
+        }
+      ],
+      "options": {
+        "textMode": "value_and_name"
+      },
+      "description": "Real 1-minute load average of the VM. As a rule of thumb, sustained load above the VM's CPU core count means more work is queued than the machine can run concurrently."
+    },
+    {
+      "id": 26,
+      "type": "row",
+      "title": "Kubernetes objects (k8s-exporter)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 92
+      },
+      "panels": []
+    },
+    {
+      "id": 27,
+      "title": "Kubernetes \u2014 pod status",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 93
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "k8s_pod_ready",
+          "legendFormat": "",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true
+            },
+            "renameByName": {
+              "pod": "Pod",
+              "namespace": "Namespace",
+              "Value": "Ready (1=yes)"
+            }
+          }
+        }
+      ],
+      "description": "Ready (1) / Not Ready (0) for every pod in ml-serving. Any pod stuck at 0 for more than a minute or two after a rollout usually means its readiness probe (GET /health) is failing -- check kubectl logs on that pod."
+    },
+    {
+      "id": 28,
+      "title": "Kubernetes \u2014 pod restart counts",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 93
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "k8s_pod_restarts",
+          "legendFormat": "",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true
+            },
+            "renameByName": {
+              "pod": "Pod",
+              "namespace": "Namespace",
+              "Value": "Restarts"
+            }
+          }
+        }
+      ],
+      "description": "How many times each pod's container has restarted since it was created. 0 is normal. A number that keeps climbing means the container is crashing and Kubernetes is restarting it -- check kubectl describe pod for the reason (often an unhandled exception or a failed liveness probe)."
+    },
+    {
+      "id": 29,
+      "title": "Kubernetes \u2014 replicas (desired vs available)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 101
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "k8s_deployment_replicas_desired",
+          "legendFormat": "desired"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "B",
+          "expr": "k8s_deployment_replicas_available",
+          "legendFormat": "available"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
+      "description": "Desired = what the Deployment (or the HPA, if it has scaled) asks for; Available = how many are actually ready right now. The two lines should track each other closely; a persistent gap means new pods are being scheduled but failing to become ready."
+    },
+    {
+      "id": 30,
+      "title": "Kubernetes \u2014 HPA CPU utilization",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 101
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "k8s_hpa_cpu_utilization_percent",
+          "legendFormat": "{{hpa}} cpu %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        }
+      },
+      "description": "Average CPU utilization the Horizontal Pod Autoscaler is measuring across the anomaly-api pods. When this crosses the HPA's configured target (see kubernetes/deployment.yaml or the hpa.yaml manifest), Kubernetes adds replicas automatically; below it, replicas may scale back down."
+    }
+  ],
+  "version": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "machine_type",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "devsecmlops-prom"
+        },
+        "query": {
+          "query": "label_values(api_input_metric, machine_type)",
+          "refId": "mt"
+        },
+        "definition": "label_values(api_input_metric, machine_type)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  }
+}

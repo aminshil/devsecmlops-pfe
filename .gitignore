@@ -50,3 +50,4 @@ coverage.xml
 # pipeline / validation outputs (reports are archived by Jenkins)
 build/
 data/feedback/
+.prometheus-data/

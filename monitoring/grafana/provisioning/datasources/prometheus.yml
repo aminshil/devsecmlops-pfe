@@ -1,0 +1,10 @@
+# Provisioned on Grafana start-up: the dashboard references this fixed uid,
+# so it can never point at a datasource that does not exist.
+apiVersion: 1
+datasources:
+  - name: DevSecMLOps Prometheus
+    uid: devsecmlops-prom
+    type: prometheus
+    access: proxy
+    url: http://localhost:9090
+    editable: false

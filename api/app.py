@@ -1110,10 +1110,9 @@ _PORT_LAYERS = [
     ("localhost", 5000, "L2", "Docker registry", ":5000"),
     ("localhost", 8080, "L3", "Jenkins", "CI/CD"),
     ("localhost", 9000, "L3", "SonarQube", "SAST"),
+    ("localhost", 5001, "L3", "MLflow", "tracking :5001"),
     ("localhost", 9090, "L5", "Prometheus", ":9090"),
     ("localhost", 3000, "L5", "Grafana", ":3000"),
-    ("localhost", 9200, "L5", "Replay exporter", ":9200"),
-    ("localhost", 9300, "L5", "Anomaly bridge", ":9300"),
     ("localhost", 9100, "L5", "Node exporter", ":9100"),
     ("localhost", 9400, "L5", "K8s exporter", ":9400"),
 ]
@@ -1134,6 +1133,9 @@ def ui_status():
         if layer == "L5":
             layers.append({"layer": layer, "name": name,
                            "up": _port_open(host, port), "detail": detail})
+    layers.append({"layer": "L5", "name": "Production agent",
+                   "up": _process_already_running("monitoring/production_agent.py"),
+                   "detail": "demo traffic -> /predict"})
     return {"layers": layers, "up": sum(1 for lyr in layers if lyr["up"]), "total": len(layers)}
 
 
@@ -1147,18 +1149,31 @@ def _prom_query(expr):
         return None
 
 
+_PODS_JOB = 'job="anomaly-api-pods"'
+_LAST_SEEN_METRIC = "api_machine_last_seen_timestamp_seconds{" + _PODS_JOB + "}"
+
+
+def _freshest(metric, sel=""):
+    """Each serving replica only knows the readings IT served, so a plain
+    query can miss or misreport a machine currently owned by a different
+    pod. Keep, per machine, the series from the replica that saw it last."""
+    labels = "{" + _PODS_JOB + ("," + sel if sel else "") + "}"
+    return ("(" + metric + labels + " and on(pod, machine) (" + _LAST_SEEN_METRIC +
+            " == on(machine) group_left() max by (machine) (" + _LAST_SEEN_METRIC + ")))")
+
+
 @app.get("/ui/metrics")
 def ui_metrics():
-    """Live fleet stats from Prometheus."""
-    ac = _prom_query("bridge_anomaly_count")
-    cpu = _prom_query("avg(sim_cpu_percent)")
-    load = _prom_query("avg(sim_load_avg)")
-    gt = _prom_query("sum(sim_ground_truth_anomaly)")
+    """Live fleet stats, self-reported by the serving pods."""
+    ac = _prom_query("count(" + _freshest("api_currently_anomalous") + " == 1) or vector(0)")
+    cpu = _prom_query("avg(" + _freshest("api_input_metric", 'feature="cpu"') + ")")
+    load = _prom_query("avg(" + _freshest("api_input_metric", 'feature="load_avg"') + ")")
+    rate = _prom_query("sum(rate(api_predictions_total{" + _PODS_JOB + "}[1m]))")
     return {
         "anomaly_count": None if ac is None else int(ac),
         "avg_cpu": None if cpu is None else round(cpu, 1),
         "avg_load": None if load is None else round(load, 1),
-        "ground_truth": None if gt is None else int(gt),
+        "predictions_per_s": None if rate is None else round(rate, 1),
     }
 
 
@@ -1267,14 +1282,17 @@ def _infra_prometheus_targets():
 
 
 def _infra_live_anomalies():
+    """Currently anomalous machines as reported by the serving pods
+    (freshest replica per machine)."""
     anomalies = []
     try:
-        url = "http://localhost:9090/api/v1/query?query=" + _ur.quote("bridge_is_anomaly == 1")
+        expr = _freshest("api_currently_anomalous") + " == 1"
+        url = "http://localhost:9090/api/v1/query?query=" + _ur.quote(expr)
         with _ur.urlopen(url, timeout=4) as r:
             for s in json.loads(r.read())["data"]["result"]:
                 m = s["metric"]
                 anomalies.append({"machine": m.get("machine", "?"),
-                                  "role": m.get("role", "?"), "type": m.get("type", "?")})
+                                  "type": m.get("machine_type", "?"), "pod": m.get("pod", "?")})
     except Exception:
         pass
     return anomalies
@@ -1478,16 +1496,6 @@ def _prom_scalar(metric: str):
     return None
 
 
-@app.get("/ui/sim-hour")
-def ui_sim_hour():
-    """The replay exporter's CURRENT simulated hour (what the model is scored
-    against), so the panel shows the simulated clock - not wall-clock time."""
-    h = _prom_scalar("sim_replay_hour")
-    return {"sim_hour": int(h) if h is not None else None,
-            "window": hour_to_window(int(h)) if h is not None else None,
-            "source": "replay exporter via Prometheus" if h is not None else "unavailable"}
-
-
 @app.get("/ui/sample-one")
 def ui_sample_one():
     """One real labeled reading from the test set, with its REAL hour parsed
@@ -1505,33 +1513,18 @@ def ui_sample_one():
             "true_cause": r.get("true_cause")}
 
 
-# Processes the panel can see and (re)start - the two that feed Grafana.
-_PIPELINE = {
-    "replay": {"script": "monitoring/replay_exporter.py", "port": 9200,
-               "label": "replay exporter"},
-    "bridge": {"script": "monitoring/anomaly_bridge.py", "port": 9300,
-               "label": "anomaly bridge"},
-}
-
-
-def _proc_running(script: str) -> bool:
-    try:
-        out = _sp.run(["pgrep", "-f", script], capture_output=True, text=True)
-        return out.returncode == 0 and bool(out.stdout.strip())
-    except Exception:
-        return False
+_AGENT_SCRIPT = "monitoring/production_agent.py"
+_AGENT_LABEL = "production agent"
 
 
 @app.get("/ui/pipeline")
 def ui_pipeline_status():
-    """Status of the Grafana-feeding pipeline processes + the sim hour."""
-    status = {}
-    for key, p in _PIPELINE.items():
-        status[key] = {"label": p["label"], "port": p["port"],
-                       "running": _proc_running(p["script"])}
-    h = _prom_scalar("sim_replay_hour")
-    return {"processes": status,
-            "sim_hour": int(h) if h is not None else None}
+    """Status of the demo traffic source (the production agent) and the
+    prediction rate the serving pods report."""
+    rate = _prom_query("sum(rate(api_predictions_total{" + _PODS_JOB + "}[1m]))")
+    return {"processes": {"agent": {"label": _AGENT_LABEL,
+                                    "running": _process_already_running(_AGENT_SCRIPT)}},
+            "predictions_per_s": None if rate is None else round(rate, 1)}
 
 
 class _PipelineAction(BaseModel):
@@ -1541,32 +1534,16 @@ class _PipelineAction(BaseModel):
 
 @app.post("/ui/pipeline")
 def ui_pipeline_control(body: _PipelineAction):
-    """Start or stop a pipeline process from the panel. Guarded so 'start'
-    never spawns a duplicate. Demo/ops convenience - the processes otherwise
-    run via start_control_panel.sh or the Ansible monitoring role."""
-    p = _PIPELINE.get(body.target)
-    if not p:
-        return {"ok": False, "error": f"unknown target '{body.target}'"}
-    script = p["script"]
-
-    if body.action == "start":
-        if _proc_running(script):
-            return {"ok": True, "note": f"{p['label']} already running", "running": True}
-        try:
-            logf = _open_safe_log(f"{body.target}.log")
-            _sp.Popen([str(ROOT / "venv" / "bin" / "python3"), script], stdout=logf, stderr=logf, cwd=str(ROOT))
-            return {"ok": True, "note": f"{p['label']} started", "running": True}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
-
+    """Start or stop the production agent from the panel. Reuses the same
+    process primitives /ui/fix already uses for k8s_exporter, so there is
+    only one way this project starts/stops a background script."""
+    if body.target != "agent" or body.action not in ("start", "stop"):
+        return {"ok": False, "error": "unknown target or action"}
     if body.action == "stop":
-        try:
-            _sp.run(["pkill", "-f", script], capture_output=True)
-            return {"ok": True, "note": f"{p['label']} stopped", "running": False}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
-
-    return {"ok": False, "error": f"unknown action '{body.action}'"}
+        res = _stop_process(_AGENT_SCRIPT, _AGENT_LABEL)
+    else:
+        res = _start_process(_AGENT_SCRIPT, _AGENT_LABEL)
+    return {**res, "running": _process_already_running(_AGENT_SCRIPT)}
 # ===========================================================================
 # Per-layer recovery ("Fix" button). A FIXED allow-list maps each layer name
 # to its known-correct recovery command — no arbitrary commands can run.
@@ -1582,9 +1559,8 @@ _FIX_MAP = {
     "Grafana":          ("docker", "grafana"),
     "Node exporter":    ("docker", "node-exporter"),
     "Prometheus":       ("process", "prometheus"),
-    "Replay exporter":  ("process", "monitoring/replay_exporter.py"),
-    "Anomaly bridge":   ("process", "monitoring/anomaly_bridge.py"),
     "K8s exporter":     ("process", "monitoring/k8s_exporter.py"),
+    "Production agent": ("process", "monitoring/production_agent.py"),
     "Kubernetes":       ("k8s", None),
 }
 

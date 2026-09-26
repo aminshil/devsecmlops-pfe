@@ -34,6 +34,11 @@ def kubectl_json(args):
 def tick():
     try:
         pods = kubectl_json(["get", "pods", "-n", NAMESPACE])
+        # Rebuild the per-pod series from scratch each tick: pods replaced by
+        # a rollout must disappear from the dashboard, not linger forever
+        # with their last value.
+        g_pod_ready.clear()
+        g_pod_restarts.clear()
         for item in pods["items"]:
             name = item["metadata"]["name"]
             ready = 0
