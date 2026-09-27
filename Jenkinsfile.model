@@ -1,0 +1,123 @@
+// DevSecMLOps model pipeline (Jenkins job "devsecmlops-model", run on demand).
+//
+//   1  Checkout
+//   2  Export operator feedback as a versioned dataset   (optional)
+//   3  Train candidate -> evaluate candidate AND production on the
+//      independent test set -> guardrail                 (train_production.py)
+//   4  Promote: commit the approved artifacts + manifest lineage to git
+//   5  Trigger the application pipeline, which gates, builds, scans,
+//      deploys and verifies the image containing the new model
+//
+// A rejected candidate is a valid outcome: the build is marked UNSTABLE,
+// production is untouched and nothing is committed. The run report is
+// archived either way.
+//
+// Prerequisites this job needs (provisioned by Ansible, not by this file):
+//   - the Jenkins container has data/ mounted read-only at
+//     /var/jenkins_home/fleet-data (ansible/roles/prerequisites)
+//   - a Jenkins credential "github-pat-devsecmlops" (username+PAT) exists,
+//     with push access to this repo
+pipeline {
+    agent any
+
+    parameters {
+        booleanParam(name: 'INCLUDE_FEEDBACK', defaultValue: true,
+                     description: 'Export operator verdicts and include them in training')
+        booleanParam(name: 'PROMOTE', defaultValue: true,
+                     description: 'Commit and deploy the candidate if the guardrail passes')
+    }
+
+    environment {
+        DATA          = "/var/jenkins_home/fleet-data"      // read-only mount of repo data/
+        KUBECONFIG    = "/home/pfe/.kube/config"
+        // Tracking server on the host (Docker bridge gateway); artifacts are
+        // proxied by the server, so no storage credentials are needed here.
+        MLFLOW_TRACKING_URI = "http://172.17.0.1:5001"
+    }
+
+    options {
+        timeout(time: 3, unit: 'HOURS')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    stages {
+        stage('1. Checkout') {
+            steps {
+                checkout scm
+                sh '''
+                    git log --oneline -1
+                    python3 -m pip install --quiet --break-system-packages -r requirements-api.txt mlflow==3.16.1
+                    test -f ${DATA}/telecom_fleet_v2_labeled.csv
+                    test -f ${DATA}/telecom_fleet_v2_test.csv
+                '''
+            }
+        }
+
+        stage('2. Export feedback dataset') {
+            when { expression { params.INCLUDE_FEEDBACK } }
+            steps {
+                sh 'python3 scripts/export_feedback_dataset.py --out-dir build/feedback'
+            }
+        }
+
+        stage('3. Train, evaluate, guardrail') {
+            steps {
+                script {
+                    def fb = sh(script: 'ls build/feedback/*.csv 2>/dev/null | tr "\\n" " "',
+                                returnStdout: true).trim()
+                    def rc = sh(returnStatus: true, script: """
+                        python3 ml-model/train_production.py \
+                          --train \${DATA}/telecom_fleet_v2_labeled.csv \
+                          --test  \${DATA}/telecom_fleet_v2_test.csv \
+                          ${fb ? '--feedback ' + fb : ''} \
+                          ${params.PROMOTE ? '--promote' : ''} \
+                          --report build/model-report.json
+                    """)
+                    if (rc == 1) {
+                        env.MODEL_OUTCOME = 'rejected'
+                        unstable('Guardrail rejected the candidate -- production model unchanged')
+                    } else if (rc != 0) {
+                        error("training pipeline failed (exit ${rc})")
+                    } else {
+                        env.MODEL_OUTCOME = params.PROMOTE ? 'promoted' : 'passed'
+                    }
+                }
+            }
+            post {
+                always { archiveArtifacts artifacts: 'build/model-report.json', allowEmptyArchive: true }
+            }
+        }
+
+        stage('4. Commit promoted model') {
+            when { expression { env.MODEL_OUTCOME == 'promoted' } }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'github-pat-devsecmlops',
+                                                  usernameVariable: 'GIT_USER',
+                                                  passwordVariable: 'GIT_TOKEN')]) {
+                    sh '''
+                        F1=$(python3 -c "import json;print(json.load(open('models/manifest.json'))['production']['evaluation']['v4']['f1'])")
+                        git config user.name  "devsecmlops-model-pipeline"
+                        git config user.email "model-pipeline@devsecmlops.local"
+                        git add models/
+                        git commit -m "model: promote candidate from Jenkins model build ${BUILD_NUMBER} (served v4 F1 ${F1})"
+                        git push "https://${GIT_USER}:${GIT_TOKEN}@github.com/aminshil/devsecmlops-pfe.git" HEAD:main
+                    '''
+                }
+            }
+        }
+
+        stage('5. Deploy through the application pipeline') {
+            when { expression { env.MODEL_OUTCOME == 'promoted' } }
+            steps {
+                build job: 'devsecmlops-pipeline', wait: true
+            }
+        }
+    }
+
+    post {
+        success  { echo "Model pipeline: ${env.MODEL_OUTCOME}" }
+        unstable { echo "Model pipeline: candidate rejected by the guardrail; production unchanged" }
+        failure  { echo "Model pipeline FAILED at ${env.STAGE_NAME}" }
+    }
+}
