@@ -63,7 +63,7 @@ pipeline {
                     # IaC misconfigurations (Dockerfiles, Kubernetes manifests)
                     # -- separate from stage 6's scan of the BUILT IMAGE.
                     trivy fs --scanners vuln,secret,misconfig \
-                      --severity HIGH,CRITICAL --exit-code 1 \
+                      --severity HIGH,CRITICAL --exit-code 1 --timeout 15m \
                       --skip-dirs venv,.scannerwork,build,.git \
                       .
 
@@ -122,8 +122,8 @@ pipeline {
             steps {
                 sh '''
                     trivy image --severity HIGH,CRITICAL --ignore-unfixed \
-                      --exit-code 1 --format table ${IMAGE_NAME}:${IMAGE_TAG}
-                    trivy image --format cyclonedx --output sbom.cdx.json \
+                      --exit-code 1 --timeout 15m --format table ${IMAGE_NAME}:${IMAGE_TAG}
+                    trivy image --format cyclonedx --timeout 15m --output sbom.cdx.json \
                       ${IMAGE_NAME}:${IMAGE_TAG}
                 '''
                 archiveArtifacts artifacts: 'sbom.cdx.json', fingerprint: true
