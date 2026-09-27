@@ -958,6 +958,7 @@ class FeedbackIn(BaseModel):
     responses={
         404: {"description": "prediction_id not found in the feedback DB"},
         400: {"description": "Invalid verdict value"},
+        503: {"description": "Feedback DB unavailable"},
     },
 )
 def submit_feedback(prediction_id: str, feedback: FeedbackIn):
@@ -1009,7 +1010,10 @@ def get_recent_predictions(limit: int = 100):
     return {"count": len(rows), "predictions": rows}
 
 
-@app.get("/feedback/stats")
+@app.get(
+    "/feedback/stats",
+    responses={503: {"description": "Feedback DB unavailable"}},
+)
 def get_feedback_stats():
     """
     Return counts of each verdict type across the whole DB.
@@ -1349,6 +1353,11 @@ def _collect_samples(path, header, size, n_seeks=800):
     same effect as a strobe light synced to a rotating wheel). At each
     seek, read one machine's run and keep it if it yields at least 10
     rows (current + 10-row history)."""
+    # NOSONAR (python:S2245): random, not secrets -- these are SAMPLE seek
+    # positions for a demo endpoint, never anything security-sensitive.
+    # (Flagged as a Security Hotspot: comments do not resolve this rule --
+    # also marked "Safe" directly in the SonarQube UI, with this same
+    # justification, since hotspots require an explicit review action.)
     import random as _random
     rng = _random.Random()
     samples = []

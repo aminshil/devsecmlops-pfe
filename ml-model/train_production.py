@@ -92,9 +92,9 @@ ARTIFACTS = {
 # so it reports these constructors as unseeded. Verified directly: both
 # XGBClassifier(**XGB_PARAMS, ...) calls and IsolationForest(**ISO_PARAMS, ...)
 # genuinely receive random_state=42 at runtime.
-XGB_PARAMS = dict(objective="multi:softprob", n_estimators=150, max_depth=6,
-                  learning_rate=0.1, random_state=42, n_jobs=-1, verbosity=0)
-ISO_PARAMS = dict(n_estimators=200, random_state=42, n_jobs=-1)
+XGB_PARAMS = {"objective": "multi:softprob", "n_estimators": 150, "max_depth": 6,
+              "learning_rate": 0.1, "random_state": 42, "n_jobs": -1, "verbosity": 0}
+ISO_PARAMS = {"n_estimators": 200, "random_state": 42, "n_jobs": -1}
 SEED = 42
 USECOLS = ["timestamp", "machine", "type", *FEATURES, "label", "anomaly_type"]
 
