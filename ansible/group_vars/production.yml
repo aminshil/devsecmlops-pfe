@@ -13,13 +13,12 @@ profile: production
 # --- what this profile runs ---
 run_support_containers: false      # registry/minio/sonarqube/jenkins are CI/dev tooling, not prod runtime
 run_control_panel: false           # the :8000 control panel is a demo/ops tool, not production serving
-use_systemd_services: true         # exporters + prometheus as managed systemd units
+run_production_agent: false       # real monitoring agents send traffic in production
 apply_resource_limits: true        # K8s pods get requests/limits
 use_k8s_secret_for_db: true        # DB creds via a real K8s Secret, not a placeholder DSN
 
 # --- Kubernetes serving (production) ---
 k8s_namespace: ml-serving
-api_image: "devsecmlops-api:2.20.0"
 api_replicas: 3
 api_cpu_request: "250m"
 api_cpu_limit: "1000m"

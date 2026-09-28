@@ -13,13 +13,12 @@ profile: demo
 # --- what this profile runs ---
 run_support_containers: true       # registry/minio/sonarqube/jenkins up for the demo
 run_control_panel: true            # the :8000 mission-control UI
-use_systemd_services: false        # exporters + prometheus as nohup host processes
+run_production_agent: true        # production_agent.py replays the test set as demo traffic
 apply_resource_limits: true
-use_k8s_secret_for_db: false       # placeholder DSN is fine for the demo
+use_k8s_secret_for_db: false       # demo: Secret generated with a random password (scripts/ensure_db_secret.sh)
 
 # --- Kubernetes serving (demo) ---
 k8s_namespace: ml-serving
-api_image: "devsecmlops-api:2.20.0"
 api_replicas: 2
 
 # --- control panel serving env (matches start_control_panel.sh) ---

@@ -33,11 +33,14 @@
   changed_when: false
   failed_when: false
 
-- name: Apply the demo database Secret (production uses the vault-backed one)
-  ansible.builtin.command: "{{ bin_kubectl }} apply -f {{ repo_dir }}/kubernetes/postgres-secret.yaml"
+- name: Ensure the demo database Secret exists (random password, never committed; production uses the Vault-backed one)
+  ansible.builtin.command: "{{ repo_dir }}/scripts/ensure_db_secret.sh"
+  environment:
+    KC: "{{ bin_kubectl }}"
+    NS: "{{ k8s_namespace }}"
   when: not (use_k8s_secret_for_db | default(false))
   register: pg_secret_apply
-  changed_when: "'created' in pg_secret_apply.stdout or 'configured' in pg_secret_apply.stdout"
+  changed_when: "'created' in pg_secret_apply.stdout"
 
 - name: Render the deployment manifest from the profile variables
   ansible.builtin.template:

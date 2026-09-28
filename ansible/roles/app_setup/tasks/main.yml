@@ -4,7 +4,9 @@
 #   - create the Python virtualenv if missing
 #   - install the Python dependencies
 #   - build the API Docker image (so it can be loaded into K8s)
-# Idempotent: skips the venv if it exists, and image build is cheap to re-run.
+# Idempotent: the venv is created once, but dependencies are synced on
+# every run (pip is a no-op when nothing changed), and the image is built
+# whenever the VERSION-derived tag does not exist yet.
 # ===========================================================================
 
 - name: Check whether the virtualenv already exists
@@ -22,7 +24,6 @@
   ansible.builtin.pip:
     requirements: "{{ repo_dir }}/requirements.txt"
     virtualenv: "{{ repo_dir }}/venv"
-  when: not venv_stat.stat.exists
 
 - name: Check whether the API image already exists
   ansible.builtin.command: "docker image inspect {{ api_image }}"

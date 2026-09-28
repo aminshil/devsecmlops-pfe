@@ -1,7 +1,10 @@
 ---
-repo_dir: "{{ playbook_dir }}/.."
+repo_dir: "{{ (playbook_dir + '/..') | realpath }}"
 k8s_namespace: ml-serving
-api_image: "devsecmlops-api:2.20.0"
+# Image tag follows the VERSION file -- the single source of truth also
+# read by the API (/health) and the Jenkins build tag.
+api_version: "{{ lookup('ansible.builtin.file', playbook_dir + '/../VERSION') | trim }}"
+api_image: "devsecmlops-api:{{ api_version }}"
 img_grafana: "grafana/grafana:latest"
 img_node_exporter: "prom/node-exporter:latest"
 img_registry: "registry:2"
@@ -9,8 +12,6 @@ port_control_panel: 8000
 port_grafana: 3000
 port_prometheus: 9090
 port_node_exporter: 9100
-port_replay_exporter: 9200
-port_anomaly_bridge: 9300
 port_k8s_exporter: 9400
 port_registry: 5000
 cp_model_name: telecom_v3
@@ -19,3 +20,14 @@ cp_database_url: "postgresql://x:x@localhost:9999/n"
 bin_prometheus: /usr/local/bin/prometheus
 bin_minikube: /usr/local/bin/minikube
 bin_kubectl: /usr/local/bin/kubectl
+
+# --- credentials: supplied from the environment at run time, never stored ---
+#   export GRAFANA_ADMIN_PASSWORD=...  OPS_UI_PASSWORD=...
+grafana_admin_password: "{{ lookup('ansible.builtin.env', 'GRAFANA_ADMIN_PASSWORD') }}"
+ops_ui_user: "{{ lookup('ansible.builtin.env', 'OPS_UI_USER') | default('operator', true) }}"
+ops_ui_password: "{{ lookup('ansible.builtin.env', 'OPS_UI_PASSWORD') }}"
+kubeconfig_path: /home/pfe/.kube/config
+minikube_home: /home/pfe/.minikube
+minio_root_user: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
+minio_root_password: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
+jenkins_image_tag: "2.1"

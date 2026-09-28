@@ -54,13 +54,10 @@
     - role: kubernetes
       tags: [kubernetes, k8s]
 
-    # --- monitoring: systemd units (prod) OR nohup host processes (demo) ---
-    - role: monitoring_systemd
-      when: use_systemd_services | default(false)
-      tags: [monitoring, production]
+    # --- monitoring: systemd-supervised in both profiles; the demo profile
+    #     additionally runs the production agent as a traffic source ---
     - role: monitoring
-      when: not (use_systemd_services | default(false))
-      tags: [monitoring, demo]
+      tags: [monitoring]
 
     # --- demo-only mission-control panel on :8000 ---
     - role: control_panel

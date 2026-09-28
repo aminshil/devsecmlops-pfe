@@ -30,6 +30,14 @@
     ports: ["{{ port_registry }}:5000"]
     volumes: ["registry_data:/var/lib/registry"]
 
+- name: Require MinIO root credentials from the environment
+  ansible.builtin.assert:
+    that:
+      - minio_root_user | length > 0
+      - minio_root_password | length >= 12
+    fail_msg: "Set MINIO_ROOT_USER and MINIO_ROOT_PASSWORD (12+ chars) before running the playbook."
+  no_log: true
+
 - name: Ensure MinIO (MLflow artifact store) is running
   community.docker.docker_container:
     name: minio
@@ -39,6 +47,61 @@
     command: 'server /data --console-address ":9001"'
     ports: ["9001:9000", "9002:9001"]
     volumes: ["minio_data:/data"]
+    env:
+      MINIO_ROOT_USER: "{{ minio_root_user }}"
+      MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
+  no_log: true
+
+- name: Ensure /etc/devsecmlops exists (root-only)
+  ansible.builtin.file:
+    path: /etc/devsecmlops
+    state: directory
+    mode: "0700"
+  become: true
+
+- name: Write the MLflow server environment (root-only, never in the unit file)
+  ansible.builtin.copy:
+    dest: /etc/devsecmlops/mlflow.env
+    mode: "0600"
+    content: |
+      MLFLOW_S3_ENDPOINT_URL=http://localhost:9001
+      AWS_ACCESS_KEY_ID={{ minio_root_user }}
+      AWS_SECRET_ACCESS_KEY={{ minio_root_password }}
+  become: true
+  no_log: true
+
+- name: Install the MLflow tracking server unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/mlflow.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=MLflow tracking server (:5001, artifacts proxied to MinIO)
+      After=network.target docker.service
+
+      [Service]
+      EnvironmentFile=/etc/devsecmlops/mlflow.env
+      WorkingDirectory={{ repo_dir }}
+      # --artifacts-destination + --serve-artifacts: clients (the training
+      # pipeline, the Jenkins model job) upload artifacts THROUGH the tracking
+      # server, so MinIO credentials exist only on this host service.
+      ExecStart={{ repo_dir }}/venv/bin/mlflow server --host 0.0.0.0 --port 5001 \
+        --backend-store-uri sqlite:///{{ repo_dir }}/mlflow.db \
+        --artifacts-destination s3://mlflow-artifacts/ --serve-artifacts
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  become: true
+
+- name: Enable and start MLflow
+  ansible.builtin.systemd:
+    name: mlflow.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  become: true
 
 - name: Ensure SonarQube (SAST) is running
   community.docker.docker_container:
@@ -58,7 +121,7 @@
 - name: Build the custom Jenkins image (python3, kubectl, minikube, sonar-scanner, docker CLI, trivy)
   community.docker.docker_image:
     name: devsecmlops-jenkins
-    tag: "2.0"
+    tag: "{{ jenkins_image_tag }}"
     build:
       path: "{{ repo_dir }}/jenkins"
       pull: false
@@ -68,7 +131,7 @@
 - name: Ensure Jenkins (CI/CD) is running
   community.docker.docker_container:
     name: jenkins
-    image: "devsecmlops-jenkins:2.0"
+    image: "devsecmlops-jenkins:{{ jenkins_image_tag }}"
     state: started
     restart_policy: always
     ports: ["8080:8080", "50000:50000"]
@@ -83,6 +146,9 @@
       # needed after either a gentle restart or a full rebuild.
       - "/home/pfe/.kube:/home/pfe/.kube"
       - "/home/pfe/.minikube:/home/pfe/.minikube"
+      # Versioned datasets for the model pipeline job (Jenkinsfile.model),
+      # read-only: training never modifies its inputs.
+      - "{{ repo_dir }}/data:/var/jenkins_home/fleet-data:ro"
   # networks left to the "Attach Jenkins to its required networks" task
   # below, which is also what jenkins-networks.service re-asserts on every
   # boot -- see that task for why a static `networks:` list here isn't

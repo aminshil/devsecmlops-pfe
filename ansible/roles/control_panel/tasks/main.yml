@@ -12,8 +12,37 @@
 # what happened during defense-prep testing -- every Docker-based layer
 # (Jenkins, Grafana, ...) came back on its own after a reboot, but the
 # control panel stayed down until restarted by hand. systemd closes that
-# gap the same way the monitoring_systemd role already does for production.
+# gap the same way the monitoring role does for Prometheus and the exporters.
+#
+# The /ui/* operations console is enabled only here (ENABLE_OPS_UI=1) and
+# requires the Basic-auth credentials written to a root-only env file.
+# It runs as root because it starts/stops host services and Docker
+# containers; the serving pods in Kubernetes never enable it.
 # ===========================================================================
+
+- name: Require an operations-UI password from the environment
+  ansible.builtin.assert:
+    that: ops_ui_password | length >= 12
+    fail_msg: "Set OPS_UI_PASSWORD (12+ chars) before running the playbook."
+  no_log: true
+
+- name: Ensure /etc/devsecmlops exists (root-only)
+  ansible.builtin.file:
+    path: /etc/devsecmlops
+    state: directory
+    mode: "0700"
+  become: true
+
+- name: Write the operations-UI credentials (root-only file, never in the unit)
+  ansible.builtin.copy:
+    dest: /etc/devsecmlops/ops-ui.env
+    mode: "0600"
+    content: |
+      ENABLE_OPS_UI=1
+      OPS_UI_USER={{ ops_ui_user }}
+      OPS_UI_PASSWORD={{ ops_ui_password }}
+  become: true
+  no_log: true
 
 - name: Install the control-panel systemd unit
   ansible.builtin.copy:
@@ -31,6 +60,10 @@
       Environment=MODEL_NAME={{ cp_model_name }}
       Environment=PREDICT_THRESHOLD={{ cp_predict_threshold }}
       Environment=DATABASE_URL={{ cp_database_url }}
+      Environment=KUBECONFIG={{ kubeconfig_path }}
+      Environment=MINIKUBE_HOME={{ minikube_home }}
+      # ENABLE_OPS_UI + Basic-auth credentials for the /ui/* console
+      EnvironmentFile=/etc/devsecmlops/ops-ui.env
       ExecStart={{ repo_dir }}/venv/bin/uvicorn api.app:app --host 0.0.0.0 --port {{ port_control_panel }}
       Restart=always
       RestartSec=5
