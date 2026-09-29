@@ -134,53 +134,62 @@ Just restart it; kill stragglers first with
 
 ## "Retrain rejected / feedback made no difference to the model"
 
-**Symptom:** `scripts/retrain_from_feedback.py` runs cleanly but the guardrail
-REJECTS the retrained model (exit code 2), or the retrained model's metrics
-are essentially identical to the current one no matter what `sample_weight`
-is used.
+**Symptom:** `scripts/export_feedback_dataset.py` followed by
+`ml-model/train_production.py --feedback <export> --promote` runs cleanly
+but the guardrail REJECTS the retrained candidate (a message starting
+"GUARDRAIL REJECT"), or the retrained model's metrics are essentially
+identical to the current one.
 
 **This is expected behavior, not a bug**, when the feedback set is small.
-With ~500 verdicts against 3.17M training rows (~0.02% of the signal), the
-feedback simply cannot move the model measurably -- verified by testing weight
-5 vs weight 100 and getting near-identical results. The guardrail correctly
-refusing to promote a non-improving (or slightly-worse) model is exactly what
-it is for. Meaningful improvement needs thousands of real operator verdicts
-accumulated over weeks/months. See Engineering Decision #23.
+With ~500 verdicts against millions of training rows, the feedback simply
+cannot move the model measurably. The guardrail (`--max-f1-drop 0.0`,
+`--max-recall-drop 0.02` by default -- zero aggregate F1 regression
+allowed, at most a 2-point recall drop on any cause) correctly refusing to
+promote a non-improving (or slightly-worse) model is exactly what it is
+for. Meaningful improvement needs thousands of real operator verdicts
+accumulated over weeks/months. See Engineering Decision #24 in the README.
 
-**Gotcha that CAN cause a false result:** any quick evaluation script must use
-`add_window_column` + `apply_zscore` from `ml-model/preprocess.py` for the
-z-scoring. A simplified inline z-score (skipping the per-machine per-window
-baseline) mis-scores the test set and produces wrong absolute F1 numbers. The
-canonical v3 baseline is F1=0.718 on the seed-123 test set -- if a script
-reports something materially different for the current production model, the
-z-score path is probably wrong, not the model.
+**Gotcha that CAN cause a false result:** any quick evaluation script must
+use the real functions in `ml-model/preprocess.py` (baseline construction,
+z-scoring, and for v4, the rolling-feature computation) rather than a
+simplified inline reimplementation -- skipping the per-machine per-window
+baseline mis-scores the test set and produces wrong absolute F1 numbers.
+The canonical, current served baseline is v4 F1=0.7246 (v3 fallback
+F1=0.6496) at threshold 0.60, on the independent seed-123 test set -- if a
+script reports something materially different for the current production
+model, the preprocessing path is probably wrong, not the model.
 
 ---
 
 ## "MLflow UI doesn't load in the browser" (`localhost:5001`)
 
-**Root cause:** MLflow is NOT a Docker container in this setup — it's a
-foreground process started manually with `mlflow server ...`. It does not
-have `--restart=always` and does not survive a VM reboot or session end.
+**Root cause (updated -- this used to be true, no longer is):** MLflow
+used to run as a manually-started foreground process with no supervision,
+which is exactly why this entry originally existed. As of the most recent
+infrastructure pass, MLflow is a proper systemd service
+(`mlflow.service`, `Restart=always`, enabled at boot), installed by
+Ansible, with `--serve-artifacts` proxying uploads to MinIO -- MinIO
+credentials live only in the service's own root-only env file
+(`/etc/devsecmlops/mlflow.env`), never in a client's environment or
+committed in this file.
 
-**Fix — restart it manually:**
+**Fix -- check and restart the real service, do not hand-launch a new one:**
 
 ```bash
-cd ~/devsecmlops-pfe
-source venv/bin/activate
+systemctl status mlflow
+journalctl -u mlflow -n 50 --no-pager
 
-export MLFLOW_S3_ENDPOINT_URL=http://localhost:9001
-export AWS_ACCESS_KEY_ID=admin
-export AWS_SECRET_ACCESS_KEY=minioadmin123
-
-nohup mlflow server --host 0.0.0.0 --port 5001 \
-  --backend-store-uri sqlite:///mlflow.db \
-  --default-artifact-root s3://mlflow-artifacts/ \
-  > /tmp/mlflow.log 2>&1 &
-
-sleep 8
+# If it's genuinely down:
+sudo systemctl restart mlflow
+sleep 5
 curl -s -o /dev/null -w "MLflow: %{http_code}\n" -m 5 http://localhost:5001
 ```
+
+If `systemctl status mlflow` shows it was never installed at all, the
+Ansible playbook has not been run against this VM -- see the Ansible (L6)
+section of the README rather than starting MLflow by hand, since a
+hand-started process will not be supervised and this same problem will
+recur on the next reboot.
 
 ---
 
