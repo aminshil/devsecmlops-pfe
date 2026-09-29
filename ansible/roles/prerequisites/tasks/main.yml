@@ -29,6 +29,15 @@
     restart_policy: always
     ports: ["{{ port_registry }}:5000"]
     volumes: ["registry_data:/var/lib/registry"]
+    # Jenkins reaches this by container name (registry:5000) for its
+    # post-push catalog check. Declared here so Ansible enforces it on
+    # every run -- undeclared, a container recreation (image update,
+    # config drift) silently drops back to the default bridge network,
+    # confirmed live: this exact thing happened to registry, minio, and
+    # sonarqube after an unrelated recreation, breaking Jenkins' DNS
+    # resolution to sonarqube with no warning until the next build ran.
+    networks:
+      - name: "{{ docker_net_name | default('devsecmlops-net') }}"
 
 - name: Require MinIO root credentials from the environment
   ansible.builtin.assert:
@@ -47,6 +56,8 @@
     command: 'server /data --console-address ":9001"'
     ports: ["9001:9000", "9002:9001"]
     volumes: ["minio_data:/data"]
+    networks:
+      - name: "{{ docker_net_name | default('devsecmlops-net') }}"
     env:
       MINIO_ROOT_USER: "{{ minio_root_user }}"
       MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
@@ -114,6 +125,8 @@
       - "sonarqube_data:/opt/sonarqube/data"
       - "sonarqube_extensions:/opt/sonarqube/extensions"
       - "sonarqube_logs:/opt/sonarqube/logs"
+    networks:
+      - name: "{{ docker_net_name | default('devsecmlops-net') }}"
   # From the host: http://localhost:9000. From inside the Jenkins container the
   # CI pipeline reaches it as http://sonarqube:9000 (Docker name resolution).
   # Both are correct in their respective network contexts.
