@@ -54,3 +54,4 @@ data/feedback/
 models/results/
 models/baselines_*.json
 .prometheus-data/
+.kube/

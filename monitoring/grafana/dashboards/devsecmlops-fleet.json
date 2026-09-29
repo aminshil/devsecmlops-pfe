@@ -341,7 +341,9 @@
         "defaults": {},
         "overrides": []
       },
-      "options": {},
+      "options": {
+        "orientation": "horizontal"
+      },
       "id": 12,
       "title": "Classifier anomaly probability by machine (top 25)",
       "datasource": {
@@ -363,7 +365,8 @@
           },
           "refId": "A",
           "expr": "sort_desc(topk(25, (api_classifier_p_anomaly{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"})))))",
-          "legendFormat": "{{machine}}"
+          "legendFormat": "{{machine}}",
+          "instant": true
         }
       ]
     },
