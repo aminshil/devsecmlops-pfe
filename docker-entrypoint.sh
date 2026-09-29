@@ -7,8 +7,12 @@ if [ "$MODEL_NAME" = "telecom_v2" ]; then
   echo "MODEL_NAME=telecom_v2 -- fetching artifacts from MinIO..."
 
   MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://host.docker.internal:9001}"
-  MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-admin}"
-  MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-minioadmin123}"
+  # Fail closed: this is a legacy path (MODEL_NAME=telecom_v2, A-B
+  # comparison / reproducibility only), but it should not fall back to
+  # publicly-known default credentials -- consistent with the rest of
+  # this project's security posture (no committed or defaulted secrets).
+  : "${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set for MODEL_NAME=telecom_v2}"
+  : "${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set for MODEL_NAME=telecom_v2}"
   MINIO_BUCKET="${MINIO_BUCKET:-model-artifacts}"
 
   mkdir -p /app/models

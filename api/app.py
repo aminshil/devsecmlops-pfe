@@ -1,5 +1,5 @@
 """
-FastAPI anomaly-detection service — DevSecMLOps Platform v2.3.0
+FastAPI anomaly-detection service -- DevSecMLOps Platform
 Selectable artifact via MODEL_NAME env var: telecom (default) | smd | serving
 
 v2.2.0 introduced — per-time-window baselines:
@@ -273,20 +273,22 @@ app = FastAPI(
         "Fallback chain: machine+window -> machine -> type -> global. "
         "Includes dependency-graph-based root cause ranking for cascading failures. "
         "v2.12.0 adds a feedback loop: every /predict call is logged to a "
-        "persistent SQLite DB, operators submit verdicts via /feedback/{id}, "
+        "persistent PostgreSQL database, operators submit verdicts via /feedback/{id}, "
         "and the retrain pipeline uses accumulated feedback to improve the "
         "model over time. See README section 'Feedback loop and online learning'."
     ),
 )
 
 # ---------------------------------------------------------------------------
-# Self-instrumentation: this endpoint (and everyone who ends up serving it --
-# the host process directly, or a Kubernetes pod behind the NodePort) reports
-# its OWN prediction activity as Prometheus metrics, rather than relying on
-# an external process (the anomaly bridge) to reconstruct it secondhand.
-# This is what lets Grafana show K8s-served predictions specifically, not
-# just whatever the bridge happened to poll from the host API -- point
-# Prometheus at the NodePort and pod-side activity shows up on its own.
+# Self-instrumentation: this endpoint reports its OWN prediction activity
+# as Prometheus metrics, rather than relying on an external process to
+# reconstruct it secondhand. Prometheus scrapes every serving pod
+# INDIVIDUALLY via per-pod discovery through the Kubernetes API server
+# (not the NodePort -- a NodePort load-balances each scrape to a random
+# pod, which was confirmed live to mix replicas' data: with two pods
+# behind it, one showed zero recorded series). Per-machine panels
+# resolve the freshest replica for that machine, since each pod only
+# knows the requests it personally served.
 # Label cardinality kept deliberately low: machine_type (11 values) x
 # is_anomaly (2) x likely_cause (a handful of known causes) -- not per-
 # machine, which would be 200x larger for no real analytical benefit.

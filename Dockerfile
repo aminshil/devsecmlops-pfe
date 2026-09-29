@@ -50,7 +50,7 @@ COPY ml-model/preprocess.py ./ml-model/preprocess.py
 COPY ml-model/root_cause.py ./ml-model/root_cause.py
 COPY ml-model/decision.py ./ml-model/decision.py
 
-# ── Copy the ONE shipped model artifact ──
+# ── Copy production inference artifacts (v3/v4 XGBoost + IsolationForest safety net) ──
 COPY models/telecom_serving_model.pkl     ./models/
 COPY models/telecom_serving_baselines.json ./models/
 
