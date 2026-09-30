@@ -1,6 +1,11 @@
 """
 FastAPI anomaly-detection service -- DevSecMLOps Platform
-Selectable artifact via MODEL_NAME env var: telecom (default) | smd | serving
+MODEL_NAME selects the serving path. Production is telecom_v3 (the default):
+a hybrid that serves the v4 rolling-features XGBoost when the request carries
+a 10-reading history and the v3 XGBoost otherwise, with the IsolationForest
+safety net on both. Every production artifact must be present and match its
+SHA-256 in models/manifest.json, or the API refuses to start. Other values
+select legacy paths kept for A/B comparison and reproducibility.
 
 v2.2.0 introduced — per-time-window baselines:
   Each machine has separate baselines for night/morning/afternoon/evening.
@@ -119,6 +124,8 @@ def _verify_artifact_integrity() -> None:
     prod = json.loads(MANIFEST_PATH.read_text()).get("production") or {}
     for rel, expected in (prod.get("artifacts") or {}).items():
         path = ROOT / rel
+        if not path.exists():
+            raise RuntimeError(f"production artifact missing: {rel} (listed in the manifest)")
         h = hashlib.sha256(path.read_bytes()).hexdigest()
         if h != expected:
             raise RuntimeError(f"artifact integrity check failed: {rel}")

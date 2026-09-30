@@ -795,13 +795,11 @@ own default all agree with the one the evaluation was measured at.
 | v3 (fallback, no history) | 0.5721 | 0.7513 | 0.6496 | 0.6945 |
 | v4 @ threshold 0.5, for reference | 0.6744 | 0.7928 | 0.7288 | 0.8153 |
 
-Per-cause recall (v4, served decision, threshold 0.60): `cpu_spike` 0.9930,
-`disk_saturation` 0.9981, `memory_leak` 0.9650, `network_flood` 0.9967,
-`silent_failure` 0.9907, `cascade` 0.2848 (see
+Per-cause recall (v4, served decision, threshold 0.60, read from `models/manifest.json`): `cpu_spike` 0.9867, `disk_saturation` 0.9961, `memory_leak` 0.9286, `network_flood` 0.9897, `silent_failure` 0.9833, `cascade` 0.2699. The v3 fallback catches cascades slightly better (0.2840), because of the 15 features v4 is tuned on, only the IsolationForest sees cascades at all (see
 [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training)
 for why cascade remains the one weak point — the generator's own cascade
 labeling is inconsistent between rows, unchanged since that decision was
-first made). Cause accuracy on every true positive: 0.9985.
+first made). Cause accuracy on detected, correctly-named anomalies: 0.9988.
 
 **On the number `0.816`, and on `0.85`, which circulated in earlier versions
 of this document:** `0.816` is the classifier's own F1 at threshold 0.5, in
@@ -2099,7 +2097,7 @@ python monitoring/k8s_exporter.py &
 
 - **No NetworkPolicy.** Pods are hardened individually (non-root, read-only filesystem, no capabilities, seccomp), but nothing restricts pod-to-pod traffic inside `ml-serving`. Adding a policy alone would not be enough: Minikube's default network plugin does not enforce NetworkPolicy, so it would need a CNI that does (e.g. Calico) and a test proving traffic is actually blocked.
 
-- **`cascade` recall (0.28) is genuinely the weakest result in this
+- **`cascade` recall (0.27) is genuinely the weakest result in this
   project**, stated honestly rather than hidden — the generator's own
   cascade labeling is inconsistent row to row, which is why it is trained
   as `normal` and relies on the IsolationForest for coverage instead. See
