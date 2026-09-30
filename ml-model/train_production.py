@@ -56,7 +56,6 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
-from sklearn.metrics import f1_score, precision_score, recall_score
 from sklearn.preprocessing import LabelEncoder
 from xgboost import XGBClassifier
 
@@ -97,6 +96,11 @@ XGB_PARAMS = {"objective": "multi:softprob", "n_estimators": 150, "max_depth": 6
 ISO_PARAMS = {"n_estimators": 200, "random_state": 42, "n_jobs": -1}
 SEED = 42
 USECOLS = ["timestamp", "machine", "type", *FEATURES, "label", "anomaly_type"]
+# Evaluation is chunked by whole machines: rolling features are per machine, so a
+# chunk that holds all of a machine's rows yields exactly the same features, and
+# every reported metric is built from integer counts that sum exactly across
+# chunks. Memory then scales with the chunk, not with the 17.28M-row test set.
+EVAL_MACHINES_PER_CHUNK = 20
 
 
 def log(msg: str) -> None:
@@ -185,25 +189,52 @@ def feedback_examples(paths: list[Path], baselines: dict, known_causes: set[str]
 # ---------------------------------------------------------------------------
 # Evaluation with the serving decision rule
 # ---------------------------------------------------------------------------
-def evaluate(clf, enc, iso, x_clf, x_iso, y_bin, y_type, threshold) -> dict:
-    proba = clf.predict_proba(x_clf)
-    hit, cause = decision.classifier_vote_batch(proba, list(enc.classes_), threshold)
-    iso_hit = iso.predict(x_iso) == -1
+def _new_counts() -> dict:
+    return {"tp": 0, "fp": 0, "fn": 0, "tp_h": 0, "fp_h": 0, "fn_h": 0,
+            "type_rows": {}, "type_hits": {}, "anomaly_types": set(),
+            "named": 0, "named_correct": 0}
+
+
+def _accumulate(c: dict, proba, classes, threshold, iso_hit, y_bin, y_type) -> None:
+    """Add one chunk's confusion counts (served decision and classifier alone)."""
+    hit, cause = decision.classifier_vote_batch(proba, classes, threshold)
     pred, final_cause = decision.final_verdict_batch(hit, cause, iso_hit)
-    out = {
-        "f1": float(f1_score(y_bin, pred, zero_division=0)),
-        "precision": float(precision_score(y_bin, pred, zero_division=0)),
-        "recall": float(recall_score(y_bin, pred, zero_division=0)),
-        "classifier_only_f1": float(f1_score(y_bin, hit, zero_division=0)),
-        "per_cause_recall": {},
-    }
-    for t in sorted(set(y_type[y_bin == 1])):
+    pos = np.asarray(y_bin) == 1
+    pb, hb = np.asarray(pred).astype(bool), np.asarray(hit).astype(bool)
+    c["tp"] += int(np.sum(pb & pos)); c["fp"] += int(np.sum(pb & ~pos)); c["fn"] += int(np.sum(~pb & pos))
+    c["tp_h"] += int(np.sum(hb & pos)); c["fp_h"] += int(np.sum(hb & ~pos)); c["fn_h"] += int(np.sum(~hb & pos))
+    for t in np.unique(y_type):
         m = y_type == t
-        out["per_cause_recall"][t] = float(pred[m].mean())
-    named = (y_bin == 1) & (y_type != "cascade") & hit
-    out["cause_accuracy"] = float((final_cause[named] == y_type[named]).mean()) if named.any() else None
+        c["type_rows"][t] = c["type_rows"].get(t, 0) + int(m.sum())
+        c["type_hits"][t] = c["type_hits"].get(t, 0) + int(pb[m].sum())
+    c["anomaly_types"].update(np.unique(y_type[pos]).tolist())
+    named = pos & (y_type != "cascade") & hb
+    c["named"] += int(named.sum())
+    c["named_correct"] += int(np.sum(final_cause[named] == y_type[named]))
+
+
+def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
+    p = tp / (tp + fp) if tp + fp else 0.0
+    r = tp / (tp + fn) if tp + fn else 0.0
+    f = 2 * tp / (2 * tp + fp + fn) if tp + fp + fn else 0.0
+    return p, r, f
+
+
+def _finalize(c: dict) -> dict:
+    p, r, f = _prf(c["tp"], c["fp"], c["fn"])
+    out = {"f1": f, "precision": p, "recall": r,
+           "classifier_only_f1": _prf(c["tp_h"], c["fp_h"], c["fn_h"])[2],
+           "per_cause_recall": {t: c["type_hits"][t] / c["type_rows"][t] for t in sorted(c["anomaly_types"])}}
+    out["cause_accuracy"] = c["named_correct"] / c["named"] if c["named"] else None
     return {k: (round(v, 4) if isinstance(v, float) else v) for k, v in out.items()} | {
         "per_cause_recall": {k: round(v, 4) for k, v in out["per_cause_recall"].items()}}
+
+
+def evaluate(clf, enc, iso, x_clf, x_iso, y_bin, y_type, threshold) -> dict:
+    c = _new_counts()
+    _accumulate(c, clf.predict_proba(x_clf), list(enc.classes_), threshold,
+                iso.predict(x_iso) == -1, y_bin, y_type)
+    return _finalize(c)
 
 
 def guardrail(cand: dict, prod: dict, max_f1_drop: float, max_recall_drop: float) -> tuple[bool, list[str]]:
@@ -220,15 +251,25 @@ def guardrail(cand: dict, prod: dict, max_f1_drop: float, max_recall_drop: float
 
 
 def evaluate_set(art_dir: Path, test: pd.DataFrame, threshold: float) -> dict:
+    """Evaluate one artifact set on the test set with the served decision rule,
+    EVAL_MACHINES_PER_CHUNK whole machines at a time (exact, bounded memory)."""
     b = json.load(open(art_dir / ARTIFACTS["baselines"]))
-    t, z, z15 = fleet_features(test.copy(), b)
-    yb, yt = t["label"].to_numpy(), t["anomaly_type"].fillna("normal").to_numpy()
     m = {k: joblib.load(art_dir / v) for k, v in ARTIFACTS.items() if v.endswith(".pkl")}
-    return {
-        "v3": evaluate(m["v3_model"], m["v3_encoder"], m["iso_model"], z, z, yb, yt, threshold),
-        "v4": evaluate(m["v4_model"], m["v4_encoder"], m["iso_model"], z15, z, yb, yt, threshold),
-        "v4_at_0.5": evaluate(m["v4_model"], m["v4_encoder"], m["iso_model"], z15, z, yb, yt, 0.5),
-    }
+    v3_classes, v4_classes = list(m["v3_encoder"].classes_), list(m["v4_encoder"].classes_)
+    acc = {"v3": _new_counts(), "v4": _new_counts(), "v4_at_0.5": _new_counts()}
+    rows_by_machine = test.groupby("machine", sort=True).indices
+    machines = list(rows_by_machine)
+    for i in range(0, len(machines), EVAL_MACHINES_PER_CHUNK):
+        idx = np.concatenate([rows_by_machine[k] for k in machines[i:i + EVAL_MACHINES_PER_CHUNK]])
+        t, z, z15 = fleet_features(test.iloc[idx].copy(), b)
+        yb, yt = t["label"].to_numpy(), t["anomaly_type"].fillna("normal").to_numpy()
+        iso_hit = m["iso_model"].predict(z) == -1          # once per chunk, shared by all three
+        p4 = m["v4_model"].predict_proba(z15)              # once, reused for both thresholds
+        _accumulate(acc["v3"], m["v3_model"].predict_proba(z), v3_classes, threshold, iso_hit, yb, yt)
+        _accumulate(acc["v4"], p4, v4_classes, threshold, iso_hit, yb, yt)
+        _accumulate(acc["v4_at_0.5"], p4, v4_classes, 0.5, iso_hit, yb, yt)
+        log(f"  evaluated machines {i + 1}-{min(i + EVAL_MACHINES_PER_CHUNK, len(machines))} of {len(machines)}")
+    return {k: _finalize(v) for k, v in acc.items()}
 
 
 def rel(p: Path) -> str:

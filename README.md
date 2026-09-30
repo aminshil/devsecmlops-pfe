@@ -1005,6 +1005,10 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 
 ---
 
+### Real bugs found and fixed
+
+- **Evaluation did not fit in memory, and it froze the VM.** `evaluate_set` built features for all 17.28M test rows at once (a full DataFrame copy, the 6- and 15-feature matrices, three sets of class probabilities, and the IsolationForest run three times on the same input), for the candidate and then for production. With the platform running alongside it, the VM swapped until it became unresponsive and had to be hard-restarted. Re-run under a hard cap (`systemd-run -p MemoryMax=11G -p MemorySwapMax=0`), the kernel killed only the training process at 11.5 GB resident, which confirmed the cause without taking the VM down. Fixed by evaluating 20 whole machines at a time: rolling features are per machine, so whole-machine chunks produce identical features, and every metric is built from integer counts (TP/FP/FN, hits per cause, correct causes) that sum exactly across chunks. The IsolationForest now runs once per chunk instead of three times, and v4 probabilities are computed once for both thresholds. **Proven exact, not assumed:** re-scoring the production model with the new code rewrote its recorded evaluation with every metric byte-identical (`git diff` changed only the timestamp), and a full train-and-evaluate run then completed under the same 11 GiB cap.
+
 ### Files
 
 | File | What it does |
@@ -1568,6 +1572,10 @@ credentials directly, only the MLflow service does. **Verified with a real
 round trip**: a metric and a file artifact logged through the API, then
 read back through MLflow from MinIO, byte-for-byte correct.
 
+**The canonical pipeline logs to it (verified, and a gap found on the way).** `ml-model/train_production.py` logs every run (parameters, v3/v4 metrics, git commit, train/test dataset hashes, and the model artifacts) to experiment `telecom-production-model`, but only when `MLFLOW_TRACKING_URI` is set; otherwise it skips silently. For a time MLflow therefore held only experiment-phase runs and nothing from the pipeline that governs production. Closed with a real run (`1cc2b5a0fa75465494301dedeab075a6`): trained, evaluated against production on the independent test set, guardrail `PASS`, logged to MLflow with its artifacts stored in MinIO through MLflow's artifact proxy, and its run id recorded in `models/manifest.json`. `Jenkinsfile.model` sets the variable, so every retraining job it runs is tracked.
+
+**Provenance finding from that run.** The production artifacts were not trained by `train_production.py`. They are the original July models (see `models/history/`), *adopted* into the manifest on 2026-09-25 with their SHA-256 hashes, their hyperparameters read back from the pickles (the manifest records `git_commit: null` for them), and an evaluation on the independent test set. The pipeline's retraining with the same data and hyperparameters scored slightly higher (v4 F1 0.7278 vs 0.7246, v3 0.6551 vs 0.6496). The difference comes from reimplemented training code, not from the evaluation, which reproduces production's recorded numbers exactly. The candidate was deliberately **not promoted** before the defense: promoting it would also require re-selecting the threshold (0.60 was chosen on the July model's curve) and redoing the live cluster validation. See Known limitations.
+
 ```bash
 # Now provisioned by Ansible (roles/prerequisites, roles/monitoring) --
 # manual commands kept here for reference / running outside Ansible:
@@ -2086,6 +2094,8 @@ python monitoring/k8s_exporter.py &
 ---
 
 ## Known limitations and future work
+
+- **Production artifacts predate the canonical pipeline.** The served models were trained in July by earlier scripts and adopted with hashes and an independent evaluation; they were not produced by `train_production.py` (manifest `git_commit: null`). A pipeline-trained candidate exists (MLflow run `1cc2b5a0…`, v4 F1 0.7278, guardrail PASS). Planned promotion path: `train_production.py --promote`, then re-run `select_threshold.py` on the new model, update the deployed threshold (enforced by the CI gate), rebuild through Jenkins, and redo `scripts/live_k8s_validation.py`, after which every production number becomes reproducible from a recorded commit.
 
 - **No NetworkPolicy.** Pods are hardened individually (non-root, read-only filesystem, no capabilities, seccomp), but nothing restricts pod-to-pod traffic inside `ml-serving`. Adding a policy alone would not be enough: Minikube's default network plugin does not enforce NetworkPolicy, so it would need a CNI that does (e.g. Calico) and a test proving traffic is actually blocked.
 

@@ -273,6 +273,31 @@
         }
       },
       "promoted": false
+    },
+    {
+      "finished_at": "2026-09-30T20:13:07.649947+00:00",
+      "git_commit": "b42178bdd06ec39796c44a63f1e57c954fe59d39",
+      "datasets": {
+        "train": {
+          "file": "data/telecom_fleet_v2_labeled.csv",
+          "sha256": "b4a8080965f4f0bc12b2727916969c6fe728a4dcb78bb169616155bba16e43cf",
+          "rows": 17280000
+        },
+        "test": {
+          "file": "data/telecom_fleet_v2_test.csv",
+          "sha256": "3b6b6e2144100d43522a79a9a685eecc49e2bcecc573b001584614f0a5a8894a",
+          "rows": 17280000
+        }
+      },
+      "feedback": null,
+      "guardrail_passed": true,
+      "guardrail_reasons": [],
+      "promoted": false,
+      "mlflow_run_id": "1cc2b5a0fa75465494301dedeab075a6",
+      "candidate_f1": {
+        "v3": 0.6551,
+        "v4": 0.7278
+      }
     }
   ]
 }
