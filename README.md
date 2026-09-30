@@ -11,22 +11,42 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 
 ## Contents
 
-1. [Executive summary](#executive-summary)
-2. [Architecture](#architecture)
-3. [Quick start](#quick-start)
-4. [L0 — ML Model](#l0--ml-model)
-5. [L1 — Serving API](#l1--serving-api)
-6. [Security posture](#security-posture-new)
+1. [At a glance](#at-a-glance)
+2. [Executive summary](#executive-summary)
+3. [Architecture](#architecture)
+4. [Quick start](#quick-start)
+5. [L0 — ML Model](#l0--ml-model)
+6. [L1 — Serving API](#l1--serving-api)
 7. [L2 — Container Image](#l2--container-image)
 8. [L3 — CI/CD](#l3--cicd)
 9. [L4 — Kubernetes](#l4--kubernetes)
 10. [L5 — Observability and MLOps](#l5--observability-and-mlops)
 11. [L6 — Ansible (Infrastructure as Code)](#l6--ansible-infrastructure-as-code)
-12. [Engineering decisions and rationale](#engineering-decisions-and-rationale)
-13. [Testing](#testing)
-14. [Reproducing locally](#reproducing-locally)
-15. [Documentation and evidence](#documentation-and-evidence)
-16. [Known limitations and future work](#known-limitations-and-future-work)
+12. [Security posture](#security-posture)
+13. [Engineering decisions and rationale](#engineering-decisions-and-rationale)
+14. [Testing](#testing)
+15. [Reproducing locally](#reproducing-locally)
+16. [Documentation and evidence](#documentation-and-evidence)
+17. [Known limitations and future work](#known-limitations-and-future-work)
+
+---
+
+## At a glance
+
+| Item | Current value | Evidence |
+|---|---|---|
+| Version | `2.20.3` | `VERSION`, reported by `/health` |
+| Serving | `MODEL_NAME=telecom_v3`: hybrid path, **v4 rolling-features XGBoost** when a request carries a 10-reading history, v3 XGBoost otherwise, IsolationForest safety net on both | Live pod metrics: every observed request served by v4 (444 of 444 across both replicas at check time) |
+| Decision threshold | `0.60`, selected by maximizing F2 on the separate seed-7 validation fleet | `models/manifest.json` (`threshold_selection`), enforced by the CI model gate |
+| Served v4 (independent test set, 17.28M rows) | F1 **0.7246** · precision 0.6642 · recall 0.7970 | `models/manifest.json`, re-checked by CI on every build |
+| Served v3 fallback | F1 0.6496 · precision 0.5721 · recall 0.7513 | `models/manifest.json` |
+| Weakest cause | `cascade`, recall 0.2699 (label noise by design) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
+| Live cluster validation | 2,200 requests, 0 errors, F1 0.7267, 100% served by v4 | `scripts/live_k8s_validation.py` |
+| Latest green pipeline | Build `2.20.3-b92`: all 11 stages, 0 image vulnerabilities, smoke-tested in the live pod | [L3 run history](#l3--cicd) |
+| Tests | 58 passing | `pytest tests/` (stage 1b) |
+| Dashboard | 30 Grafana panels, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
+| Model provenance | Production = July models adopted on 2026-09-25 with hashes and an independent evaluation; a pipeline-trained candidate (MLflow run `1cc2b5a0…`, v4 F1 0.7278) is deliberately not promoted yet | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-model-registry), [Known limitations](#known-limitations-and-future-work) |
+| Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
 
 ---
 
@@ -34,14 +54,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 
 A production-oriented anomaly detection platform for a simulated 200-machine telecom fleet, built end-to-end across all seven layers (L0–L6), each independently verified live — not just built and assumed working.
 
-**Current, served numbers** (independent test set, 17,280,000 rows, threshold 0.60 — selected by method, not assumption; see [L0](#l0--ml-model)):
-
-| | F1 | Precision | Recall |
-|---|---|---|---|
-| v4 (production, with history) | **0.7246** | 0.6642 | 0.7970 |
-| v3 (fallback, no history) | 0.6496 | 0.5721 | 0.7513 |
-
-Live-validated against the real, running Kubernetes cluster: 2,200 real requests, 0 errors, F1 0.7267.
+The current numbers, build and deployment state are summarized in [At a glance](#at-a-glance).
 
 **Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — two SonarQube Quality Gate blocks (proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, a SonarQube server-side failure caused by the VM's disk reaching 95%, a Quality Gate block on new code (a duplicated literal in the chunked evaluation), and an image-scan block on 6 HIGH OpenSSL CVEs that Debian had already fixed but a stale cached build layer never picked up. The most recent run (build `2.20.3-b92`) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
 
@@ -63,7 +76,7 @@ Live-validated against the real, running Kubernetes cluster: 2,200 real requests
  L2  Container Image           Docker, hardened, model artifacts baked in
  L3  CI/CD                     Jenkins, 11 gates, SonarQube, Trivy, SBOM
  L4  Orchestration             Kubernetes (Minikube), hardened pods, HPA
- L5  Observability             Prometheus, Grafana, MLflow, real production traffic
+ L5  Observability             Prometheus, Grafana, MLflow, test-set traffic replay
  L6  Infrastructure as Code    Ansible, two profiles, systemd-supervised
 ```
 
@@ -123,7 +136,7 @@ After a successful demo run, the control panel at `http://<vm-ip>:8000/ui` repor
 
 Detects and explains anomalies: a synthetic generator, per-machine per-window baselines, two supervised classifiers (v3, v4) plus an unsupervised IsolationForest safety net, a guardrailed retraining pipeline, and the feedback loop that would eventually make retraining possible from real operator judgments rather than only synthetic data.
 
-#### How the model works, in two phases
+### How it works
 
 **Training (offline, `train_production.py`, the single canonical path — see
 [the ML model](#l0--ml-model)):** raw fleet data flows into baseline
@@ -149,7 +162,6 @@ implementations kept in sync by convention — is enforced by import
 (`ml-model/preprocess.py` is imported directly by `api/app.py`) and checked by
 test (`tests/test_api.py::test_rolling_features_match_training_pipeline`).
 
----
 ### What we tested (the current, shipped design)
 
 #### Why per-machine, per-time-window baselines
@@ -364,7 +376,6 @@ dependencies (web calling a database) were tested and found to degrade
 detection accuracy, so they are intentionally not part of either the
 training data or the root-cause graph.
 
----
 
 #### ML model v2: labeled cause classification (July 2026)
 
@@ -603,8 +614,8 @@ Applied only to metrics where change-over-time is diagnostic. disk_usage (accumu
 
 v4 beat v3 on every live metric at the time, zero errors on 33,600 requests. memory_leak recall live: 77.9% -> 95.4%.
 
-> **The 0.85 threshold used here was later found to have been chosen without
-> a documented search** — see [Engineering decision 20](#20-why-the-decision-threshold-is-060-selected-by-method-revised).
+> **The 0.85 threshold used here came from a sweep of the classifier alone and
+> was never re-validated on the served decision** — see [Engineering decision 20](#20-why-the-decision-threshold-is-060-selected-by-method-revised).
 > A proper F2-maximizing sweep on an independent validation fleet selected
 > **0.60** instead. A fresh live validation at the corrected threshold, against
 > the real deployed cluster, is in [Current production](#current-production-the-numbers-that-supersede-everything-above):
@@ -729,7 +740,7 @@ part of why the later threshold-selection work measures the **served**
 decision (classifier OR IsolationForest) directly, at every candidate
 threshold, rather than tuning the classifier alone and hoping the live
 system inherits the same advantage — see
-[Choosing the decision threshold](#choosing-the-decision-threshold-new)
+[Choosing the decision threshold](#choosing-the-decision-threshold)
 below, which is the methodology now used, precisely because of what this
 experiment found.
 
@@ -738,7 +749,6 @@ deployed Kubernetes cluster, at the corrected threshold, on the independent
 test set — is in [Current production](#current-production-the-numbers-that-supersede-everything-above): 2,200 real
 requests, 0 errors, F1 0.7267.
 
----
 
 ### Current production (the numbers that supersede everything above)
 
@@ -761,12 +771,12 @@ deployment actually returns), applies the guardrail described in
 and — only with `--promote` and only if the guardrail passes — writes
 artifacts and records full lineage in `models/manifest.json`.
 
-#### Choosing the decision threshold (new)
+#### Choosing the decision threshold
 
 v3/v4 flag an anomaly when `P(normal)` falls below a threshold. As explained
 in [Engineering decision 20](#20-why-the-decision-threshold-is-060-selected-by-method-revised),
-this project's threshold was, until this pass, **0.85 — chosen by
-operational reasoning but without a documented search**. It has been
+this project's threshold was, until this pass, **0.85 — chosen from a sweep
+of the classifier alone, never re-validated on the served decision**. It has been
 reselected by method: `ml-model/select_threshold.py` sweeps 0.05–0.95 on a
 **validation fleet** (seed 7 — separate from both the seed-42 training set
 and the seed-123 test set), computing the served decision at every
@@ -795,7 +805,7 @@ own default all agree with the one the evaluation was measured at.
 | v3 (fallback, no history) | 0.5721 | 0.7513 | 0.6496 | 0.6945 |
 | v4 @ threshold 0.5, for reference | 0.6744 | 0.7928 | 0.7288 | 0.8153 |
 
-Per-cause recall (v4, served decision, threshold 0.60, read from `models/manifest.json`): `cpu_spike` 0.9867, `disk_saturation` 0.9961, `memory_leak` 0.9286, `network_flood` 0.9897, `silent_failure` 0.9833, `cascade` 0.2699. The v3 fallback catches cascades slightly better (0.2840), because of the 15 features v4 is tuned on, only the IsolationForest sees cascades at all (see
+Per-cause recall (v4, served decision, threshold 0.60, read from `models/manifest.json`): `cpu_spike` 0.9867, `disk_saturation` 0.9961, `memory_leak` 0.9286, `network_flood` 0.9897, `silent_failure` 0.9833, `cascade` 0.2699. The v3 fallback catches cascades slightly better (0.2840). Both classifiers are trained with cascade labelled `normal`, so cascade detection comes almost entirely from the IsolationForest safety net (see
 [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training)
 for why cascade remains the one weak point — the generator's own cascade
 labeling is inconsistent between rows, unchanged since that decision was
@@ -804,8 +814,9 @@ first made). Cause accuracy on detected, correctly-named anomalies: 0.9988.
 **On the number `0.816`, and on `0.85`, which circulated in earlier versions
 of this document:** `0.816` is the classifier's own F1 at threshold 0.5, in
 isolation — real, but never the served decision at any threshold. `0.85` was
-never the product of the search above; it was this project's original,
-unmeasured default. `0.7246` at threshold `0.60` is what a request to this
+never the product of the search above; it came from an earlier sweep of the
+classifier alone, before the served decision (classifier OR IsolationForest)
+was measured. `0.7246` at threshold `0.60` is what a request to this
 deployment actually returns today.
 
 #### Live validation against the real, running cluster
@@ -833,10 +844,6 @@ corrected (this script now reads only the seed-123 independent file, with
 its SHA-256 recorded in the output specifically so the claim is checkable),
 and this run is the current, trustworthy record.
 
-#### The unsupervised-model comparison (updated)
-
-Already covered in full in [Why Isolation Forest](#why-isolation-forest-updated--corrected-methodology) above, with the
-corrected benchmark methodology and the current numbers.
 
 #### Model integrity
 
@@ -848,7 +855,6 @@ unpickling executes code) and CI verify these hashes match before doing
 anything else. A model file that differs from what the manifest promoted is
 refused, not loaded.
 
----
 
 ### Feedback loop and retraining
 
@@ -873,7 +879,7 @@ Single PostgreSQL table `predictions`, served by a dedicated PostgreSQL
 StatefulSet in the `ml-serving` namespace (data survives pod restarts and
 rolling updates via the StatefulSet's PVC). The API reaches it over
 DATABASE_URL; credentials come from a Kubernetes Secret, generated randomly
-rather than hardcoded — see [Security posture](#security-posture-new) for the
+rather than hardcoded — see [Security posture](#security-posture) for the
 real, live password rotation this project performed after finding a
 committed password in this exact Secret's original file.
 
@@ -1001,7 +1007,6 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 - Feedback pruning / TTL policy (old feedback stays forever, fine for a demo)
 - A feedback UI for a real telecom NOC (out of scope, would be an entire separate project)
 
----
 
 ### Real bugs found and fixed
 
@@ -1024,7 +1029,7 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 | `ml-model/train_serving_telecom.py`, `train_serving_telecom_robust.py` | Earlier, standalone trainers predating `train_production.py`'s unification. |
 | `ml-model/train_serving_telecom_novelty.py` | The novelty-detection experiment (tested, rejected, kept as evidence). |
 | `scripts/export_feedback_dataset.py` | Snapshots labeled operator feedback as a fingerprinted training dataset. |
-| `scripts/verify_model_manifest.py` | The CI model gate — artifact SHA-256 + recorded F1 + deployment-file threshold agreement. |
+| `scripts/verify_model_manifest.py` | The CI model gate — artifact SHA-256 + recorded F1 + deployment-file threshold and `MODEL_NAME` agreement. |
 | `scripts/live_k8s_validation.py` | Real-cluster validation against the independent test set. |
 | `scripts/master_comparison.py` | The 12-configuration threshold/feedback experiment. |
 | `models/telecom_xgb_classifier_v2.pkl`, `telecom_xgb_label_encoder_v2.pkl` | v3 XGBoost classifier + encoder. |
@@ -1042,10 +1047,9 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 
 FastAPI, `api/app.py`. Serves the hybrid v3/v4 decision, root-cause ranking, the feedback loop, and the mission-control operations console.
 
-### What we tested
+### Endpoints
 
-FastAPI service, model baked into the Docker image. Rebuild cost is
-seconds, so image tag = exact model version.
+Models are baked into the Docker image, so an image tag identifies exact model versions.
 
 ```
 GET  /health              service status, feature list, fallback chain, full model lineage
@@ -1104,7 +1108,6 @@ Takes machine names and their anomaly scores (from prior `/predict` calls),
 returns them ranked by root-cause likelihood with a role assigned to each:
 `likely_root_cause`, `downstream_effect`, or `isolated`.
 
----
 
 ### Control panel (mission-control UI)
 
@@ -1118,7 +1121,7 @@ read-only support endpoints (`/ui/status`, `/ui/metrics`, `/ui/infra`).
 explicitly set — never set on the Kubernetes serving pods — and requires
 HTTP Basic auth, compared in constant time, when enabled. This is a real
 change from the console's original, unauthenticated design; see
-[Security posture](#security-posture-new).
+[Security posture](#security-posture).
 
 Tabs:
 
@@ -1179,7 +1182,6 @@ service (`control-panel.service`, via Ansible — see
 [L6 — Ansible](#l6--ansible-infrastructure-as-code)) so its status/infra endpoints have
 native access to `kubectl`, `docker`, and Prometheus on the VM.
 
----
 
 #### Training console (interactive MLOps: train and verify)
 
@@ -1231,9 +1233,17 @@ is mounted through the endpoints `/ui/datasets`, `/ui/train`,
 vulnerability in the dataset selector — the requested filename was not
 checked against a whitelist before being joined into a filesystem path — was
 found and fixed in the most recent security pass; see
-[Security posture](#security-posture-new).
+[Security posture](#security-posture).
 
----
+
+### Real bugs found and fixed
+
+- **The operations console had no authentication at all.** `/ui/*` (which can start and stop services, launch training and run recovery scripts) was reachable by anyone who could reach the API. It is now absent (404) unless `ENABLE_OPS_UI=1`, which the Kubernetes pods never set, and behind constant-time HTTP Basic auth when enabled; tested for missing, wrong and correct credentials.
+- **Path traversal in the training console.** The requested dataset name was joined straight onto a filesystem path, so `../../../etc/passwd` could be read through the API. It is now checked against the list of real datasets first; tested with five traversal forms.
+- **Inputs that silently distorted predictions.** `NaN`/`inf` were accepted, and a `history` window of the wrong length computed rolling features on a different scale than v4 was trained on. Both are now rejected at the API boundary.
+- **One database failure disabled feedback logging until the next restart.** It now retries every 30 s, and the feedback endpoints return `503` instead of an uncaught `500`.
+- **Three bugs found only by running the tests:** a metrics function that was called but never defined (`NameError` on every request), a missing `p_anomaly` field in both prediction paths, and five IsolationForest call sites passing a DataFrame to a model fitted on arrays (caught by re-running the suite with warnings as errors).
+- **A missing production model file failed with an unclear error.** Removing the v4 model already stopped startup, but only as a bare `FileNotFoundError`; it now raises `RuntimeError: production artifact missing: <file>`. Proven by removing the v4 file and importing the app: v4 cannot silently degrade to v3-only.
 
 ### Files
 
@@ -1246,35 +1256,19 @@ found and fixed in the most recent security pass; see
 | `tests/test_api.py` (27 tests), `test_decision.py`, `test_training_console.py` | Covered in full in [Testing](#testing) below. |
 
 ---
-## Security posture (new)
-
-Added in the most recent review pass, consolidating every hardening measure
-across the whole platform in one place:
-
-| Area | Measure |
-|---|---|
-| Credentials | Nothing committed. PostgreSQL, Grafana, MinIO, and the ops-UI password are all generated randomly or supplied from the environment at deploy time. A real committed password (`feedback-dev-password`, in the now-deleted `kubernetes/postgres-secret.yaml`) was found, removed, and rotated live in this VM's actual running database — see [Storage](#storage) above for the full rotation story. |
-| Containers | Both the API and PostgreSQL run as non-root, with `readOnlyRootFilesystem`, all Linux capabilities dropped, `seccompProfile: RuntimeDefault`, and `automountServiceAccountToken: false`. |
-| Operations console | `/ui/*` does not exist (404) unless `ENABLE_OPS_UI=1` is explicitly set — the Kubernetes serving pods never set it. When enabled, it requires HTTP Basic auth, compared in constant time, and fails closed (`503`) if enabled without a password configured. This console previously had no authentication of any kind. |
-| Supply chain | Every production model artifact's SHA-256 is verified against `models/manifest.json` before it is unpickled — both in the API and in CI. A CycloneDX SBOM is generated and archived on every image build. |
-| Image | Python 3.12 on Debian trixie (was 3.10-slim); `pip` and `ensurepip` are removed from the final image after dependencies are installed; Debian security updates are applied on every build (a cached upgrade layer once shipped an already-fixed OpenSSL, caught by the image scan). |
-| Input handling | Path traversal in the training console's dataset selector closed. `NaN`/`infinity` rejected at the API boundary. `history` validated strictly (exact keys, exact length). |
-| Scanning | Trivy scans both the repository (dependencies, committed secrets, Kubernetes/Dockerfile misconfigurations) and the built image, both blocking (`--exit-code 1`) in CI. |
-| Secrets in transit | The PostgreSQL Secret is assembled by Ansible and applied via `stdin`, never a command line or a shell pipe. |
-
----
 
 ## L2 — Container Image
 
-### What we did
+### What we built
 
 - Base: `python:3.12-slim-trixie` (upgraded from `3.10-slim`), non-root `appuser` (uid/gid 10001), layer-cached deps, model and dependency graph baked into the image.
 - `pip` and `ensurepip` are removed from the final image after dependencies install — neither is needed at runtime, and their presence would be an unnecessary attack surface.
 - `HEALTHCHECK` on `/health`, same endpoint K8s liveness probes use.
 - Local registry (`registry:2`, port 5000) for Jenkins to push to.
+- OS security updates on every build: `apt-get upgrade` runs after the pip layer, keyed on the `APT_REFRESH` build argument (see the bug below).
 
 ```bash
-docker build -t devsecmlops-api:$(cat VERSION) .
+docker build --build-arg APT_REFRESH=$(date +%s) -t devsecmlops-api:$(cat VERSION) .
 docker run -p 8000:8000 devsecmlops-api:$(cat VERSION)
 ```
 
@@ -1364,7 +1358,7 @@ Runs 1 and 2 are the evidence that the gate genuinely blocks: every later stage 
 Minikube, single-node, Docker driver. Namespace `ml-serving`.
 
 - **`anomaly-api` Deployment** — hardened as in
-  [Security posture](#security-posture-new); `PREDICT_THRESHOLD` and the DB
+  [Security posture](#security-posture); `PREDICT_THRESHOLD` and the DB
   credentials come from the environment/Secret, never hardcoded.
 - **`postgres` StatefulSet** — hardened the same way, running as `uid 70`
   (PostgreSQL's own official convention). Its Secret is generated with a
@@ -1472,6 +1466,8 @@ kubectl get pods -n ml-serving
 
 Prometheus + Grafana (30 panels) + realistic traffic replayed from the independent test set + Kubernetes
 object monitoring.
+
+### Monitoring
 
 #### Per-pod scraping, not the NodePort (real fix)
 
@@ -1617,6 +1613,8 @@ mlflow server --host 0.0.0.0 --port 5001 \
 (`demo`, `production`), sharing common roles, bringing the entire platform
 up from a provisioned VM with one command.
 
+### What it is
+
 #### Structure
 
 ```
@@ -1637,6 +1635,23 @@ ansible/
     control_panel/                      the mission-control API on :8000
 ```
 
+#### Two profiles, what differs
+
+**Production** (`group_vars/production.yml`): real Kubernetes Secrets from
+an Ansible Vault value (a guard refuses to run with a placeholder
+password), resource requests/limits on the serving Deployment, 3 replicas,
+and no demo-only support containers or control panel — only the
+`anomaly-api` workload runs.
+
+**Demo** (`group_vars/demo.yml`, the jury-facing setup this repository runs
+day to day): the full support tooling (registry, MinIO, SonarQube,
+Jenkins), the production traffic agent enabled, and the `:8000`
+mission-control panel — everything drivable from one browser tab.
+
+#### What "production profile" means here
+
+The `production` profile is a production-oriented configuration (Vault-backed credentials, resource limits, 3 replicas, no demo tooling) applied to the same single-node Minikube. It is not a deployment to a real production cluster.
+
 #### Running it
 
 ```bash
@@ -1653,7 +1668,9 @@ ansible-playbook -i inventory.ini site.yml --syntax-check
 ansible-playbook -i inventory.ini site.yml --check                  # dry run
 ```
 
-#### Every host process is now a supervised systemd unit, in both profiles (real change)
+### What we built
+
+#### Every host process is a supervised systemd unit, in both profiles
 
 The original design had **two separate monitoring roles** —
 `monitoring_systemd` (production: Prometheus and the exporters as managed
@@ -1668,14 +1685,14 @@ VM reboot took down the entire demo monitoring stack with no automatic
 recovery, because the demo profile's plain background processes do not
 survive a reboot. The unified, systemd-everywhere design closes that gap.
 
-#### MLflow now provisioned and supervised (real change)
+#### MLflow provisioned and supervised
 
 MLflow runs as a systemd service (`:5001`) with `--serve-artifacts`,
 proxying uploads to MinIO — see [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-model-registry)
 above for the real round-trip verification. It was not consistently running
 before this pass.
 
-#### Credentials from the environment, root-only files (real change)
+#### Credentials from the environment, root-only files
 
 Every credential — the Grafana admin password, the ops-UI Basic-auth
 credentials, the MinIO root credentials — is required from the environment
@@ -1686,7 +1703,7 @@ in Ansible with base64-encoded values and applied to Kubernetes via
 `stdin` — the password never appears on a command line or in the process
 list.
 
-#### Jenkins gets the data mount it needed (real change)
+#### Jenkins gets the data mount it needed
 
 The Jenkins container now has `data/` mounted read-only at
 `/var/jenkins_home/fleet-data` — the prerequisite `Jenkinsfile.model`
@@ -1694,41 +1711,7 @@ needed and did not have before this pass. The Jenkins image tag, and the
 API image tag, both now derive from the `VERSION` file rather than
 separate hardcoded values that had drifted out of sync with each other.
 
-#### A real bug found only by running it
-
-`repo_dir` was defined as `"{{ playbook_dir }}/.."`, which resolves to an
-unnormalized path (e.g. `.../ansible/..`). systemd rejects this in
-`WorkingDirectory=` ("path is not normalized"). Fixed with a `| realpath`
-filter. This would have affected every systemd unit this project installs,
-not only MLflow — it was only caught here because MLflow was the first
-genuinely *new* unit this pass introduced; every pre-existing unit had
-silently carried the same latent bug without being re-validated.
-
-#### Verified with a real playbook run, not just a syntax check
-
-`--syntax-check` on both profiles, then a `--check` dry run, then a real
-run reaching `PLAY RECAP ... failed=0, ok=56, changed=12`. Confirmed
-afterward against the live control panel: **11 of 11 platform layers up**,
-including MLflow running for the first time in this project's development,
-and confirmed with direct checks that the auth enforcement (`401` with no
-credentials, `401` with a wrong password, `200` only with the real one) and
-service persistence (`systemctl is-enabled` reporting `enabled` for every
-new unit) genuinely work, not just that the playbook exited successfully.
-
-#### Two profiles, what differs
-
-**Production** (`group_vars/production.yml`): real Kubernetes Secrets from
-an Ansible Vault value (a guard refuses to run with a placeholder
-password), resource requests/limits on the serving Deployment, 3 replicas,
-and no demo-only support containers or control panel — only the
-`anomaly-api` workload runs.
-
-**Demo** (`group_vars/demo.yml`, the jury-facing setup this repository runs
-day to day): the full support tooling (registry, MinIO, SonarQube,
-Jenkins), the production traffic agent enabled, and the `:8000`
-mission-control panel — everything drivable from one browser tab.
-
-#### Honest design notes, carried forward
+#### Design notes
 
 - **SonarQube hostname**: from the host, `http://localhost:9000`; from
   inside the Jenkins container, `http://sonarqube:9000` (Docker resolves
@@ -1741,21 +1724,42 @@ mission-control panel — everything drivable from one browser tab.
   installation — the VM is expected to already have Docker, Minikube,
   kubectl, and the Prometheus binary, with the repo cloned.
 
-#### Every support container now declares its network (real fix, found by a failed CI build)
+### What we tested
+
+#### Verified with a real playbook run, not just a syntax check
+
+`--syntax-check` on both profiles, then a `--check` dry run, then a real
+run reaching `PLAY RECAP ... failed=0, ok=56, changed=12`. Confirmed
+afterward against the live control panel: **11 of 11 platform layers up**,
+including MLflow running for the first time in this project's development,
+and confirmed with direct checks that the auth enforcement (`401` with no
+credentials, `401` with a wrong password, `200` only with the real one) and
+service persistence (`systemctl is-enabled` reporting `enabled` for every
+new unit) genuinely work, not just that the playbook exited successfully.
+
+### Real bugs found and fixed
+
+#### `repo_dir` was not a normalized path (found only by running it)
+
+`repo_dir` was defined as `"{{ playbook_dir }}/.."`, which resolves to an
+unnormalized path (e.g. `.../ansible/..`). systemd rejects this in
+`WorkingDirectory=` ("path is not normalized"). Fixed with a `| realpath`
+filter. This would have affected every systemd unit this project installs,
+not only MLflow — it was only caught here because MLflow was the first
+genuinely *new* unit this pass introduced; every pre-existing unit had
+silently carried the same latent bug without being re-validated.
+
+#### Support containers never declared their network (found by a failed CI build)
 
 `registry`, `minio`, and `sonarqube` were defined in `roles/prerequisites` with ports, volumes, and restart policy, but **no `networks:` key at all** — so `community.docker.docker_container` placed each one on Docker's default `bridge` network every time it (re)created them. Jenkins reaches all three by container name over `devsecmlops-net`, so after an Ansible run recreated them, a Jenkins build failed with `sonarqube: Name or service not known`. Confirmed live before fixing: `docker inspect` showed all three on `bridge` only; `docker exec jenkins getent hosts sonarqube` returned nothing. Fixed by declaring `networks: [devsecmlops-net]` on all three tasks. Verified with a real playbook run (not `--check`): all three now on `devsecmlops-net`, and a live DNS lookup from inside the Jenkins container resolves `registry`, `sonarqube`, and `minio` by name. The next Jenkins build passed end to end.
 
-#### Ansible failures now actually fail (real fix)
+#### Ansible could not fail on the steps that mattered
 
 Four tasks in `roles/kubernetes` had `failed_when: false`: enabling metrics-server, loading the API image, and both readiness waits. A broken image load (`ErrImageNeverPull`) or a PostgreSQL pod that never became Ready would still end the play with `failed=0`. Now every one of them fails the play. The image load is additionally verified with `minikube image ls`, because this project has already seen `minikube image load` exit 0 without loading anything. The waits use `rollout status`, which tracks the new revision rather than any pod carrying the label. The only remaining tolerated non-zero exits are the two genuinely expected ones (Minikube stopped, Deployment not yet created), each commented in place.
 
-#### Ansible no longer rolls back Jenkins releases (real fix)
+#### Ansible rolled back Jenkins releases
 
 The rendered Deployment used the Ansible default tag (`devsecmlops-api:<VERSION>`), so re-running the playbook replaced whatever Jenkins had deployed (e.g. `2.20.3-b87`) with an older locally built image. Ownership is now explicit: Ansible creates the Deployment on first bring-up; once it exists, Ansible keeps the currently deployed image and Jenkins owns releases. Verified live: Jenkins deployed `2.20.3-b88`; a full demo-profile Ansible run then finished with `failed=0`; the Deployment was still on `2.20.3-b88` and its rollout history was unchanged (revision 2, Jenkins's deploy). Ansible re-applied the Deployment without rolling a single pod.
-
-#### What "production profile" means here
-
-The `production` profile is a production-oriented configuration (Vault-backed credentials, resource limits, 3 replicas, no demo tooling) applied to the same single-node Minikube. It is not a deployment to a real production cluster.
 
 ### Files
 
@@ -1772,6 +1776,24 @@ The `production` profile is a production-oriented configuration (Vault-backed cr
 | `roles/kubernetes/` (+ `templates/deployment.yaml.j2`) | Minikube, the demo DB Secret, the rendered Deployment — now in sync with `kubernetes/deployment.yaml`. |
 | `roles/monitoring/` | The unified systemd monitoring stack. |
 | `roles/control_panel/` | The mission-control API on :8000, credentials in a root-only file. |
+
+---
+
+## Security posture
+
+Every hardening measure across the platform, in one place:
+
+| Area | Measure |
+|---|---|
+| Credentials | Nothing committed. PostgreSQL, Grafana, MinIO, and the ops-UI password are all generated randomly or supplied from the environment at deploy time. A real committed password (`feedback-dev-password`, in the now-deleted `kubernetes/postgres-secret.yaml`) was found, removed, and rotated live in this VM's actual running database — see [Storage](#storage) above for the full rotation story. |
+| Containers | Both the API and PostgreSQL run as non-root, with `readOnlyRootFilesystem`, all Linux capabilities dropped, `seccompProfile: RuntimeDefault`, and `automountServiceAccountToken: false`. |
+| Operations console | `/ui/*` does not exist (404) unless `ENABLE_OPS_UI=1` is explicitly set — the Kubernetes serving pods never set it. When enabled, it requires HTTP Basic auth, compared in constant time, and fails closed (`503`) if enabled without a password configured. This console previously had no authentication of any kind. |
+| Supply chain | Every production model artifact's SHA-256 is verified against `models/manifest.json` before it is unpickled — both in the API and in CI. A CycloneDX SBOM is generated and archived on every image build. |
+| Model governance | The CI model gate refuses a build unless the artifact hashes, the recorded F1, the deployed threshold and `MODEL_NAME` all agree with `models/manifest.json`; the API refuses to start if any production artifact is missing or modified. |
+| Image | Python 3.12 on Debian trixie (was 3.10-slim); `pip` and `ensurepip` are removed from the final image after dependencies are installed; Debian security updates are applied on every build (a cached upgrade layer once shipped an already-fixed OpenSSL, caught by the image scan). |
+| Input handling | Path traversal in the training console's dataset selector closed. `NaN`/`infinity` rejected at the API boundary. `history` validated strictly (exact keys, exact length). |
+| Scanning | Trivy scans both the repository (dependencies, committed secrets, Kubernetes/Dockerfile misconfigurations) and the built image, both blocking (`--exit-code 1`) in CI. |
+| Secrets in transit | The PostgreSQL Secret is assembled by Ansible and applied via `stdin`, never a command line or a shell pipe. |
 
 ---
 
@@ -1837,7 +1859,7 @@ RandomForest is blind to cascades by construction (see previous). IsolationFores
 - **Blind ensemble (flag if either fires)**: F1 = 0.663, worse than RandomForest alone. Inherits IsolationForest's false positives without helping recall.
 - **Graph-rule cascade fix (flag all downstream when router flagged)**: F1 = 0.550. Blast radius: each router has ~22 downstream machines; one wrong router prediction = ~22 wrong flags. Cascade-rule precision on fired rows: 2.9%.
 
-Both rejections are documented with real numbers, not hand-waved. This remains the shipped architecture today: the served decision is still `classifier OR IsolationForest` (`ml-model/decision.py`), unchanged in principle since this decision was made, though the classifier and the specific safety-net numbers have moved on since (see [L0 — ML Model](#l0--ml-model) and the [unsupervised-model comparison](#the-unsupervised-model-comparison-updated) below).
+Both rejections are documented with real numbers, not hand-waved. This remains the shipped architecture today: the served decision is still `classifier OR IsolationForest` (`ml-model/decision.py`), unchanged in principle since this decision was made, though the classifier and the specific safety-net numbers have moved on since (see [L0 — ML Model](#l0--ml-model) and the [unsupervised-model comparison](#why-isolation-forest-updated--corrected-methodology) in L0).
 
 ### 11. Why XGBoost replaced RandomForest as primary (v3)
 
@@ -1921,7 +1943,7 @@ decision always argued for, now backed by a real sweep instead of a single
 chosen number. The result, 0.60, is recorded with its full evidence curve in
 `models/manifest.json`, and a CI gate (`scripts/verify_model_manifest.py`)
 enforces that every deployment file agrees with it. See
-[Choosing the decision threshold](#choosing-the-decision-threshold-new) below
+[Choosing the decision threshold](#choosing-the-decision-threshold) in L0
 for the full table. Configurable via the `PREDICT_THRESHOLD` env var without
 code changes, as before.
 
@@ -1952,8 +1974,8 @@ renamed to `time_window`; and the K8s env ordering matters -- POSTGRES_PASSWORD
 must be declared before DATABASE_URL for `$(VAR)` substitution to resolve.
 The most recent security pass rotated this database's actual password live
 (the previous one had been committed to git) and hardened the connection
-handling further -- see [Security](#security-posture-new) and
-[L4 — Kubernetes](#l4--kubernetes) below.
+handling further -- see [Security](#security-posture) and
+[L4 — Kubernetes](#l4--kubernetes).
 
 ### 23. Why feedback logging is best-effort, not fail-loud (graceful degradation)
 
@@ -1995,8 +2017,6 @@ was confirmed once the correct preprocess path was used -- the same class of
 "evaluate through the real served path, not a shortcut" discipline that
 `ml-model/decision.py` now enforces structurally for every reported number in
 this project.)
-
----
 
 ---
 
@@ -2066,7 +2086,7 @@ python ml-model/zscore_demo.py
 MODEL_NAME=telecom_v3 uvicorn api.app:app --host 0.0.0.0 --port 8000
 
 # Or containerized
-docker build -t devsecmlops-api:$(cat VERSION) .
+docker build --build-arg APT_REFRESH=$(date +%s) -t devsecmlops-api:$(cat VERSION) .
 docker run -p 8000:8000 devsecmlops-api:$(cat VERSION)
 
 # Test endpoints
@@ -2081,8 +2101,6 @@ python monitoring/production_agent.py --target local &
 python monitoring/k8s_exporter.py &
 # Prometheus + Grafana: monitoring/grafana/dashboards/devsecmlops-fleet.json
 ```
-
----
 
 ---
 
