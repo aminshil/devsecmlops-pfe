@@ -7,18 +7,6 @@
 # major OS or interpreter. Python 3.10 reaches end-of-life in October 2026.
 FROM python:3.12-slim-trixie
 
-# ── Security: patch the base image's OS packages ──────────────────────────
-# The slim image's Debian packages accumulate CVEs between upstream base-
-# image rebuilds (util-linux, perl, openssl, sqlite, pcre2, gzip were all
-# flagged by Trivy). `apt-get upgrade` pulls Debian's own patched builds of
-# whatever is already installed -- it does not add packages, so image size
-# is essentially unchanged. Placed first so this layer caches independently
-# of application code and only invalidates when Debian ships new patches.
-RUN apt-get update -qq && \
-    apt-get upgrade -y -qq && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
 # ── Security: run as non-root (Trivy/SonarQube quality gates will check) ──
 RUN groupadd -r -g 10001 appuser && useradd -r -u 10001 -g appuser -m -d /home/appuser appuser
 
@@ -43,6 +31,21 @@ RUN pip install --no-cache-dir -r requirements-api.txt && \
     pip install --no-cache-dir "msgpack>=1.2.1" boto3 && \
     pip uninstall -y pip && \
     rm -rf /usr/local/lib/python3.12/ensurepip
+
+# -- Security: patch the base image's OS packages (every build) --------------
+# `apt-get upgrade` installs Debian's patched builds of what is already there.
+# Docker's layer cache cannot know Debian shipped a patch: a cached upgrade
+# layer is reused as long as this instruction is unchanged -- found live, a
+# layer cached on 2026-09-29 kept shipping an OpenSSL that Debian had fixed
+# since, until Trivy blocked the build. APT_REFRESH (Jenkins passes the unique
+# build tag) changes this step's inputs, so it re-runs on every build. It sits
+# AFTER the pip install so refreshing it never invalidates the Python layer.
+ARG APT_REFRESH=unset
+RUN echo "apt refresh: ${APT_REFRESH}" && \
+    apt-get update -qq && \
+    apt-get upgrade -y -qq && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # ── Copy application code ──
 COPY api/ ./api/

@@ -79,7 +79,7 @@ pipeline {
         stage('4. Build Docker image') {
             steps {
                 sh '''
-                    docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                    docker build --pull --build-arg APT_REFRESH=${IMAGE_TAG} -t ${IMAGE_NAME}:${IMAGE_TAG} .
                     docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
                     docker images | grep ${IMAGE_NAME} | head -5
                 '''
