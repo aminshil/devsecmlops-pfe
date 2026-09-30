@@ -92,7 +92,7 @@ Git push -> Jenkins (SonarQube -> repo+model gate -> Docker build ->
                      Grafana (30 panels, provisioned from the repo)
 ```
 
-Everything runs on a single self-hosted VM for the PFE demo. The same Docker images deploy unmodified to a multi-node production cluster — only configuration changes, not code. Ansible brings the whole platform up from a bare provisioned VM in either profile (demo or production) — see [L6](#l6--ansible-infrastructure-as-code).
+Everything runs on a single self-hosted VM (Minikube) for the PFE. The image is built once and scanned once; moving to a multi-node cluster is a configuration change, not a code change: point `image:` at the registry Jenkins already pushes to and switch `imagePullPolicy` from `Never` (locally loaded images, the Minikube pattern used here) to `IfNotPresent`. That multi-node deployment has not been done in this project. Ansible brings the whole platform up from a bare provisioned VM in either profile (demo or production) — see [L6](#l6--ansible-infrastructure-as-code).
 
 ---
 
@@ -1733,6 +1733,18 @@ mission-control panel — everything drivable from one browser tab.
 
 `registry`, `minio`, and `sonarqube` were defined in `roles/prerequisites` with ports, volumes, and restart policy, but **no `networks:` key at all** — so `community.docker.docker_container` placed each one on Docker's default `bridge` network every time it (re)created them. Jenkins reaches all three by container name over `devsecmlops-net`, so after an Ansible run recreated them, a Jenkins build failed with `sonarqube: Name or service not known`. Confirmed live before fixing: `docker inspect` showed all three on `bridge` only; `docker exec jenkins getent hosts sonarqube` returned nothing. Fixed by declaring `networks: [devsecmlops-net]` on all three tasks. Verified with a real playbook run (not `--check`): all three now on `devsecmlops-net`, and a live DNS lookup from inside the Jenkins container resolves `registry`, `sonarqube`, and `minio` by name. The next Jenkins build passed end to end.
 
+#### Ansible failures now actually fail (real fix)
+
+Four tasks in `roles/kubernetes` had `failed_when: false`: enabling metrics-server, loading the API image, and both readiness waits. A broken image load (`ErrImageNeverPull`) or a PostgreSQL pod that never became Ready would still end the play with `failed=0`. Now every one of them fails the play. The image load is additionally verified with `minikube image ls`, because this project has already seen `minikube image load` exit 0 without loading anything. The waits use `rollout status`, which tracks the new revision rather than any pod carrying the label. The only remaining tolerated non-zero exits are the two genuinely expected ones (Minikube stopped, Deployment not yet created), each commented in place.
+
+#### Ansible no longer rolls back Jenkins releases (real fix)
+
+The rendered Deployment used the Ansible default tag (`devsecmlops-api:<VERSION>`), so re-running the playbook replaced whatever Jenkins had deployed (e.g. `2.20.3-b87`) with an older locally built image. Ownership is now explicit: Ansible creates the Deployment on first bring-up; once it exists, Ansible keeps the currently deployed image and Jenkins owns releases.
+
+#### What "production profile" means here
+
+The `production` profile is a production-oriented configuration (Vault-backed credentials, resource limits, 3 replicas, no demo tooling) applied to the same single-node Minikube. It is not a deployment to a real production cluster.
+
 ### Files
 
 | File / role | What it does |
@@ -2073,6 +2085,8 @@ python monitoring/k8s_exporter.py &
 ---
 
 ## Known limitations and future work
+
+- **No NetworkPolicy.** Pods are hardened individually (non-root, read-only filesystem, no capabilities, seccomp), but nothing restricts pod-to-pod traffic inside `ml-serving`. Adding a policy alone would not be enough: Minikube's default network plugin does not enforce NetworkPolicy, so it would need a CNI that does (e.g. Calico) and a test proving traffic is actually blocked.
 
 - **`cascade` recall (0.28) is genuinely the weakest result in this
   project**, stated honestly rather than hidden — the generator's own

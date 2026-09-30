@@ -1,19 +1,28 @@
 ---
 # ===========================================================================
 # kubernetes: the K8s serving layer (L4).
-#   - Start Minikube (Docker driver, --force after any Docker restart)
-#   - Enable metrics-server (needed for HPA CPU utilisation)
-#   - Apply manifests in dependency order: namespace -> postgres -> deployment
-#     -> service -> hpa
-#   - Load the API image into Minikube (imagePullPolicy: Never pattern)
-#   - Wait for postgres and the anomaly-api pods to become Ready
+# - Start Minikube (Docker driver, --force after any Docker restart)
+# - Enable metrics-server (needed for HPA CPU utilisation)
+# - Apply manifests in dependency order: namespace -> postgres -> deployment
+#   -> service -> hpa
+# - Load the API image into Minikube (imagePullPolicy: Never pattern)
+# - Wait for postgres and the anomaly-api rollout to complete
+#
+# Ownership rule: Ansible CREATES the Deployment on first bring-up. Once it
+# exists, Jenkins owns releases (it deploys versioned images such as
+# 2.20.3-b87), so re-running this role keeps whatever image is currently
+# deployed instead of rolling the pods back to the Ansible default tag.
+#
+# Failure policy: every step that the platform depends on fails the play.
+# The only tolerated non-zero exits are the two genuinely expected ones,
+# each documented where it happens.
 # ===========================================================================
 
 - name: Check whether Minikube is already running
   ansible.builtin.command: "{{ bin_minikube }} status --format '{{ '{{' }}.Host{{ '}}' }}'"
   register: mk_status
   changed_when: false
-  failed_when: false
+  failed_when: false   # expected: non-zero whenever Minikube is stopped -- that is what this checks
 
 - name: Start Minikube (Docker driver, forced)
   ansible.builtin.command: "{{ bin_minikube }} start --driver=docker --force"
@@ -24,14 +33,34 @@
 - name: Enable the metrics-server addon (HPA CPU metrics)
   ansible.builtin.command: "{{ bin_minikube }} addons enable metrics-server"
   register: ms_enable
-  changed_when: "'enabled' in ms_enable.stdout"
-  failed_when: false
+  changed_when: "'enabled' in ms_enable.stdout and 'already' not in ms_enable.stdout"
+  # The HPA cannot scale without metrics-server, so a failure here must stop the play.
+  failed_when: ms_enable.rc != 0
+
+- name: Read the image currently deployed, if the Deployment already exists
+  ansible.builtin.command: >-
+    {{ bin_kubectl }} get deployment anomaly-api -n {{ k8s_namespace }}
+    -o jsonpath={.spec.template.spec.containers[0].image}
+  register: current_image
+  changed_when: false
+  failed_when: false   # expected: NotFound on the very first bring-up
+
+- name: Choose the image to deploy (keep Jenkins's release if one exists)
+  ansible.builtin.set_fact:
+    deploy_image: "{{ current_image.stdout if (current_image.rc == 0 and current_image.stdout | length > 0) else api_image }}"
 
 - name: Load the API image into Minikube (imagePullPolicy Never pattern)
-  ansible.builtin.command: "{{ bin_minikube }} image load {{ api_image }}"
+  ansible.builtin.command: "{{ bin_minikube }} image load {{ deploy_image }}"
   register: img_load
   changed_when: false
-  failed_when: false
+  failed_when: img_load.rc != 0
+  when: deploy_image == api_image   # a Jenkins-deployed image is already inside Minikube
+
+- name: Verify the image is really inside Minikube (exit 0 alone is not proof)
+  ansible.builtin.command: "{{ bin_minikube }} image ls"
+  register: mk_images
+  changed_when: false
+  failed_when: deploy_image not in mk_images.stdout
 
 - name: Ensure the demo database Secret exists (random password, never committed; production uses the Vault-backed one)
   ansible.builtin.command: "{{ repo_dir }}/scripts/ensure_db_secret.sh"
@@ -63,21 +92,19 @@
   register: deploy_apply
   changed_when: "'created' in deploy_apply.stdout or 'configured' in deploy_apply.stdout"
 
-- name: Wait for the postgres pod to be Ready
-  ansible.builtin.command: >
-    {{ bin_kubectl }} wait --for=condition=ready pod
-    -l app=postgres -n {{ k8s_namespace }} --timeout=120s
+- name: Wait for the postgres StatefulSet rollout to complete
+  ansible.builtin.command: >-
+    {{ bin_kubectl }} rollout status statefulset/postgres
+    -n {{ k8s_namespace }} --timeout=180s
   register: pg_wait
   changed_when: false
-  failed_when: false
 
-- name: Wait for the anomaly-api pods to be Ready
-  ansible.builtin.command: >
-    {{ bin_kubectl }} wait --for=condition=ready pod
-    -l app=anomaly-api -n {{ k8s_namespace }} --timeout=120s
+- name: Wait for the anomaly-api rollout to complete (tracks the NEW revision, not old pods)
+  ansible.builtin.command: >-
+    {{ bin_kubectl }} rollout status deployment/anomaly-api
+    -n {{ k8s_namespace }} --timeout=180s
   register: api_wait
   changed_when: false
-  failed_when: false
 
 - name: Show final pod status
   ansible.builtin.command: "{{ bin_kubectl }} get pods -n {{ k8s_namespace }}"

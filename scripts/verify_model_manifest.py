@@ -45,6 +45,34 @@ THRESHOLD_SOURCES = [
 ]
 
 
+# every place the serving model selector is configured. telecom_v3 is the
+# selector that enables the hybrid path: v4 when history is supplied, v3
+# otherwise (api/app.py). Any other value silently serves a different model.
+MODEL_NAME_SOURCES = [
+    ("kubernetes/deployment.yaml", r'name:\s*MODEL_NAME\s*\n\s*value:\s*"([^"]+)"'),
+    ("ansible/roles/kubernetes/templates/deployment.yaml.j2", r'name:\s*MODEL_NAME\s*\n\s*value:\s*"([^"]+)"'),
+    ("Dockerfile", r'ENV\s+MODEL_NAME=(\S+)'),
+    ("api/app.py", r'os\.environ\.get\("MODEL_NAME",\s*"([^"]+)"\)'),
+    ("ansible/group_vars/all.yml", r'cp_model_name:\s*"([^"]+)"'),
+]
+
+
+def check_model_name(prod: dict, root: Path) -> tuple[str, list[str], list[str]]:
+    expected = (prod.get("serving") or {}).get("model_name", "telecom_v3")
+    problems, checked = [], []
+    for rel, pattern in MODEL_NAME_SOURCES:
+        path = root / rel
+        if not path.exists():
+            continue
+        m = re.search(pattern, path.read_text())
+        if not m:
+            continue
+        checked.append(rel)
+        if m.group(1) != expected:
+            problems.append(f"{rel}: MODEL_NAME={m.group(1)}, expected {expected}")
+    return expected, checked, problems
+
+
 def deployed_thresholds(root: Path) -> dict:
     found = {}
     for rel, pattern in THRESHOLD_SOURCES:
@@ -117,6 +145,11 @@ def main() -> int:
             return 1
         print(f"OK: deployed threshold {ev.get('threshold')} = evaluated threshold"
               + (" = selected threshold" if prod.get("decision_threshold") is not None else ""))
+        expected, checked, mproblems = check_model_name(prod, a.root)
+        if mproblems:
+            print("FAIL: model selector drift:\n  " + "\n  ".join(mproblems))
+            return 1
+        print(f"OK: MODEL_NAME={expected} in {len(checked)} deployment files ({', '.join(checked)})")
     return 0
 
 

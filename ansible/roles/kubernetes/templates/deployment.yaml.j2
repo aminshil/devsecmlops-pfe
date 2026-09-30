@@ -51,7 +51,7 @@ spec:
               echo "postgres ready, exiting init container"
       containers:
         - name: api
-          image: {{ api_image }}
+          image: {{ deploy_image | default(api_image) }}
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
