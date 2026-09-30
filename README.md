@@ -1462,7 +1462,7 @@ kubectl get pods -n ml-serving
 
 ## L5 — Observability and MLOps
 
-Prometheus + Grafana (30 panels) + real production traffic + Kubernetes
+Prometheus + Grafana (30 panels) + realistic traffic replayed from the independent test set + Kubernetes
 object monitoring.
 
 #### Per-pod scraping, not the NodePort (real fix)
