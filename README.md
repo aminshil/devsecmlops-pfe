@@ -3,188 +3,134 @@
 **Conception et mise en œuvre d'une plateforme DevSecMLOps Cloud-Native**
 PFE ESPRIT × Tunisie Telecom — 2025–2026 — Amine Shil
 
-A self-hosted, cloud-native platform that detects anomalies on IT infrastructure
-(CPU, RAM, network, disk, load) using machine learning, delivered through a
-fully automated, security-gated CI/CD pipeline. Includes dependency-graph-based
-root cause analysis to distinguish a true root cause from downstream cascading
-victims when multiple machines alert at once.
+A self-hosted, cloud-native platform that detects anomalies on IT infrastructure (CPU, RAM, network, disk, load) using machine learning, delivered through a fully automated, security-gated CI/CD pipeline. Includes dependency-graph-based root cause analysis to distinguish a true root cause from downstream cascading victims when multiple machines alert at once.
 
-## Executive summary
-
-A production-deployed anomaly detection platform for a simulated 200-machine
-telecom fleet, built end-to-end across all six infrastructure layers (L0-L6).
-Currently serving live in Kubernetes (v4 rolling-features XGBoost primary +
-IsolationForest safety net, with a hybrid v3/v4 serving path), verified
-through a real 11-stage Jenkins pipeline reaching `SUCCESS` end to end and a
-2,200-request live validation against the real, running cluster with zero
-errors.
-
-**Headline result — v4 rolling/trend features (gradual-onset detection):**
-adding 9 per-machine rolling features (mean/std/delta over the last 10
-readings) on top of the 6 z-scored base features lifted served F1 from 0.6496
-(v3, fallback) to **0.7246** (v4, production) on a 17,280,000-row independent
-test set, with per-cause recall at or above 96% on five of six causes.
-
-> **A note on this document's numbers.** This README has been through a
-> deliberate correction pass. Two figures that circulated in earlier versions
-> — a production F1 of **0.816** and a decision threshold of **0.85** — were
-> real measurements, but neither described what was actually served: 0.816 was
-> the classifier's own score in isolation, not the `classifier OR
-> IsolationForest` decision the API actually returns; 0.85 was chosen without
-> a documented search. Both have been re-measured and are corrected throughout
-> this document, with the old numbers kept and explicitly labeled wherever
-> they still have historical value (they do, in several places below).
-
-**Feedback loop + retrain pipeline:** every `/predict` call is logged to a
-PostgreSQL database (StatefulSet, survives pod kills and rolling updates);
-operators submit verdicts via `/feedback/{id}`; and a guardrailed retrain
-pipeline (`ml-model/train_production.py`, which superseded the earlier
-`scripts/retrain_from_feedback.py` — see [Engineering decision 24](#24-why-the-retrain-guardrail-is-strict-and-what-500-rows-proved-updated)) combines
-feedback with the original training data and only promotes a new model if it
-does not regress, on either aggregate F1 or any individual cause's recall.
-
-**Full DevSecMLOps quality loop closed, twice over.** An earlier cycle's
-9-stage Jenkins pipeline caught 6 real SonarQube issues (a hardcoded-credential
-Blocker, a cognitive-complexity violation, and others — all fixed, Quality
-Gate passing with 0 new issues). This project's most recent review pass went
-further: the pipeline was rebuilt to 11 stages where every gate can actually
-fail the build (`abortPipeline: true`, a real repository + model-artifact
-scan before the image is even built, a hardened container smoke test, a
-blocking image scan with SBOM generation) — and was proven with **three real,
-consecutive pipeline runs**: the first two correctly stopped at a genuine
-SonarQube Quality Gate failure, the third went end to end with **zero
-vulnerabilities** found in the final image.
-
-What makes this project genuinely defensible, beyond the final metrics:
-
-- **Real bugs found and fixed by actually running things**, not just reading
-  code — a non-exhaustive, honest list, spanning this project's whole
-  development: an unquoted Dockerfile version pin that let `wheel` install
-  completely unpinned; a demo traffic generator that could never assemble a
-  real rolling-history window; a benchmark script whose row-subsampling
-  silently collapsed to exactly one machine at real scale; a live-validation
-  script that was, for a time, measuring against the training set instead of
-  an independent one; an Ansible systemd path that only broke once a *new*
-  unit was introduced, because every pre-existing unit had silently carried
-  the same latent bug. See the CI/CD and Kubernetes sections below for the
-  full incident list, kept because each is a real, concrete lesson.
-- **Seventeen-plus documented experiments**, a meaningful fraction of which
-  are rejected with real evidence (blind ensemble, dependency-graph cascade
-  rule, gradual-onset generator variant, novelty detection, service-tier
-  correlation, LightGBM) — knowing what doesn't work is as valuable as
-  knowing what does. See [Engineering decisions and rationale](#engineering-decisions-and-rationale).
-- **Real-world validation**: the same per-machine, per-time-window z-score
-  methodology, tested on the real, public Server Machine Dataset (28 real
-  servers), yields F1=0.269 — consistent with published unsupervised
-  sequence-model results on the same benchmark, confirming the pipeline
-  generalizes and isn't overfit to synthetic data.
-- **Full DevSecMLOps stack operational and proven live**: pytest (58 tests,
-  fail-fast in Jenkins) → SonarQube (Quality Gate genuinely blocking) →
-  repository + model-artifact scan → Docker build → hardened container smoke
-  test → Trivy image scan + SBOM → registry push → automated Kubernetes
-  rollout → post-deploy smoke test through the live pod itself. Every stage
-  verified with real, pasted console evidence, not asserted.
-- **Honest engineering choices documented, not hidden**: the 24-subsection
-  "Engineering decisions and rationale" section explains every non-obvious
-  choice from first principles, with concrete numbers, including several the
-  project later revisited and reversed on stronger evidence.
-- **Infrastructure that survives a reboot**: every host-level service
-  (Prometheus, the exporters, MLflow, the control panel) runs as a supervised
-  systemd unit in both the demo and production Ansible profiles — closing a
-  real gap where the demo profile's plain background processes died on a VM
-  restart during this project's own development.
-- **Reproducibility**: seed-42 training data, seed-7 validation data (used
-  only for threshold selection), and seed-123 independent test data (used for
-  every reported evaluation number) are three separate files, never mixed;
-  every model artifact's SHA-256 is recorded in `models/manifest.json` and
-  verified before it is ever unpickled, in both the API and CI.
-
-The v2 RandomForest architecture (with MinIO-fetched 125MB model) remains
-fully deployable via `MODEL_NAME=telecom_v2` for A/B comparison and
-reproducibility, alongside the currently-active v3/v4 XGBoost path. Both v1
-(the original single-model IsolationForest) and v2 code paths are preserved
-intact as documented history and fallback options.
+This document is organized **layer by layer (L0–L6)**. Every layer section follows the same shape: what it does, what was tested (including what was tried and rejected, with real numbers), real bugs found and fixed, and the files that make it up. Nothing here is asserted without a command, a log, or a test result behind it — where a number or a fix is described, the evidence is named alongside it.
 
 ---
 
-## Status
+## Contents
 
-| Layer | Component | Status |
-|-------|-----------|--------|
-| L0 | ML model — v4 rolling-features XGBoost + IsolationForest safety net, per-machine per-time-window z-score | ✅ Done |
-| L1 | FastAPI serving layer (hybrid v3/v4 `/predict`) + root cause analysis + feedback loop endpoints | ✅ Done |
-| L2 | Docker + local registry | ✅ Done |
-| L3 | Jenkins CI/CD (11 stages, real blocking SonarQube gate, model-artifact gate, hardened smoke tests, Trivy + SBOM) | ✅ Done, proven with 3 real pipeline runs |
-| L4 | Kubernetes (Minikube): anomaly-api + PostgreSQL StatefulSet for the feedback loop, autoscaling proven live | ✅ Done |
-| L5 | Monitoring (Prometheus, Grafana — 25 panels, per-pod scraping, real traffic replay) | ✅ Done |
-| — | Control panel (mission-control web UI at `/ui`: status, operator, root-cause, live demo eval, infrastructure, training console) | ✅ Done |
-| L6 | Ansible (infrastructure as code): one playbook, two profiles, unified systemd-supervised services, reproduces the platform from a provisioned VM | ✅ Done, proven with a real full run (`failed=0`) and 11/11 live platform layers confirmed up afterward |
+1. [Executive summary](#executive-summary)
+2. [Architecture](#architecture)
+3. [Quick start](#quick-start)
+4. [L0 — ML Model](#l0--ml-model)
+5. [L1 — Serving API](#l1--serving-api)
+6. [Security posture](#security-posture-new)
+7. [L2 — Container Image](#l2--container-image)
+8. [L3 — CI/CD](#l3--cicd)
+9. [L4 — Kubernetes](#l4--kubernetes)
+10. [L5 — Observability and MLOps](#l5--observability-and-mlops)
+11. [L6 — Ansible (Infrastructure as Code)](#l6--ansible-infrastructure-as-code)
+12. [Engineering decisions and rationale](#engineering-decisions-and-rationale)
+13. [Testing](#testing)
+14. [Reproducing locally](#reproducing-locally)
+15. [Documentation and evidence](#documentation-and-evidence)
+16. [Known limitations and future work](#known-limitations-and-future-work)
 
-**Current model (v4, served decision, independent seed-123 test set, 17,280,000 rows, threshold 0.60):**
-F1 = **0.7246** · Precision = 0.6642 · Recall = 0.7970. (The classifier alone,
-in isolation, scores F1 = 0.8080 at this same threshold — a real number, but
-not the one the deployment returns; see the correction note above.) The v3
-6-feature model (F1 = 0.6496 served) remains the fallback whenever request
-history is unavailable.
+---
 
-**Live validation against the real, running Kubernetes cluster** (2,200 real
-requests through the NodePort, independent test set, 0 errors): F1 = 0.7267,
-Recall = 0.872, every request correctly served by v4. An earlier live
-validation of this project reported F1 = 0.690 at threshold 0.85 over a
-33,600-request two-week demo — a real, historical result, but measured with
-the old, unmeasured 0.85 threshold and (in an even earlier iteration) against
-data that overlapped the training set; kept here for the project's own record,
-superseded by the numbers above for anything currently claimed as production
-truth.
+## Executive summary
 
-**Full version history:** see [GitHub Releases](https://github.com/aminshil/devsecmlops-pfe/releases)
-— tagged releases from v0.1.0 (initial POC) through the current version, each
-with detailed release notes covering what changed and why.
+A production-oriented anomaly detection platform for a simulated 200-machine telecom fleet, built end-to-end across all seven layers (L0–L6), each independently verified live — not just built and assumed working.
+
+**Current, served numbers** (independent test set, 17,280,000 rows, threshold 0.60 — selected by method, not assumption; see [L0](#l0--ml-model)):
+
+| | F1 | Precision | Recall |
+|---|---|---|---|
+| v4 (production, with history) | **0.7246** | 0.6642 | 0.7970 |
+| v3 (fallback, no history) | 0.6496 | 0.5721 | 0.7513 |
+
+Live-validated against the real, running Kubernetes cluster: 2,200 real requests, 0 errors, F1 0.7267.
+
+**Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — two SonarQube Quality Gate blocks (proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, and a SonarQube server-side failure caused by the VM's disk reaching 95%. The most recent run (build `2.20.3-b87`) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
+
+**What makes this project genuinely defensible, beyond the final metrics:**
+
+- **Every layer independently verified live**, most more than once, with real command output as evidence — not "should work," but "here is the log showing it worked."
+- **A long, honest list of real bugs found by actually running things**, not just reading code — see each layer's "Real bugs found and fixed" subsection. A non-exhaustive sample: a Dockerfile version pin silently installed completely unpinned because of an unquoted shell redirect; a benchmark script's row-subsampling silently collapsed to exactly one machine at real scale; a demo traffic generator could never assemble a real rolling-history window; an Ansible template drifted so far from the real Kubernetes manifest that a production deploy would have shipped an unhardened pod; three containers silently lost their shared Docker network after being recreated, breaking CI with no warning until the next build.
+- **Twenty-four engineering decisions**, documented with real numbers, including several tested, rejected, and — in at least one case — later revisited and reversed on stronger evidence (see [L0](#l0--ml-model)).
+- **Real-world validation**: the same per-machine, per-window z-score methodology, applied to the real, public Server Machine Dataset, yields results consistent with published unsupervised sequence-model literature on the same benchmark.
+- **Infrastructure that survives a reboot**: every host service (Prometheus, the exporters, MLflow, the control panel) is a supervised systemd unit in both the demo and production Ansible profiles — closing a real gap where the demo profile's plain background processes died on a VM restart during this project's own development.
 
 ---
 
 ## Architecture
 
 ```
-Git push → Jenkins (SonarQube SAST → repo+model gate → Docker build →
-            hardened smoke test → Trivy image scan + SBOM → registry push)
-                                                          │
-                                                          ▼
-                                          Docker image (model baked in)
-                                                          │
-                                                          ▼
-                                   Kubernetes: FastAPI pods (2-5, autoscaled)
-                                                          │
-                        ┌─────────────────────────────────┼─────────────────────┐
-                        ▼                                 ▼                     ▼
-              Node Exporter (VM)                  production_agent.py    Kubernetes exporter
-                        │                          (200 threads, real                │
-                        │                           replay + rolling                 │
-                        │                           history)                         │
-                        └─────────────────────────────────┼─────────────────────┘
-                                                          ▼
-                                     Prometheus (per-pod discovery,
-                                     not the NodePort — see Monitoring)
-                                                          │
-                                                          ▼
-                                 Grafana dashboards (30 panels, provisioned
-                                 from the repo, not edited live)
+ L0  ML Model                 generator, baselines, v3/v4 classifiers, IsolationForest, guardrail
+ L1  Serving API               FastAPI, hybrid v3/v4 routing, feedback loop, control panel
+ L2  Container Image           Docker, hardened, model artifacts baked in
+ L3  CI/CD                     Jenkins, 11 gates, SonarQube, Trivy, SBOM
+ L4  Orchestration             Kubernetes (Minikube), hardened pods, HPA
+ L5  Observability             Prometheus, Grafana, MLflow, real production traffic
+ L6  Infrastructure as Code    Ansible, two profiles, systemd-supervised
 ```
 
-Everything runs on a single self-hosted VM (Ubuntu 22.04) for the PFE demo. The
-same Docker images deploy unmodified to a multi-node production cluster — only
-configuration (IPs, credentials, registry URL) changes, not code. Ansible now
-brings the whole platform up from a bare provisioned VM in either profile —
-see [Ansible (L6)](#ansible-l6).
+```
+Git push -> Jenkins (SonarQube -> repo+model gate -> Docker build ->
+             hardened smoke test -> Trivy image scan + SBOM -> registry push)
+                                                  |
+                                                  v
+                                  Docker image (model baked in)
+                                                  |
+                                                  v
+                           Kubernetes: FastAPI pods (2-5, autoscaled)
+                                                  |
+                   +------------------------------+------------------------+
+                   v                                                       v
+        Node Exporter (VM)                                     Kubernetes exporter
+                   |                    production_agent.py               |
+                   |                 (200 threads, real replay,           |
+                   |                  real rolling history)               |
+                   +------------------------------+------------------------+
+                                                  v
+                            Prometheus (per-pod discovery via the
+                            Kubernetes API server -- not the NodePort)
+                                                  |
+                                                  v
+                     Grafana (30 panels, provisioned from the repo)
+```
 
-### How the model works, in two phases
+Everything runs on a single self-hosted VM for the PFE demo. The same Docker images deploy unmodified to a multi-node production cluster — only configuration changes, not code. Ansible brings the whole platform up from a bare provisioned VM in either profile (demo or production) — see [L6](#l6--ansible-infrastructure-as-code).
+
+---
+
+## Quick start
+
+```bash
+# required credentials (never committed -- see Security posture)
+export GRAFANA_ADMIN_PASSWORD='...'   # 12+ chars
+export OPS_UI_PASSWORD='...'          # 12+ chars
+export OPS_UI_USER='admin'            # optional, defaults to "operator"
+export MINIO_ROOT_USER='...'
+export MINIO_ROOT_PASSWORD='...'      # 12+ chars
+
+cd ansible
+ansible-playbook -i inventory.ini site.yml                          # demo (default)
+ansible-playbook -i inventory.ini site.yml -e profile=production --ask-vault-pass
+
+# validate without changing anything
+ansible-playbook -i inventory.ini site.yml --syntax-check
+ansible-playbook -i inventory.ini site.yml --check
+```
+
+After a successful demo run, the control panel at `http://<vm-ip>:8000/ui` reports every platform layer's live status. Grafana is at `:3000`, Prometheus at `:9090`, Jenkins at `:8080`, SonarQube at `:9000`, MLflow at `:5001`.
+
+---
+
+## L0 — ML Model
+
+Detects and explains anomalies: a synthetic generator, per-machine per-window baselines, two supervised classifiers (v3, v4) plus an unsupervised IsolationForest safety net, a guardrailed retraining pipeline, and the feedback loop that would eventually make retraining possible from real operator judgments rather than only synthetic data.
+
+#### How the model works, in two phases
 
 **Training (offline, `train_production.py`, the single canonical path — see
-[the ML model](#the-ml-model)):** raw fleet data flows into baseline
+[the ML model](#l0--ml-model)):** raw fleet data flows into baseline
 construction (mean/std per machine and time window), gets z-scored using those
 baselines, plus 9 rolling features for v4, and the classifiers plus the
 IsolationForest fit on that data. Output: the artifacts listed in
-[Repository layout](#repository-layout), fingerprinted and recorded in
+[L0's file table](#files), fingerprinted and recorded in
 `models/manifest.json`.
 
 **Serving (live, every API call, milliseconds):** an incoming reading is
@@ -204,233 +150,94 @@ implementations kept in sync by convention — is enforced by import
 test (`tests/test_api.py::test_rolling_features_match_training_pipeline`).
 
 ---
+### What we tested (the current, shipped design)
 
-## Engineering decisions and rationale
+#### Why per-machine, per-time-window baselines
 
-Every non-obvious decision made in this project, why it was made that way, and what evidence supported the choice. Written to be readable in isolation for defense preparation -- each subsection explains one decision from first principles rather than referencing sections elsewhere in the document.
+Every metric is z-scored *before* reaching the model:
 
-### 1. Why unsupervised anomaly detection first (v1)
+```
+z = (raw_value - machine's own mean for this time window) / machine's own std
+```
 
-Production infrastructure has no labeled anomalies. Nobody manually labels every anomalous minute across 200 servers -- and even if they did, the labels would be inconsistent across engineers. IsolationForest learns "normal" from the raw metric stream with zero labels, and can flag anomaly *types* it has never seen before. This was the right starting choice: build a working, deployable detector without waiting for a labeling pipeline that doesn't exist in real telecom operations.
+A web server idling at 30% CPU and a database server running hot at 75% CPU
+are both "normal" — a single global threshold can't capture that, but a
+per-machine baseline can.
 
-### 2. Why per-machine, per-time-window baselines
+Baselines are split into four **time windows** — night (00–06), morning
+(06–12), afternoon (12–18), evening (18–24) — because a single all-day
+average smooths out day/night variation. This was tested rigorously
+(`ml-model/test_timewindow_full.py`, full 200-machine fleet, threshold-tuned
+comparison):
 
-A web server idling at 30% CPU and a database server running hot at 75% CPU are both "normal" for their role -- a global threshold cannot distinguish them. Time windows (night/morning/afternoon/evening) handle predictable daily cycles: a 3 AM CPU spike on a batch server is normal, the same spike at 3 PM might be an incident. Tested rigorously (`ml-model/test_timewindow_full.py`): per-machine+window F1 = 0.6475, per-machine all-day F1 = 0.6434, adding explicit time features (hour_sin/cos) actually hurt at F1 = 0.6064 because the per-machine baseline already encodes temporal patterns implicitly.
+| Baseline strategy | F1 (tuned threshold) | ROC-AUC |
+|---|---|---|
+| Per-machine, all-day | 0.6434 | 0.9066 |
+| **Per-machine, per-time-window (shipped)** | **0.6475** | **0.9091** |
+| Per-machine + explicit time features (hour_sin/cos) | 0.6064 | 0.8964 |
 
-### 3. Why 6 features, not 3
+Explicit time features were tested and **rejected**: the per-machine baseline
+already implicitly encodes temporal patterns, so adding time as a separate
+column is redundant and slightly hurts the decision boundary.
 
-The original 3 features (cpu, ram, network) missed entire classes of real incidents. A disk filling up produces almost no signal in cpu/ram/network -- confirmed live: a disk_saturation reading with disk_usage z=4.93 and load_avg z=5.31 while cpu/ram/network stayed near zero. Expanded to 6 (adding disk_io, disk_usage, load_avg). Network gear (routers, firewalls, DNS, VoIP) intentionally have near-zero disk metrics because they are SNMP-monitored appliances with no physical disk -- this matches real telco edge architecture, not a shortcut.
+**Four-level fallback chain** for machines the model has never seen:
+`machine+window → machine (all-day) → machine type → global fleet average`.
+The API reports which level was used on every prediction (`baseline_used`).
 
-### 4. Why 30-second resolution, not 1-minute
+#### Why 6 features
 
-Tested at full scale: F1 improved 0.648 -> 0.663, recall 0.650 -> 0.667. Real gains, reproducible. Cost: 2x storage (613MB -> 1.2GB), 2x retrain time (2m -> 4m), and the first attempt to generate the 30-second dataset was killed by the OOM killer at 4.1GB RSS on the 7.7GB VM. Adopted because the accuracy gain is consistent and the memory constraint is manageable -- but the tradeoff is documented explicitly, not glossed over.
+The model started with 3 features (cpu, ram, network) and was expanded to 6:
+`cpu, ram, network, disk_io, disk_usage, load_avg`. Three features miss
+entire classes of real incidents — a disk filling up produces almost no
+signal in cpu/ram/network. With 6 features, disk saturation anomalies are
+detectable (disk_usage z=4.93, load_avg z=5.31 while cpu/ram/network stay
+near zero, proved with a live `/predict` demo).
 
-### 5. Why the four-level fallback chain
+**Network gear** (router/firewall/dns/voip) has near-zero disk/load metrics
+by design, not a shortcut: they are SNMP-monitored appliances with no
+physical disk (they boot from flash), matching real telco edge architecture
+where compute nodes connect through a transport router.
 
-Machines the model has never seen (`machine+window` not in baseline) must still get predictions. The chain -- `machine+window` -> `machine` (all-day) -> `machine type` -> `global fleet average` -- guarantees any legitimate reading gets a valid baseline. The API returns which level was used (`baseline_used` field), so operators can see whether a prediction is on solid statistical ground or falling back to a coarser estimate.
+#### Data resolution: 1-minute vs 30-second (tested, adopted)
 
-### 6. Why the service-tier correlation was tested and rejected
+The model currently trains on 30-second-resolution synthetic data (one
+reading per machine every 30 seconds), switched from an original 1-minute
+resolution after a controlled full-scale experiment: 200 machines, 30 days,
+matched anomaly ratio (~6.75%), same seed and hyperparameters, only the
+sampling interval changed.
 
-The obvious next step after modeling router->machine dependencies was modeling application-tier calls (web -> app -> db). Built, tested at full scale, and reverted: every model regressed (IsolationForest 0.663 -> 0.599, z-threshold 0.657 -> 0.572). Root cause: service-tier correlation inflated the variance absorbed into each downstream machine's baseline, particularly for types 1-2 hops away, widening what counts as "normal" and making genuine anomalies harder to distinguish. **This is a real, informative negative result** -- documented rather than silently discarded, because knowing what doesn't work matters.
+| Metric | 1-minute (previous) | 30-second (current) | Delta |
+|---|---|---|---|
+| F1 | 0.648 | 0.663 | +0.015 |
+| ROC-AUC | 0.924 | 0.926 | +0.002 |
+| Recall | 0.650 | 0.667 | +0.017 |
+| Dataset size | 613 MB | 1226 MB | 2× |
+| Full retrain time | 2m 4s | 3m 55s | 2.1× |
 
-### 7. Why novelty detection (train on normal-only) was tested and rejected
-A natural alternative for the unsupervised baseline is *novelty detection*:
-train the IsolationForest on confirmed-normal rows only (excluding every
-anomaly from training), so it learns the shape of "normal" and flags any
-deviation. Implemented in `ml-model/train_serving_telecom_novelty.py` and run
-at full scale (11.3M normal-only training rows, evaluated on the same seed-42
-mixed test split): F1 = 0.564, Precision = 0.448, Recall = 0.764, ROC-AUC =
-0.921. Training on normal-only *raises* recall (0.764 vs the mixed-training
-0.650) — the model is more sensitive because it has never been shown that
-some anomaly-adjacent readings are tolerable — but precision *collapses*
-(0.448 vs 0.646): it over-flags, because it never learned where the boundary
-of acceptable near-normal variation lies. Net F1 drops from 0.648 to 0.564,
-while ROC-AUC is essentially unchanged (0.921 vs 0.924), confirming the
-ranking ability is similar and only the operating point moved. **Another
-informative negative result**: pure novelty detection is not adopted, because
-the mixed-training baseline plus a supervised classifier on top gives better
-balanced performance. The experiment is kept because it quantifies exactly
-what novelty detection costs on this data.
+Result: finer resolution genuinely improves every metric, modestly and
+reproducibly. It also has a real cost: generating the 30-second dataset at
+full scale was killed by the Linux OOM killer on first attempt (confirmed
+via `dmesg`: `anon-rss:4133168kB` before termination on a 7.7GB VM),
+succeeding only on retry with more available memory. We adopted 30-second
+resolution because the accuracy gain was consistent and the memory
+constraint was resolved — but the tradeoff (2× storage, 2× retrain time,
+real memory risk on constrained hardware) is documented, not glossed over.
 
-### 8. Why supervised (v2 RandomForest) added on top, not replacing v1
+#### Why unsupervised, not supervised
 
-IsolationForest tells you *something is wrong* but not *what*. Adding labeled cause data (`anomaly_type` column: cpu_spike, memory_leak, network_flood, disk_saturation, silent_failure, cascade) enabled a supervised classifier to explain the anomaly. RandomForest was chosen over other supervised options because it needs no feature scaling assumptions, handles the 6-feature space cleanly, and is deterministic. Result on independent seed-123 test set: F1 = 0.731 (vs IsolationForest's 0.652). But cascade recall collapsed to 0.029 -- see next decision.
+A supervised classifier (Random Forest, XGBoost, etc.) would score higher F1
+on this labeled synthetic dataset, but it needs labeled anomalies to train.
+Production infrastructure has none — nobody manually labels every anomalous
+minute across 200 servers. Isolation Forest learns "normal" from the incoming
+metric stream with zero labels, and can flag anomaly *types* it has never
+seen before. The dataset's `label` column is used only to evaluate the model,
+never to train it. (The project did add a supervised layer on top later — see
+"ML model v2" below — but kept Isolation Forest as a permanent safety net for
+exactly this reason: it is the one part of the design that needs no labels at
+all, and so is the one part that would already work on a genuinely
+unlabeled, real deployment today.)
 
-### 9. Why cascade is folded into normal during training
-
-The generator by design labels cascade anomalies only 40% consistently (a downstream machine affected by a router failure is labeled anomalous 40% of the time, unlabeled 60%, *for the identical feature pattern*). Training a supervised classifier on this noisy label collapses everything -- initial F1 = 0.513, cascade precision = 0.16, poisoning the other classes. Folding cascade into normal during training fixed that (F1 = 0.731) but left RandomForest blind to cascades. Solution: keep IsolationForest as a *safety net* (see next decision).
-
-### 10. Why dual-model architecture (primary + safety net)
-
-RandomForest is blind to cascades by construction (see previous). IsolationForest, being unsupervised, has no such blind spot -- it reacts to any statistical deviation regardless of label noise (0.262 cascade recall). Running both means the primary gets high accuracy on the 5 clean cause types AND cascades still get detected via the safety net. Two rejected alternatives:
-
-- **Blind ensemble (flag if either fires)**: F1 = 0.663, worse than RandomForest alone. Inherits IsolationForest's false positives without helping recall.
-- **Graph-rule cascade fix (flag all downstream when router flagged)**: F1 = 0.550. Blast radius: each router has ~22 downstream machines; one wrong router prediction = ~22 wrong flags. Cascade-rule precision on fired rows: 2.9%.
-
-Both rejections are documented with real numbers, not hand-waved. This remains the shipped architecture today: the served decision is still `classifier OR IsolationForest` (`ml-model/decision.py`), unchanged in principle since this decision was made, though the classifier and the specific safety-net numbers have moved on since (see [The ML model](#the-ml-model) and the [unsupervised-model comparison](#the-unsupervised-model-comparison-updated) below).
-
-### 11. Why XGBoost replaced RandomForest as primary (v3)
-
-Full-scale offline comparison, same train/test data as v2:
-
-- **RandomForest**: F1 = 0.731, Precision = 0.849, Recall = 0.641, 125MB, 340s train
-- **XGBoost**: F1 = 0.718, Precision = 0.775, Recall = 0.670, 3.6MB, 74s train
-
-Overall F1 favors RandomForest by 1.3 points, but XGBoost wins per-cause recall on **every single anomaly type**: cpu_spike, memory_leak (0.688 -> 0.736 -- the previously weakest category), network_flood, disk_saturation, silent_failure, cascade. In a telecom monitoring context, **missing a real anomaly costs more than an extra investigation** -- a missed memory leak leads to a crash, a false alarm costs 5 minutes of an engineer's time. Recall priority is the right operational choice. Live K8s validation confirmed the offline result: v3 XGBoost catches 49 more real anomalies over a 33,600-request test window than v2 RF, with 2.5x throughput and lower latency.
-
-**Architectural bonus:** XGBoost's 3.6MB model fits directly in the Docker image, eliminating the entire MinIO-fetch-at-startup mechanism built for v2's 125MB RandomForest. Simpler deployment, faster startup, one less runtime dependency.
-
-### 12. Why LightGBM was tested but not adopted
-
-Same methodology as XGBoost: F1 = 0.716, Precision = 0.767, Recall = 0.671, per-cause recall within 0.001-0.002 of XGBoost on every category. Essentially identical performance, 3.0MB model (marginally smaller), 51s training (marginally faster). Kept as evidence because the negative result is genuinely useful: **it confirms the ceiling on this data with these features is a gradient-boosting-family ceiling, not an XGBoost-specific one**. Meaningfully passing F1 = 0.72 would require something structurally different (sequence-aware models, richer temporal features, or larger real-world data), not another gradient booster.
-
-### 13. Why rolling/trend features WERE integrated as v4 (updated)
-
-Per-machine rolling mean, rolling std, and delta features (10-reading window,
-cpu/ram/load_avg) were first tested on a 5-day pilot (F1 0.708 -> 0.729) and
-initially left out of production because they seemed to require a stateful
-serving path. That concern was resolved and the features were fully
-integrated as the v4 model. At full scale the gain was substantial: served
-F1 (independent seed-123 test set, 17,280,000 rows, current threshold 0.60)
-went from 0.6496 (v3) to 0.7246 (v4) -- see [The ML model](#the-ml-model) for
-the current, corrected numbers, which supersede the offline figures this
-subsection originally quoted.
-
-The stateful-serving problem was solved WITHOUT server-side state by having
-the **client supply the recent history** in the /predict request (the pattern
-Datadog/New Relic use). The API stays stateless: when `history` is present it
-computes the 9 rolling features and uses the 15-feature v4 model; when absent
-it falls back to the 6-feature v3 model. See the "Rolling features and
-gradual-onset detection (v4)" section for the full design, and Decision #21
-for the stateless-serving rationale. This entry is kept (rather than deleted)
-to record that the original "not integrated" decision was later revisited and
-reversed on stronger full-scale evidence.
-
-### 14. Why SMD real-world validation matters
-
-F1 = 0.269 on the Server Machine Dataset (28 real servers, public benchmark used by OmniAnomaly and other sequence-model papers). Much lower than synthetic F1, and this is the honest point: **published unsupervised sequence models on SMD report F1 in the 0.40-0.55 range** using recurrent architectures that read a sliding window of history. This project prioritizes training speed, interpretability, and simple CI/CD-integrated deployment over the marginal accuracy gains of a recurrent sequence model -- a documented tradeoff, not an oversight. The SMD result's purpose is not to win on the benchmark; it confirms the same per-machine, per-window z-score methodology generalizes to real, independently-collected data and isn't an artifact of the synthetic generator. `ml-model/load_smd.py` is the adapter that makes this data loadable through the same pipeline; it remains in the repository and is not part of the production training path.
-
-### 15. Why MLflow + MinIO run outside the Kubernetes cluster
-
-Same reasoning as Jenkins, SonarQube, and the local Docker registry: **shared platform/tooling services supporting the development process are not the product being served to end users**. In a real organization, one MLflow server tracks experiments across many projects; it does not live inside a single project's own K8s namespace. Only the anomaly-api workload runs in K8s (namespace `ml-serving`), matching how production would separate stateful tooling from stateless application deployments. As of the most recent infrastructure pass, MLflow itself now runs as a supervised systemd service rather than a manually-started process -- see [Ansible (L6)](#ansible-l6) -- closing a real gap where it had, for a time, not been running at all.
-
-### 16. Why the CI/CD pipeline uses fail-fast pytest before SonarQube
-
-Stage 1b (pytest) runs the full test suite before any downstream stage. If a commit breaks the tests, the pipeline stops immediately, before wasting 5-10 minutes on SonarQube scanning, Docker build, Trivy CVE scan, and registry push. The Quality Gate itself, however, changed since this decision was first written: it originally did **not** abort the pipeline (`abortPipeline: false`) on the reasoning that code-quality issues are advisory. That reasoning was revisited in the most recent CI/CD pass and reversed -- `abortPipeline: true` is now set, proven live by two real pipeline runs that correctly stopped on a genuine Quality Gate failure before this change was validated. See [CI/CD (L3)](#cicd-l3) for the full current pipeline and why the change was made.
-
-### 17. Why the custom SonarQube Quality Gate
-
-The default Sonar Way gate demands 80% coverage and less than 3% duplication. Neither threshold fits a research-heavy ML repository where most of `ml-model/` is one-shot experiment scripts (not library code intended for unit testing) and 20%+ duplication is intentional (near-identical variant scripts for A/B comparison). Custom gate `devsecmlops-pfe-research`: coverage >= 5% (project has 6.7%, passes honestly), duplication <= 25% (has 21%, passes honestly), 0 New Issues (strict), Security Hotspots strict. **This is engineering judgment, not gaming the metric** -- adjusting thresholds to reflect what "good" actually means for this project, while keeping bug/security requirements strict.
-
-### 18. Why models are baked into the Docker image (v1, v3, v4), not fetched
-
-Image tag = exact model version. Immutable, reproducible, no runtime dependency on external artifact storage. v2's 125MB RandomForest violated this rule -- too large for git and too large to bake into the image comfortably -- so v2 needed the MinIO-fetch entrypoint as a workaround. The switch to v3 XGBoost (3.6MB) restored the baked-in pattern and eliminated the MinIO dependency for the primary model; v4's artifacts follow the same small-and-baked-in pattern.
-
-### 19. Why v2 code paths were kept alive after v3 switch
-
-Setting `MODEL_NAME=telecom_v2` in the K8s deployment env still fully works. The v2 loading block, MinIO fetch entrypoint, and RandomForest artifact all remain functional. Reason: **additive changes are safer than destructive ones**, and defense-day A/B comparison ("here's v2 running with RandomForest, here's v3/v4 running with XGBoost, watch them differ on the same input") is a real, tangible demonstration that would be lost if v2 were deleted.
-
-### 20. Why the decision threshold is 0.60, selected by method (revised)
-
-v3/v4 flag an anomaly when P(normal) falls below a threshold. This decision
-was originally written to justify **0.85**, and that original choice did
-have real evidence behind it -- a documented sweep at 0.50/0.85/0.95 on the
-XGBoost classifier alone, with 0.85 chosen for preserving usable alert
-precision. What that sweep never did is account for the served decision as
-a whole: it measured the classifier in isolation, never re-validated after
-the IsolationForest safety net's OR-gate was added to the served path. The
-reasoning about *priorities* -- a missed incident costing more than a false
-alarm -- was correct then and is kept now; what was missing was measuring
-the actual served decision, not the classifier alone. The
-threshold is now selected by `ml-model/select_threshold.py`, which sweeps
-0.05-0.95 on a validation fleet the classifiers and the search itself never
-train or tune on (seed 7, separate from both the seed-42 training set and the
-seed-123 test set), maximizing **F2** -- recall weighted twice precision,
-which is exactly the "a miss costs more than a false alarm" priority this
-decision always argued for, now backed by a real sweep instead of a single
-chosen number. The result, 0.60, is recorded with its full evidence curve in
-`models/manifest.json`, and a CI gate (`scripts/verify_model_manifest.py`)
-enforces that every deployment file agrees with it. See
-[Choosing the decision threshold](#choosing-the-decision-threshold-new) below
-for the full table. Configurable via the `PREDICT_THRESHOLD` env var without
-code changes, as before.
-
-### 21. Why the client supplies rolling history (stateless v4 serving)
-
-v4 needs the last 10 readings per machine to compute rolling features. Three
-ways to get them: (a) keep per-machine buffers inside the API pods -- but with
-2+ replicas sharing no state, buffers would be inconsistent and would need
-Redis or sticky routing; (b) have the API query Prometheus on every /predict
--- couples the API to Prometheus and doubles latency; (c) have the CLIENT send
-the history in the request. We chose (c): it matches how real monitoring
-systems work (Datadog/New Relic clients compute and ship features), keeps the
-API stateless and horizontally scalable, and makes v4 backward compatible
-(history absent -> v3 fallback). The serving-side rolling computation is
-verified byte-identical to the training-time function.
-
-### 22. Why the feedback DB was rebuilt from SQLite to PostgreSQL
-
-The feedback loop was first built on SQLite (single file on a PVC). That was
-rebuilt to PostgreSQL (StatefulSet + headless Service + Secret + PVC) for
-genuine production-readiness: multiple API replicas can write concurrently
-without file-lock contention (verified: 20 parallel writes in 0.45s), data
-survives a hard pod kill (verified: StatefulSet recreates, PVC persists), and
-it is a standard client-server DB rather than a shared-file compromise. A real
-bug surfaced during the rebuild and is worth recording: the column originally
-named `window` is a PostgreSQL reserved keyword (SQLite accepted it), so it was
-renamed to `time_window`; and the K8s env ordering matters -- POSTGRES_PASSWORD
-must be declared before DATABASE_URL for `$(VAR)` substitution to resolve.
-The most recent security pass rotated this database's actual password live
-(the previous one had been committed to git) and hardened the connection
-handling further -- see [Security](#security-posture-new) and
-[Kubernetes](#kubernetes-l4) below.
-
-### 23. Why feedback logging is best-effort, not fail-loud (graceful degradation)
-
-Model serving (/health, /predict) is the critical function; the feedback log is
-secondary. Originally the API called the DB on startup and on every /predict,
-so an unreachable database crashed the whole app -- which also broke the CI
-smoke test (the container runs standalone with no PostgreSQL). Fixed with a
-FEEDBACK_DB_AVAILABLE flag and a _safe_insert_prediction wrapper: if the DB is
-down, the API logs a warning and keeps serving predictions (prediction_id comes
-back null, logging is skipped). More robust in production AND makes the smoke
-test pass -- a monitoring API should never stop detecting anomalies because its
-feedback log is offline. Hardened further in the most recent pass: the
-connection now retries automatically every 30 seconds rather than requiring a
-pod restart, and the feedback endpoints (which genuinely need the database)
-now return a proper `503` instead of an uncaught `500` when it is down.
-
-### 24. Why the retrain guardrail is strict, and what 500 rows proved (updated)
-
-The retrain pipeline only promotes a new model if aggregate F1 does not drop
-AND per-cause recall drops by no more than a small, fixed margin on any
-category. The original guardrail (`scripts/retrain_from_feedback.py`, since
-superseded) used a 5-point recall margin; the current one
-(`ml-model/train_production.py --feedback`, the single canonical training
-path — see [The ML model](#the-ml-model)) is stricter: **zero** aggregate F1
-regression allowed at all (`--max-f1-drop 0.0`) and a 2-point recall margin
-(`--max-recall-drop 0.02`). The finding this decision records is unchanged and
-still real: tested end-to-end with 500 simulated operator verdicts, the
-retrained model scored F1 0.709 vs the current 0.718 (offline numbers from
-that test, predating the threshold and evaluation corrections elsewhere in
-this document), and the guardrail correctly **REJECTED** it. This exposed a
-real, honest finding: 500 feedback rows against millions of training rows is
-a tiny fraction of the signal -- too little to move the model regardless of
-sample-weight. Meaningful improvement needs thousands of real verdicts
-accumulated over weeks/months; the pipeline is production-ready and the
-guardrail protects production in the meantime. (A z-score evaluation bug was
-also found and fixed while verifying this: a quick eval script that skipped
-add_window_column + apply_zscore mis-scored the baseline; the canonical F1
-was confirmed once the correct preprocess path was used -- the same class of
-"evaluate through the real served path, not a shortcut" discipline that
-`ml-model/decision.py` now enforces structurally for every reported number in
-this project.)
-
----
-
-## The ML model
-
-### Why Isolation Forest (updated — corrected methodology)
+#### Why Isolation Forest (updated — corrected methodology)
 
 Six anomaly-detection methods have been benchmarked on the same data,
 `ml-model/benchmark.py`. **The methodology this comparison uses was corrected
@@ -498,92 +305,11 @@ Comparing "raw" vs "z-scored" in the table shows the z-score normalization
 step is what actually drives its performance — raw F1 0.300, z-scored F1
 0.657, more than double.
 
-### Why unsupervised, not supervised
+### What we tried and rejected, and how the model evolved (v1 -> v4)
 
-A supervised classifier (Random Forest, XGBoost, etc.) would score higher F1
-on this labeled synthetic dataset, but it needs labeled anomalies to train.
-Production infrastructure has none — nobody manually labels every anomalous
-minute across 200 servers. Isolation Forest learns "normal" from the incoming
-metric stream with zero labels, and can flag anomaly *types* it has never
-seen before. The dataset's `label` column is used only to evaluate the model,
-never to train it. (The project did add a supervised layer on top later — see
-"ML model v2" below — but kept Isolation Forest as a permanent safety net for
-exactly this reason: it is the one part of the design that needs no labels at
-all, and so is the one part that would already work on a genuinely
-unlabeled, real deployment today.)
+Real, sequential experiments across this project's development, kept because a rejected approach with real numbers is as valuable as an adopted one.
 
-### Why per-machine, per-time-window baselines
-
-Every metric is z-scored *before* reaching the model:
-
-```
-z = (raw_value - machine's own mean for this time window) / machine's own std
-```
-
-A web server idling at 30% CPU and a database server running hot at 75% CPU
-are both "normal" — a single global threshold can't capture that, but a
-per-machine baseline can.
-
-Baselines are split into four **time windows** — night (00–06), morning
-(06–12), afternoon (12–18), evening (18–24) — because a single all-day
-average smooths out day/night variation. This was tested rigorously
-(`ml-model/test_timewindow_full.py`, full 200-machine fleet, threshold-tuned
-comparison):
-
-| Baseline strategy | F1 (tuned threshold) | ROC-AUC |
-|---|---|---|
-| Per-machine, all-day | 0.6434 | 0.9066 |
-| **Per-machine, per-time-window (shipped)** | **0.6475** | **0.9091** |
-| Per-machine + explicit time features (hour_sin/cos) | 0.6064 | 0.8964 |
-
-Explicit time features were tested and **rejected**: the per-machine baseline
-already implicitly encodes temporal patterns, so adding time as a separate
-column is redundant and slightly hurts the decision boundary.
-
-**Four-level fallback chain** for machines the model has never seen:
-`machine+window → machine (all-day) → machine type → global fleet average`.
-The API reports which level was used on every prediction (`baseline_used`).
-
-### Why 6 features
-
-The model started with 3 features (cpu, ram, network) and was expanded to 6:
-`cpu, ram, network, disk_io, disk_usage, load_avg`. Three features miss
-entire classes of real incidents — a disk filling up produces almost no
-signal in cpu/ram/network. With 6 features, disk saturation anomalies are
-detectable (disk_usage z=4.93, load_avg z=5.31 while cpu/ram/network stay
-near zero, proved with a live `/predict` demo).
-
-**Network gear** (router/firewall/dns/voip) has near-zero disk/load metrics
-by design, not a shortcut: they are SNMP-monitored appliances with no
-physical disk (they boot from flash), matching real telco edge architecture
-where compute nodes connect through a transport router.
-
-### Data resolution: 1-minute vs 30-second (tested, adopted)
-
-The model currently trains on 30-second-resolution synthetic data (one
-reading per machine every 30 seconds), switched from an original 1-minute
-resolution after a controlled full-scale experiment: 200 machines, 30 days,
-matched anomaly ratio (~6.75%), same seed and hyperparameters, only the
-sampling interval changed.
-
-| Metric | 1-minute (previous) | 30-second (current) | Delta |
-|---|---|---|---|
-| F1 | 0.648 | 0.663 | +0.015 |
-| ROC-AUC | 0.924 | 0.926 | +0.002 |
-| Recall | 0.650 | 0.667 | +0.017 |
-| Dataset size | 613 MB | 1226 MB | 2× |
-| Full retrain time | 2m 4s | 3m 55s | 2.1× |
-
-Result: finer resolution genuinely improves every metric, modestly and
-reproducibly. It also has a real cost: generating the 30-second dataset at
-full scale was killed by the Linux OOM killer on first attempt (confirmed
-via `dmesg`: `anon-rss:4133168kB` before termination on a 7.7GB VM),
-succeeding only on retry with more available memory. We adopted 30-second
-resolution because the accuracy gain was consistent and the memory
-constraint was resolved — but the tradeoff (2× storage, 2× retrain time,
-real memory risk on constrained hardware) is documented, not glossed over.
-
-### Cascading failures and root cause analysis
+#### Cascading failures and root cause analysis
 
 **What was tried and reverted.** A two-layer dependency model was built and
 tested: a network layer (router → downstream machines, shipped) and a
@@ -640,7 +366,7 @@ training data or the root-cause graph.
 
 ---
 
-## ML model v2: labeled cause classification (July 2026)
+#### ML model v2: labeled cause classification (July 2026)
 
 The original Isolation Forest (above) is unsupervised and flags anomalies
 without saying why. A second experiment track added labeled cause data and
@@ -670,8 +396,8 @@ cascade 0.029.
 > the v3/v4 switch, the threshold correction, and the served-decision-rule
 > discipline this document now enforces throughout. Do not read `0.731` as a
 > current production number — the current one is 0.7246 served (v4,
-> threshold 0.60), stated in [Status](#status) and
-> [The ML pipeline (current)](#the-ml-pipeline-current) below.
+> threshold 0.60), stated in [Executive summary](#executive-summary) and
+> [Current production](#current-production-the-numbers-that-supersede-everything-above) below.
 
 **Why both models are kept, not just the better one:** `cascade` labels
 are only 40% consistent by generator design (a downstream machine affected
@@ -772,7 +498,7 @@ not committed — 125MB exceeds GitHub's 100MB limit, fully reproducible via
 `random_state=42`, deterministic), `models/telecom_iso_v2.pkl`
 (IsolationForest, committed), `models/telecom_baselines_v2.json`.
 
-## ML model v3: XGBoost primary (July 2026)
+#### ML model v3: XGBoost primary (July 2026)
 
 After the v2 evaluation, a sixth model comparison was run: XGBoost as a
 potential replacement for the RandomForest primary. Trained on the same
@@ -842,10 +568,10 @@ real advantage over the already-deployed XGBoost.
 > the time. v3 is still shipped, as the fallback path whenever a request
 > has no rolling history — its current, corrected served F1 (independent
 > seed-123 test set, threshold 0.60) is **0.6496**, stated in
-> [Status](#status). See "v4" immediately below for what replaced it as
+> [Executive summary](#executive-summary). See "v4" immediately below for what replaced it as
 > the primary path.
 
-## Rolling features and gradual-onset detection (v4)
+#### Rolling features and gradual-onset detection (v4)
 
 The v3 model looks at ONE reading in isolation: is this cpu/ram/etc snapshot anomalous right now? This works for sudden spikes but struggles with **gradual-onset** anomalies -- a memory leak where ram climbs slowly from 60% to 95% over several minutes. At any single moment the reading looks only mildly elevated; the anomaly is in the *trend*, not the *value*.
 
@@ -857,7 +583,7 @@ v4 adds 9 rolling/trend features on top of the 6 z-scored base features (15 tota
 
 Applied only to metrics where change-over-time is diagnostic. disk_usage (accumulates monotonically), disk_io (already noisy), and network (spikes are normal) are excluded.
 
-### Offline results at the time (full-scale, same seed-123 test set as v3)
+##### Offline results at the time (full-scale, same seed-123 test set as v3)
 
 | Model | F1 | Precision | Recall |
 |---|---|---|---|
@@ -866,9 +592,9 @@ Applied only to metrics where change-over-time is diagnostic. disk_usage (accumu
 
 +0.098 F1, +0.156 precision, +0.056 recall at the time -- a large, real improvement. Per-cause recall improved on every category except cascade (which stays limited by the 40%-consistent label noise documented above): cpu_spike 0.894 -> 0.982, memory_leak 0.736 -> 0.909 (the +17-point gradual-onset win), network_flood 0.915 -> 0.976, disk_saturation 0.977 -> 0.994, silent_failure 0.906 -> 0.978.
 
-> **This F1=0.816 figure is the classifier alone, at threshold 0.5 — not the served decision, and not at the threshold now deployed.** It is real and it is kept here because it is genuinely informative about the classifier's own strength. The number this project now reports as "production" is the *served* decision (classifier OR IsolationForest) at the *measured* threshold (0.60): **F1 = 0.7246**. See [Status](#status) and [The ML pipeline (current)](#the-ml-pipeline-current) for the full, current, corrected numbers and the reasoning behind every difference from this section.
+> **This F1=0.816 figure is the classifier alone, at threshold 0.5 — not the served decision, and not at the threshold now deployed.** It is real and it is kept here because it is genuinely informative about the classifier's own strength. The number this project now reports as "production" is the *served* decision (classifier OR IsolationForest) at the *measured* threshold (0.60): **F1 = 0.7246**. See [Executive summary](#executive-summary) and [Current production](#current-production-the-numbers-that-supersede-everything-above) for the full, current, corrected numbers and the reasoning behind every difference from this section.
 
-### Live K8s results at the time (33,600-request two-week demo, threshold 0.85)
+##### Live K8s results at the time (33,600-request two-week demo, threshold 0.85)
 
 | Config | F1 | Precision | Recall | Cause acc |
 |---|---|---|---|---|
@@ -881,10 +607,10 @@ v4 beat v3 on every live metric at the time, zero errors on 33,600 requests. mem
 > a documented search** — see [Engineering decision 20](#20-why-the-decision-threshold-is-060-selected-by-method-revised).
 > A proper F2-maximizing sweep on an independent validation fleet selected
 > **0.60** instead. A fresh live validation at the corrected threshold, against
-> the real deployed cluster, is in [The ML pipeline (current)](#the-ml-pipeline-current):
+> the real deployed cluster, is in [Current production](#current-production-the-numbers-that-supersede-everything-above):
 > F1 = 0.7267 on 2,200 real requests, 0 errors, every one served by v4.
 
-### Serving architecture: client supplies history (stateless API)
+##### Serving architecture: client supplies history (stateless API)
 
 Rolling features need the last 10 readings, but the API is stateless (each /predict is independent, replicas share no state). Rather than add per-machine buffers in the pods (needs Redis / cross-replica sync) or query Prometheus on every call (couples API to Prometheus, doubles latency), v4 uses the pattern real monitoring systems use: **the client supplies the history**.
 
@@ -906,13 +632,13 @@ The /predict request gains an optional `history` field:
 
 The serving-side rolling-feature computation is verified BYTE-IDENTICAL to the training-time function (`ml-model/preprocess.add_rolling_features`) on the same input -- a mismatch would feed the model garbage features, so this equivalence is explicitly tested (`tests/test_api.py::test_rolling_features_match_training_pipeline`).
 
-The traffic source that actually builds this history for every machine, continuously, is `monitoring/production_agent.py` — see [Monitoring (L5)](#monitoring-l5) for its full design, including a real bug (random-row sampling that could never assemble a genuine history window) found and fixed during the most recent review.
+The traffic source that actually builds this history for every machine, continuously, is `monitoring/production_agent.py` — see [L5 — Observability](#l5--observability-and-mlops) for its full design, including a real bug (random-row sampling that could never assemble a genuine history window) found and fixed during the most recent review.
 
-### Why v4 is additive, not a replacement
+##### Why v4 is additive, not a replacement
 
 v3 remains fully functional and is the fallback whenever history isn't available. This means the system degrades gracefully: a client that can't supply history still gets v3-quality predictions rather than an error. Both models are baked into the image; the routing is per-request.
 
-### Per-class thresholds and the master comparison
+##### Per-class thresholds and the master comparison
 
 The single-threshold rule (flag if P(normal) < T) applies one cutoff to every
 cause. But causes differ: `cascade` is rare and weak (needs a low bar),
@@ -977,7 +703,7 @@ them is: per-class thresholding was explored and found to work well but was
 not the direction shipped; a single, evidence-selected threshold (0.60, by
 F2) is what production actually runs today.
 
-### Live serving validation: offline metrics vs the real API (at the time)
+##### Live serving validation: offline metrics vs the real API (at the time)
 
 The master-comparison numbers above are **offline, XGBoost-only** — the model
 scored directly on the test matrix. To check they held through the *actual
@@ -1009,18 +735,18 @@ experiment found.
 
 A further, more recent live-serving validation — against the actual
 deployed Kubernetes cluster, at the corrected threshold, on the independent
-test set — is in [The ML pipeline (current)](#the-ml-pipeline-current): 2,200 real
+test set — is in [Current production](#current-production-the-numbers-that-supersede-everything-above): 2,200 real
 requests, 0 errors, F1 0.7267.
 
 ---
 
-## The ML pipeline (current)
+### Current production (the numbers that supersede everything above)
 
 This section is the single source of truth for every number this document
 calls "current" or "production" elsewhere — the endpoint of the v1→v2→v3→v4
 history above, after the most recent correction pass.
 
-### The canonical training path
+#### The canonical training path
 
 A single script, `ml-model/train_production.py`, is now the only route to a
 promoted production model — it superseded the separate, earlier
@@ -1035,7 +761,7 @@ deployment actually returns), applies the guardrail described in
 and — only with `--promote` and only if the guardrail passes — writes
 artifacts and records full lineage in `models/manifest.json`.
 
-### Choosing the decision threshold (new)
+#### Choosing the decision threshold (new)
 
 v3/v4 flag an anomaly when `P(normal)` falls below a threshold. As explained
 in [Engineering decision 20](#20-why-the-decision-threshold-is-060-selected-by-method-revised),
@@ -1061,7 +787,7 @@ under `production.threshold_selection`. A CI gate
 deployed in every Kubernetes manifest, every Ansible template, and the API's
 own default all agree with the one the evaluation was measured at.
 
-### Production numbers (independent test set, 17,280,000 rows, threshold 0.60)
+#### Production numbers (independent test set, 17,280,000 rows, threshold 0.60)
 
 | Served path | Precision | Recall | F1 | Classifier-only F1 |
 |---|---|---|---|---|
@@ -1084,7 +810,7 @@ never the product of the search above; it was this project's original,
 unmeasured default. `0.7246` at threshold `0.60` is what a request to this
 deployment actually returns today.
 
-### Live validation against the real, running cluster
+#### Live validation against the real, running cluster
 
 `scripts/live_k8s_validation.py` sends real requests through the NodePort to
 the real deployment, sampling every machine every 4 hours across the
@@ -1109,12 +835,12 @@ corrected (this script now reads only the seed-123 independent file, with
 its SHA-256 recorded in the output specifically so the claim is checkable),
 and this run is the current, trustworthy record.
 
-### The unsupervised-model comparison (updated)
+#### The unsupervised-model comparison (updated)
 
-Already covered in full in [The ML model](#the-ml-model) above, with the
+Already covered in full in [Why Isolation Forest](#why-isolation-forest-updated--corrected-methodology) above, with the
 corrected benchmark methodology and the current numbers.
 
-### Model integrity
+#### Model integrity
 
 `models/manifest.json` (schema 2) records, for the current production
 model: every artifact's SHA-256, the datasets it was trained and evaluated
@@ -1126,13 +852,13 @@ refused, not loaded.
 
 ---
 
-## Feedback loop and online learning
+### Feedback loop and retraining
 
 The core limitation of every model version up to v2.11.1 is that the model is **static**: once trained on the synthetic seed-42 data, it never improves regardless of what happens in production. If the model flags 500 false alarms in a month and operators mark them all as fake, the model keeps making the same 500 false alarms next month.
 
 This section documents the feedback loop that changes that -- an infrastructure for the model to learn over time from real operator judgments about its predictions.
 
-### Feedback-loop architecture
+#### Feedback-loop architecture
 
 Every prediction the API makes gets stored in a persistent database. Operators can submit verdicts on those predictions (true positive, false positive, true negative, false negative). A retrain pipeline periodically combines this labeled feedback with the original training data to produce an improved model, with guardrails that prevent deploying a worse model.
 
@@ -1143,7 +869,7 @@ Four independent pieces:
 3. **Query endpoints** -- `GET /predictions/recent` and `GET /feedback/stats` for inspecting accumulated data.
 4. **Export + retrain pipeline** -- `scripts/export_feedback_dataset.py` snapshots labeled feedback as a fingerprinted dataset, and `ml-model/train_production.py --feedback <file> --promote` combines it with original training data, retrains, evaluates against current production, and only promotes if guardrails pass. This is a real change from the original design (see below).
 
-### Data model
+#### Data model
 
 Single PostgreSQL table `predictions`, served by a dedicated PostgreSQL
 StatefulSet in the `ml-serving` namespace (data survives pod restarts and
@@ -1181,7 +907,7 @@ Verdict semantics:
 - `true_negative`: model said normal, and it really was normal (rarely submitted, since normals are the default assumption)
 - `false_negative`: model missed a real anomaly (operator caught it separately, submits feedback referencing the prediction_id of what should have been flagged)
 
-### API endpoints
+#### API endpoints
 
 **`POST /predict`** -- response includes `prediction_id` (UUIDv4). On every call, writes a new row to the DB with all fields except the three verdict columns (which start NULL).
 
@@ -1193,7 +919,7 @@ Verdict semantics:
 
 All feedback-DB endpoints now return `503` (not an uncaught `500`) when the database is genuinely unreachable — see [Engineering decision 23](#23-why-feedback-logging-is-best-effort-not-fail-loud-graceful-degradation).
 
-### Storage
+#### Storage
 
 A PostgreSQL StatefulSet (`postgres`) in the `ml-serving` namespace, backed by
 a persistent volume claim. A headless Service gives the StatefulSet a stable
@@ -1224,7 +950,7 @@ is unreachable, the API keeps serving predictions and simply skips logging
 rather than failing the request, and the connection now retries automatically
 every 30 seconds.
 
-### Export + retrain pipeline (updated — real change from the original design)
+#### Export + retrain pipeline (updated — real change from the original design)
 
 The original design here used a dedicated `scripts/retrain_from_feedback.py`
 script. **That script has been removed and replaced** by
@@ -1250,17 +976,17 @@ the original 5-point design). The pipeline today:
    (`tests/test_train_production.py::test_rejected_candidate_leaves_production_untouched`)
    to be byte-identical, not just "probably fine."
 
-### Deployment cycle after a promoted retrain
+#### Deployment cycle after a promoted retrain
 
 A promoted retrain writes new artifacts directly; getting them served is the
 same automated path every other change takes through this project's CI/CD —
-see [CI/CD (L3)](#cicd-l3). `Jenkinsfile.model` is the dedicated, on-demand
+see [L3 — CI/CD](#l3--cicd). `Jenkinsfile.model` is the dedicated, on-demand
 job for the whole cycle (export → train → guardrail → commit → trigger the
 main deployment pipeline if promoted) — committed and syntax-valid, though
 not yet run for real end to end; see [Known limitations](#known-limitations-and-future-work)
 for what it still needs.
 
-### Rollback story
+#### Rollback story
 
 If a promoted retrain later turns out to be a real regression the guardrail missed:
 
@@ -1269,7 +995,7 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 3. K8s rolling update reverts, no data loss (the feedback database is untouched by a code/model rollback)
 4. Retrain again, or investigate why the guardrail didn't catch the regression
 
-### Explicitly deferred to future versions
+#### Explicitly deferred to future versions
 
 - Operator UI / dashboard -- feedback submitted via the training/operator tabs in the control panel, or directly via the API
 - A scheduled (rather than manual/on-demand) retrain trigger
@@ -1279,7 +1005,42 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 
 ---
 
-## API
+### Files
+
+| File | What it does |
+|---|---|
+| `ml-model/generate_telecom_fleet.py` | The synthetic-fleet generator. 200 machines across 11 roles, 30 days of readings, injects the six anomaly causes with full ground truth. |
+| `ml-model/preprocess.py` | Baseline construction, z-scoring, and rolling-feature computation — imported directly by `api/app.py`, so training and serving compute features identically by construction. |
+| `ml-model/preprocess_robust.py` | A second baseline implementation using trimmed/winsorized statistics, used only inside `benchmark.py` as the "robust z-score" comparison row. |
+| `ml-model/decision.py` | The served decision rule (`classifier OR IsolationForest`), scalar and vectorized forms, verified to agree exactly. Imported by both the API and every evaluation script. |
+| `ml-model/train_production.py` | The single canonical training path — the only route to a promoted production model. |
+| `ml-model/select_threshold.py` | Sweeps the decision threshold on the validation fleet, maximizing F2. |
+| `ml-model/benchmark.py` | The six-model unsupervised comparison, time-ordered per-machine split, per-machine point-adjustment. |
+| `ml-model/root_cause.py` | Dependency-graph root-cause ranking, backs `POST /root-cause`. |
+| `ml-model/zscore_demo.py` | A standalone demonstration that the same raw value is scored differently by machine and hour. |
+| `ml-model/load_smd.py` | Adapter for the real Server Machine Dataset (28 real machines, anonymized channels) — not part of the production training path. |
+| `ml-model/train_serving_telecom.py`, `train_serving_telecom_robust.py` | Earlier, standalone trainers predating `train_production.py`'s unification. |
+| `ml-model/train_serving_telecom_novelty.py` | The novelty-detection experiment (tested, rejected, kept as evidence). |
+| `scripts/export_feedback_dataset.py` | Snapshots labeled operator feedback as a fingerprinted training dataset. |
+| `scripts/verify_model_manifest.py` | The CI model gate — artifact SHA-256 + recorded F1 + deployment-file threshold agreement. |
+| `scripts/live_k8s_validation.py` | Real-cluster validation against the independent test set. |
+| `scripts/master_comparison.py` | The 12-configuration threshold/feedback experiment. |
+| `models/telecom_xgb_classifier_v2.pkl`, `telecom_xgb_label_encoder_v2.pkl` | v3 XGBoost classifier + encoder. |
+| `models/telecom_xgb_v4_rolling.pkl`, `telecom_xgb_v4_rolling_encoder.pkl` | v4 XGBoost classifier + encoder. |
+| `models/telecom_iso_v2.pkl` | The IsolationForest safety net, shared by v3 and v4. |
+| `models/telecom_baselines_v2.json` | Per-machine, per-window z-score baselines. |
+| `models/dependency_graph.json` | Router -> machine relationships for root-cause ranking. |
+| `models/manifest.json` | Full lineage: artifact SHA-256 hashes, dataset fingerprints, the selected threshold and its evidence, the recorded evaluation. |
+| `models/history/` | Every promoted model, timestamped — a real evidence trail. |
+| `data/telecom_fleet_v2_labeled.csv` (seed 42), `_val.csv` (seed 7), `_test.csv` (seed 123) | Training, threshold-selection, and evaluation data — three separate files, never mixed. |
+
+---
+
+## L1 — Serving API
+
+FastAPI, `api/app.py`. Serves the hybrid v3/v4 decision, root-cause ranking, the feedback loop, and the mission-control operations console.
+
+### What we tested
 
 FastAPI service, model baked into the Docker image. Rebuild cost is
 seconds, so image tag = exact model version.
@@ -1296,7 +1057,7 @@ GET  /metrics                Prometheus exposition
 GET  /ui/*                   operations console -- see Security posture
 ```
 
-### POST /predict
+#### POST /predict
 
 ```json
 {
@@ -1323,7 +1084,7 @@ finite values each) rather than accepted and silently mis-shaped; malformed
 or missing metrics, non-finite values, and out-of-range machine names are
 all rejected at the API boundary rather than reaching the model.
 
-### POST /root-cause
+#### POST /root-cause
 
 ```json
 {
@@ -1343,7 +1104,7 @@ returns them ranked by root-cause likelihood with a role assigned to each:
 
 ---
 
-## Control panel (mission-control UI)
+### Control panel (mission-control UI)
 
 A single web console served by the API at `/ui` that drives the entire
 platform by clicking, not commands — built as the live-demo and operator
@@ -1378,7 +1139,7 @@ Tabs:
   health, and the machines currently flagged anomalous.
 - **Project** — a results summary.
 
-### Honest demo evaluation, and a bug it exposed
+#### Honest demo evaluation, and a bug it exposed
 
 The Demo tab is deliberately built to be *honest*, and getting there
 surfaced a real, instructive bug. Two design rules make it trustworthy:
@@ -1407,18 +1168,18 @@ surfaced a real, instructive bug. Two design rules make it trustworthy:
    metrics were never affected.** Kept here because it is a clean
    illustration of why per-time-window baselines matter.
 
-### How it is served
+#### How it is served
 
 The control panel ships in the Docker image, so `/ui` is available wherever
 the API runs — though the Kubernetes serving pods never set `ENABLE_OPS_UI`,
 so it is unreachable there by design. For the demo it runs as a systemd
 service (`control-panel.service`, via Ansible — see
-[Infrastructure as Code](#ansible-l6)) so its status/infra endpoints have
+[L6 — Ansible](#l6--ansible-infrastructure-as-code)) so its status/infra endpoints have
 native access to `kubectl`, `docker`, and Prometheus on the VM.
 
 ---
 
-### Training console (interactive MLOps: train and verify)
+#### Training console (interactive MLOps: train and verify)
 
 The control panel also exposes the **model lifecycle** interactively, through
 a Training tab that turns "train a model, check it" into something you can
@@ -1472,6 +1233,17 @@ found and fixed in the most recent security pass; see
 
 ---
 
+### Files
+
+| File | What it does |
+|---|---|
+| `api/app.py` | The FastAPI application — every endpoint above, input validation, Prometheus metrics, artifact-integrity checking before unpickling, and the ops-UI guard. |
+| `api/feedback_db.py` | PostgreSQL access for logging predictions and recording operator verdicts. |
+| `api/training.py` | Backend for the training console — dataset selection (with the path-traversal fix), representative sampling, comparing a candidate against production. |
+| `api/static/control_panel.html` | The mission-control UI, served at `/ui`. |
+| `tests/test_api.py` (27 tests), `test_decision.py`, `test_training_console.py` | Covered in full in [Testing](#testing) below. |
+
+---
 ## Security posture (new)
 
 Added in the most recent review pass, consolidating every hardening measure
@@ -1490,17 +1262,12 @@ across the whole platform in one place:
 
 ---
 
-## Docker (L2)
+## L2 — Container Image
 
-- Base: `python:3.12-slim-trixie` (upgraded from `3.10-slim` in the most
-  recent pass), non-root `appuser` (uid/gid 10001), layer-cached deps,
-  model and dependency graph baked into the image.
-- **A real bug found and fixed**: a version pin in a `RUN` command,
-  `wheel>=0.46.2`, was unquoted — the shell interpreted `>` as a file
-  redirect, so `wheel` was actually installed completely unpinned, silently.
-- `pip` and `ensurepip` are removed from the final image after dependencies
-  install — neither is needed at runtime, and their presence would be an
-  unnecessary attack surface.
+### What we did
+
+- Base: `python:3.12-slim-trixie` (upgraded from `3.10-slim`), non-root `appuser` (uid/gid 10001), layer-cached deps, model and dependency graph baked into the image.
+- `pip` and `ensurepip` are removed from the final image after dependencies install — neither is needed at runtime, and their presence would be an unnecessary attack surface.
 - `HEALTHCHECK` on `/health`, same endpoint K8s liveness probes use.
 - Local registry (`registry:2`, port 5000) for Jenkins to push to.
 
@@ -1509,80 +1276,83 @@ docker build -t devsecmlops-api:$(cat VERSION) .
 docker run -p 8000:8000 devsecmlops-api:$(cat VERSION)
 ```
 
----
+### Real bugs found and fixed
 
-## CI/CD (L3)
+- **A version pin in a `RUN` command, `wheel>=0.46.2`, was unquoted** — the shell interpreted `>` as a file redirect, so `wheel` was actually installed completely unpinned, silently, into a file literally named `=0.46.2`.
+- **The comment `# Copy the ONE shipped model artifact` preceded copying 6+ files** (v3/v4 XGBoost, encoders, IsolationForest, baselines, dependency graph, manifest) — misleading for anyone reading the Dockerfile to reconstruct what's actually there. Corrected to describe what's real: `# Copy production inference artifacts (v3/v4 XGBoost + IsolationForest safety net)`.
+- **The legacy `MODEL_NAME=telecom_v2` path in `docker-entrypoint.sh` defaulted to `MINIO_ACCESS_KEY=admin` / `MINIO_SECRET_KEY=minioadmin123` when unset**, substituted directly into a real boto3 client — silently connecting with publicly-known credentials rather than failing. Fixed to fail closed (`: "${VAR:?message}"`), consistent with this project's security posture everywhere else. Verified live: unsetting both vars now genuinely aborts with a clear error instead of silently proceeding.
 
-**Rebuilt in the most recent review pass — 11 stages, every one a real
-gate.** The pipeline used to have 9-10 stages with two structural weaknesses:
-the SonarQube Quality Gate could not actually stop the build
-(`abortPipeline: false`), and Trivy's scan result was discarded
-(`|| echo "... non-blocking"`). Both are fixed.
+### Files
 
-1. **Checkout**
-2. **Unit tests** — pytest, 58 tests (up from 15), coverage report
-3. **SAST** — SonarQube
-4. **Quality Gate** — `abortPipeline: true`. Proven live: two real pipeline
-   runs correctly stopped here on a genuine `ERROR` status, with every later
-   stage cleanly skipped.
-5. **Repository scan + model gate** — `trivy fs` on the repository itself
-   (dependencies, secrets, IaC misconfigurations), and
-   `scripts/verify_model_manifest.py --min-f1 0.60`, which checks artifact
-   integrity and the recorded F1 *before* an image is even built. This
-   stage, and the model gate specifically, did not exist before this pass —
-   `F1_THRESHOLD` had been declared in the pipeline's environment block but
-   never actually checked anywhere.
-6. **Build the Docker image**
-7. **Container smoke test** — the built image is run with the **same
-   runtime restrictions the real pod uses** (`--read-only`,
-   `--cap-drop ALL`, `--user 10001:10001`), on the same Docker network
-   Jenkins itself is attached to, verified with `scripts/smoke_test.py`
-   (health, version, a v3 prediction, a v4 prediction, metrics, and that the
-   ops UI is genuinely absent). The previous version of this stage curled
-   `localhost` from *inside the Jenkins container*, which can never reach a
-   separately-networked test container — it always silently passed via a
-   swallowed shell error.
-8. **Image scan + SBOM** — `trivy image --exit-code 1`, plus a CycloneDX SBOM
-   archived as a build artifact. Neither existed before this pass (the scan
-   ran but its failing exit code was discarded).
-9. **Push to registry**
-10. **Deploy to Kubernetes** — see the "Automated deployment from Jenkins"
-    subsection below for how this actually reaches the cluster.
-11. **Post-deploy smoke test** — the same `scripts/smoke_test.py`, run via
-    `kubectl exec` inside the freshly deployed pod itself.
-
-`Jenkinsfile.model` is the separate, on-demand job for the model-retraining
-cycle — see [Export + retrain pipeline](#export-retrain-pipeline-updated-real-change-from-the-original-design)
-above.
-
-**Verified with three real, consecutive pipeline runs.** The first two
-correctly stopped at the Quality Gate — a genuine `ERROR` status caught both
-times (the underlying findings: two more undocumented `503` responses, two
-`dict()`-vs-literal style findings, and three items SonarQube's Python
-analyzer initially flagged as security-relevant that were confirmed, and
-marked, as false positives with their reasoning recorded directly in
-SonarQube). The third run went end to end: all 11 stages `SUCCESS`, the
-hardened smoke test passed both before and after deployment, and the final
-image scan reported **zero vulnerabilities** across every package in the
-image.
-
-**Earlier-cycle fixes, kept as real history:** 2 HIGH CVEs
-(CVE-2026-24049 wheel, CVE-2026-23949 jaraco.context) found by Trivy and
-fixed by version pinning; a SonarQube cycle that flagged a **hardcoded
-PostgreSQL password (Blocker)** and a cognitive-complexity violation on
-`predict()`, both fixed (the password moved to env/Secret sourcing,
-`predict()` split into per-model-version helper functions); a smoke-test
-robustness fix so the container serves `/health` even with no database
-reachable, which the current, hardened smoke test still relies on.
-
-Requires: SonarQube Scanner plugin, a `sonarqube-token` credential, the
-`sonar-scanner` CLI in the Jenkins image, and the dedicated
-`devsecmlops-net` Docker network for stable container-name DNS resolution
-between Jenkins, SonarQube, and the registry.
+| File | What it does |
+|---|---|
+| `Dockerfile` | The image build — Python 3.12, non-root, hardened, model artifacts baked in. |
+| `docker-entrypoint.sh` | Startup script; only does real work for the legacy `telecom_v2` path (MinIO fetch), fails closed if MinIO credentials aren't supplied. |
+| `.dockerignore` | Excludes `venv/`, `data/`, old models from the build context. |
+| `requirements-api.txt` | Pinned, curated dependencies — the same versions the host venv uses, since pickled models must be loaded by the version that wrote them. |
 
 ---
 
-## Kubernetes (L4)
+## L3 — CI/CD
+
+Jenkins, `Jenkinsfile`, 11 stages, every one a real gate — a failure stops the pipeline before anything downstream is built, pushed, or deployed. The pipeline used to have 9-10 stages with two structural weaknesses: the SonarQube Quality Gate could not actually stop the build (`abortPipeline: false`), and Trivy's scan result was discarded (`|| echo "... non-blocking"`). Both are fixed.
+
+### What we built
+
+Stage labels below match the Jenkins console exactly.
+
+- **1. Checkout**
+- **1b. Unit tests** — pytest, 58 tests, coverage report. Fail-fast: a broken commit stops here.
+- **2. SAST** — SonarQube.
+- **2b. Quality Gate** — `abortPipeline: true`.
+- **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, and that every deployment file uses the evaluated threshold — *before* an image is built.
+- **4. Build Docker image**
+- **5. Container smoke test** — the image runs with the **same runtime restrictions the real pod uses** (`--read-only`, `--tmpfs /tmp`, `--cap-drop ALL`, `--security-opt no-new-privileges`, `--user 10001:10001`) on `devsecmlops-net`, checked by `scripts/smoke_test.py` (health, version, a v3 prediction, a v4 prediction, metrics, ops UI absent).
+- **6. Image scan + SBOM** — `trivy image --exit-code 1`, plus a CycloneDX SBOM archived as a build artifact.
+- **7. Push to registry** — followed by a registry-catalog check over `registry:5000`.
+- **8. Deploy to Kubernetes** — `docker save | docker exec -i minikube docker load`, `kubectl set image`, `kubectl rollout status`.
+- **9. Post-deploy smoke test** — the same `scripts/smoke_test.py`, piped into the live pod via `kubectl exec`.
+
+`Jenkinsfile.model` is the separate, on-demand job for the model-retraining cycle — see [L0's feedback loop](#feedback-loop-and-retraining).
+
+### What we tested — every real run, in order
+
+Each failure below was a genuine problem, diagnosed from the log and fixed before the next run:
+
+| Run | Result | Cause | Fix |
+|---|---|---|---|
+| 1 | Stopped at 2b | Quality Gate `ERROR` — undocumented `503` responses, style findings | Documented the responses, fixed the findings |
+| 2 | Stopped at 2b | Quality Gate `ERROR` — two more `503`s, three findings confirmed as false positives | Fixed; false positives marked in SonarQube with reasoning |
+| 3 | Failed at 3 | Trivy's 117MB vulnerability DB download timed out | `--timeout 15m` on every Trivy call |
+| 4 | **SUCCESS** | — | All stages passed, zero image vulnerabilities |
+| 5 | Failed at 2 | `sonarqube: Name or service not known` | Declared `devsecmlops-net` on registry, minio, sonarqube in Ansible |
+| 6 | Failed at 2b | SonarQube task `FAILED` — Elasticsearch read-only at 95% disk | Reclaimed ~11GB of unused images and build cache |
+| 7 | **SUCCESS** | — | Build `2.20.3-b87`: all stages passed, zero vulnerabilities, model gate F1 0.7246, post-deploy smoke test through the live pod |
+
+Runs 1 and 2 are the evidence that the gate genuinely blocks: every later stage was skipped, nothing was built, pushed, or deployed.
+
+**Earlier-cycle fixes, kept as real history:** 2 HIGH CVEs (CVE-2026-24049 wheel, CVE-2026-23949 jaraco.context) found by Trivy and fixed by version pinning; a SonarQube cycle that flagged a **hardcoded PostgreSQL password (Blocker)** and a cognitive-complexity violation on `predict()`, both fixed; a smoke-test robustness fix so the container serves `/health` even with no database reachable.
+
+### Real bugs found and fixed
+
+- **The container smoke test curled `localhost` from inside the Jenkins container**, which can never reach a separately-networked test container — it always silently passed via a swallowed shell error. Fixed: the test container now joins `devsecmlops-net` and is addressed by name.
+- **SonarQube became genuinely unreachable from Jenkins mid-session**: `sonarqube: Name or service not known`. Root cause, confirmed live: `registry`, `minio`, and `sonarqube` were never declared on `devsecmlops-net` in their Ansible task definitions at all — each one silently defaults to Docker's plain bridge network. They had likely been attached manually at some earlier point, outside Ansible's own knowledge, which worked until an Ansible run recreated all three containers (image/config changes), silently dropping the undeclared attachment with no warning until the next Jenkins build. Fixed by adding an explicit `networks:` list to all three tasks — see [L6](#l6--ansible-infrastructure-as-code) for the full fix and live verification.
+- **SonarQube's own background analysis then failed with task status `FAILED`** (distinct from a normal `ERROR` quality-gate condition — `FAILED` means SonarQube's server-side processing crashed). Confirmed via its own logs: `flood stage disk watermark [95%] exceeded ... all indices on this node will be marked read-only` — the VM's disk was at 95% used, 3.9GB free, and Elasticsearch's own safety mechanism locked every index read-only, so SonarQube could not write the analysis results. Fixed by reclaiming ~11GB via `docker image prune` (unused image tags — every Jenkins build creates a new one, and old ones never got cleaned) and `docker builder prune` (stale build cache), bringing disk usage back under the watermark.
+
+### Files
+
+| File | What it does |
+|---|---|
+| `Jenkinsfile` | The 11-stage application pipeline. |
+| `Jenkinsfile.model` | The on-demand model-retraining pipeline. |
+| `jenkins/Dockerfile` | The custom Jenkins image (python3, kubectl, minikube, sonar-scanner, trivy, docker CLI). |
+| `scripts/smoke_test.py` | Standard-library-only health/version/v3/v4/metrics/ops-UI check, used before and after deployment. |
+
+---
+
+## L4 — Kubernetes
+
+### What we built and tested
 
 Minikube, single-node, Docker driver. Namespace `ml-serving`.
 
@@ -1670,14 +1440,32 @@ kubectl apply -f kubernetes/hpa.yaml
 kubectl get pods -n ml-serving
 ```
 
+### Real bugs found and fixed
+
+- **The Ansible Kubernetes template had drifted far behind the real manifest.** `kubernetes/deployment.yaml` was hardened (uid/gid 10001, seccomp `RuntimeDefault`, read-only root filesystem, all capabilities dropped, no service-account token, DB user/password/database all from the Secret). The Ansible template — which is what Ansible *actually* deploys, via `ansible.builtin.template` — still had only `runAsUser: 999`, none of the rest, and a hardcoded `postgresql://feedback:...@.../feedback` connection string. A production-profile Ansible deploy would have shipped an unhardened pod that could not authenticate against a production Secret with a different username. Fixed by syncing the template line-for-line with the real manifest, keeping only the legitimate templating (`api_replicas`, `api_image`, resource-limit toggles). Verified with `--syntax-check` on the production profile and the full test suite, then deployed through the real pipeline.
+- **A committed database password** (`feedback-dev-password`, in the now-deleted `kubernetes/postgres-secret.yaml`) — removed, replaced by `scripts/ensure_db_secret.sh`, and rotated live in the running cluster (see the password-rotation incident above).
+- **`scripts/k8s_recover.sh` made the Minikube home directory world-readable and world-writable** (`chmod -R a+rwX`) — that directory holds the cluster CA's private key and admin credentials, so any local user could have become cluster-admin. Replaced with a POSIX ACL granting access to exactly one uid.
+
+### Files
+
+| File | What it does |
+|---|---|
+| `kubernetes/namespace.yaml` | Creates `ml-serving`. |
+| `kubernetes/deployment.yaml` | The hardened `anomaly-api` Deployment. |
+| `kubernetes/postgres.yaml` | The hardened `postgres` StatefulSet (uid 70), probes using the Secret's own user/database. |
+| `kubernetes/service.yaml` | NodePort `:30080`. |
+| `kubernetes/hpa.yaml` | HorizontalPodAutoscaler, 2–5 replicas, 70% CPU. |
+| `scripts/ensure_db_secret.sh` | Generates a random DB password idempotently (demo profile). |
+| `scripts/k8s_recover.sh` | Recovers Minikube and Jenkins's cluster access after a Docker daemon or VM restart. |
+
 ---
 
-## Monitoring (L5)
+## L5 — Observability and MLOps
 
 Prometheus + Grafana (30 panels) + real production traffic + Kubernetes
 object monitoring.
 
-### Per-pod scraping, not the NodePort (real fix)
+#### Per-pod scraping, not the NodePort (real fix)
 
 Prometheus scrapes every serving pod **individually**, discovered through
 the Kubernetes API server — not the NodePort. Scraping the NodePort was
@@ -1689,7 +1477,7 @@ served, every per-machine panel resolves the **freshest replica** for that
 machine (`api_machine_last_seen_timestamp_seconds`), rather than an
 arbitrary one.
 
-### `production_agent.py` — the current default traffic source
+#### `production_agent.py` — the current default traffic source
 
 **One independent thread per machine** (not a single shared loop), each on
 its own cycle with jitter — in a real fleet, every machine's monitoring
@@ -1730,12 +1518,12 @@ Two earlier, simpler traffic-generation designs — `replay_exporter.py`
 self-instrumentation) — remain in the repository, fully functional, but are
 not started by default in favor of `production_agent.py`.
 
-### Kubernetes monitoring
+#### Kubernetes monitoring
 
 `monitoring/k8s_exporter.py` publishes pod readiness, restart counts,
 deployment replica counts, and HPA CPU utilization as Prometheus metrics.
 
-### Grafana dashboard (30 panels)
+#### Grafana dashboard (30 panels)
 
 Provisioned from the repository (`monitoring/grafana/`) — a fixed
 datasource UID plus the dashboard JSON, mounted read-only — rather than
@@ -1751,15 +1539,13 @@ one, causing `topk(25)` to return every machine ever in the top 25 across
 the whole time window instead of exactly 25 — was found (from the rendered
 screenshot, not just the query) and fixed in the most recent pass.
 
-### Machine roster
+#### Machine roster
 
 `docs/machine_roster.txt`: all 200 simulated machines, name/type/role — 40
 web, 35 app, 30 db, 20 cache, 20 queue, 15 batch, 15 edge, 8 router, 7
 firewall, 5 dns, 5 voip.
 
----
-
-## MLOps: experiment tracking and model registry
+### MLflow and MinIO (experiment tracking, model registry)
 
 MLflow (tracking + model registry) backed by MinIO (self-hosted
 S3-compatible artifact storage) — self-hosted rather than a cloud SaaS,
@@ -1799,15 +1585,27 @@ mlflow server --host 0.0.0.0 --port 5001 \
   --artifacts-destination s3://mlflow-artifacts/ --serve-artifacts
 ```
 
+### Files
+
+| File | What it does |
+|---|---|
+| `monitoring/production_agent.py` | The default traffic source — one thread per machine, real consecutive replay, real rolling history. |
+| `monitoring/k8s_exporter.py` | Pod readiness, restarts, replica counts, HPA state. |
+| `monitoring/prometheus.yml` | Scrape configuration — per-pod discovery through the Kubernetes API server. |
+| `monitoring/grafana/provisioning/` | Fixed-UID datasource and dashboard-loading configuration, mounted read-only. |
+| `monitoring/grafana/dashboards/devsecmlops-fleet.json` | The 30-panel dashboard, provisioned from the repository. |
+| `monitoring/replay_exporter.py`, `anomaly_bridge.py` | Earlier traffic designs, kept and functional, not started by default. |
+| `docs/machine_roster.txt` | All 200 machines: 40 web, 35 app, 30 db, 20 cache, 20 queue, 15 batch, 15 edge, 8 router, 7 firewall, 5 dns, 5 voip. |
+
 ---
 
-## Ansible (L6)
+## L6 — Ansible (Infrastructure as Code)
 
 **Rewritten in the most recent infrastructure pass.** Two profiles
 (`demo`, `production`), sharing common roles, bringing the entire platform
 up from a provisioned VM with one command.
 
-### Structure
+#### Structure
 
 ```
 ansible/
@@ -1827,7 +1625,7 @@ ansible/
     control_panel/                      the mission-control API on :8000
 ```
 
-### Running it
+#### Running it
 
 ```bash
 export GRAFANA_ADMIN_PASSWORD='...'   # 12+ chars
@@ -1843,7 +1641,7 @@ ansible-playbook -i inventory.ini site.yml --syntax-check
 ansible-playbook -i inventory.ini site.yml --check                  # dry run
 ```
 
-### Every host process is now a supervised systemd unit, in both profiles (real change)
+#### Every host process is now a supervised systemd unit, in both profiles (real change)
 
 The original design had **two separate monitoring roles** —
 `monitoring_systemd` (production: Prometheus and the exporters as managed
@@ -1858,14 +1656,14 @@ VM reboot took down the entire demo monitoring stack with no automatic
 recovery, because the demo profile's plain background processes do not
 survive a reboot. The unified, systemd-everywhere design closes that gap.
 
-### MLflow now provisioned and supervised (real change)
+#### MLflow now provisioned and supervised (real change)
 
 MLflow runs as a systemd service (`:5001`) with `--serve-artifacts`,
-proxying uploads to MinIO — see [MLOps](#mlops-experiment-tracking-and-model-registry)
+proxying uploads to MinIO — see [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-model-registry)
 above for the real round-trip verification. It was not consistently running
 before this pass.
 
-### Credentials from the environment, root-only files (real change)
+#### Credentials from the environment, root-only files (real change)
 
 Every credential — the Grafana admin password, the ops-UI Basic-auth
 credentials, the MinIO root credentials — is required from the environment
@@ -1876,7 +1674,7 @@ in Ansible with base64-encoded values and applied to Kubernetes via
 `stdin` — the password never appears on a command line or in the process
 list.
 
-### Jenkins gets the data mount it needed (real change)
+#### Jenkins gets the data mount it needed (real change)
 
 The Jenkins container now has `data/` mounted read-only at
 `/var/jenkins_home/fleet-data` — the prerequisite `Jenkinsfile.model`
@@ -1884,7 +1682,7 @@ needed and did not have before this pass. The Jenkins image tag, and the
 API image tag, both now derive from the `VERSION` file rather than
 separate hardcoded values that had drifted out of sync with each other.
 
-### A real bug found only by running it
+#### A real bug found only by running it
 
 `repo_dir` was defined as `"{{ playbook_dir }}/.."`, which resolves to an
 unnormalized path (e.g. `.../ansible/..`). systemd rejects this in
@@ -1894,7 +1692,7 @@ not only MLflow — it was only caught here because MLflow was the first
 genuinely *new* unit this pass introduced; every pre-existing unit had
 silently carried the same latent bug without being re-validated.
 
-### Verified with a real playbook run, not just a syntax check
+#### Verified with a real playbook run, not just a syntax check
 
 `--syntax-check` on both profiles, then a `--check` dry run, then a real
 run reaching `PLAY RECAP ... failed=0, ok=56, changed=12`. Confirmed
@@ -1905,7 +1703,7 @@ credentials, `401` with a wrong password, `200` only with the real one) and
 service persistence (`systemctl is-enabled` reporting `enabled` for every
 new unit) genuinely work, not just that the playbook exited successfully.
 
-### Two profiles, what differs
+#### Two profiles, what differs
 
 **Production** (`group_vars/production.yml`): real Kubernetes Secrets from
 an Ansible Vault value (a guard refuses to run with a placeholder
@@ -1918,7 +1716,7 @@ day to day): the full support tooling (registry, MinIO, SonarQube,
 Jenkins), the production traffic agent enabled, and the `:8000`
 mission-control panel — everything drivable from one browser tab.
 
-### Honest design notes, carried forward
+#### Honest design notes, carried forward
 
 - **SonarQube hostname**: from the host, `http://localhost:9000`; from
   inside the Jenkins container, `http://sonarqube:9000` (Docker resolves
@@ -1926,94 +1724,255 @@ mission-control panel — everything drivable from one browser tab.
 - **Image loading**: the API image is loaded into Minikube directly
   (`minikube image load`, `imagePullPolicy: Never`) rather than pulled from
   the local registry, for the same single-node reasons documented in
-  [Kubernetes](#kubernetes-l4).
+  [L4 — Kubernetes](#l4--kubernetes).
 - **Scope**: Ansible automates the *platform bring-up*, not base-OS package
   installation — the VM is expected to already have Docker, Minikube,
   kubectl, and the Prometheus binary, with the repo cloned.
 
+#### Every support container now declares its network (real fix, found by a failed CI build)
+
+`registry`, `minio`, and `sonarqube` were defined in `roles/prerequisites` with ports, volumes, and restart policy, but **no `networks:` key at all** — so `community.docker.docker_container` placed each one on Docker's default `bridge` network every time it (re)created them. Jenkins reaches all three by container name over `devsecmlops-net`, so after an Ansible run recreated them, a Jenkins build failed with `sonarqube: Name or service not known`. Confirmed live before fixing: `docker inspect` showed all three on `bridge` only; `docker exec jenkins getent hosts sonarqube` returned nothing. Fixed by declaring `networks: [devsecmlops-net]` on all three tasks. Verified with a real playbook run (not `--check`): all three now on `devsecmlops-net`, and a live DNS lookup from inside the Jenkins container resolves `registry`, `sonarqube`, and `minio` by name. The next Jenkins build passed end to end.
+
+### Files
+
+| File / role | What it does |
+|---|---|
+| `ansible/site.yml` | Playbook entry point — resolves the profile, runs shared and profile-gated roles. |
+| `ansible/inventory.ini` | `localhost`. |
+| `ansible/group_vars/all.yml` | Shared variables: VERSION-derived image tag, ports, every credential lookup from the environment. |
+| `ansible/group_vars/demo.yml`, `production.yml` | Per-profile toggles. |
+| `roles/system/` | OS packages, the Prometheus binary. |
+| `roles/app_setup/` | Python virtualenv, dependencies, the API image. |
+| `roles/prerequisites/` | Registry, MinIO, MLflow, SonarQube, Jenkins — all on `devsecmlops-net`. |
+| `roles/secrets/` | Production-only, Vault-backed DB Secret applied via stdin. |
+| `roles/kubernetes/` (+ `templates/deployment.yaml.j2`) | Minikube, the demo DB Secret, the rendered Deployment — now in sync with `kubernetes/deployment.yaml`. |
+| `roles/monitoring/` | The unified systemd monitoring stack. |
+| `roles/control_panel/` | The mission-control API on :8000, credentials in a root-only file. |
+
 ---
 
-## Repository layout
+## Engineering decisions and rationale
 
-```
-api/
-  app.py                        FastAPI service: hybrid v3/v4 /predict,
-                                  /root-cause, feedback endpoints, ops-UI guard
-  feedback_db.py                 PostgreSQL feedback DB helper
-  training.py                     training-console backend (train/compare/verify)
-  static/control_panel.html       the mission-control UI
+Every non-obvious decision made in this project, why it was made that way, and what evidence supported the choice. Written to be readable in isolation for defense preparation -- each subsection explains one decision from first principles rather than referencing sections elsewhere in the document.
 
-ml-model/
-  generate_telecom_fleet.py       synthetic 200-machine fleet generator
-  preprocess.py                    baselines, z-scoring, v4 rolling features
-  preprocess_robust.py              trimmed/winsorized baselines (benchmark comparison only)
-  decision.py                       the served decision rule (scalar + vectorized)
-  train_production.py               the ONLY path to a promoted production model
-  select_threshold.py                threshold selection by F2 sweep
-  benchmark.py                        the 6-model unsupervised comparison
-  root_cause.py                        dependency-graph root-cause ranking
-  build_dependency_graph.py             extracts the router->machine graph
-  zscore_demo.py                        worked baseline example / defense demo
-  test_timewindow_full.py                baseline-strategy experiment (evidence)
-  load_smd.py                             adapter for the real Server Machine Dataset
-  train_serving_telecom.py, train_serving_telecom_robust.py   earlier standalone trainers, kept for reference
-  train_serving_telecom_novelty.py         the novelty-detection experiment (rejected, kept as evidence)
+### 1. Why unsupervised anomaly detection first (v1)
 
-models/
-  telecom_xgb_classifier_v2.pkl, telecom_xgb_label_encoder_v2.pkl   v3
-  telecom_xgb_v4_rolling.pkl, telecom_xgb_v4_rolling_encoder.pkl    v4
-  telecom_iso_v2.pkl                                                 the safety net
-  telecom_baselines_v2.json                                          per-machine per-window baselines
-  telecom_rf_classifier_v2.pkl (not committed, 125MB)                v2, reproducible
-  dependency_graph.json                                              router -> machine relationships
-  manifest.json                                                      lineage, threshold evidence, current evaluation
-  history/                                                            every promoted model, timestamped
-  results/                                                            benchmark run outputs (gitignored, regenerable)
+Production infrastructure has no labeled anomalies. Nobody manually labels every anomalous minute across 200 servers -- and even if they did, the labels would be inconsistent across engineers. IsolationForest learns "normal" from the raw metric stream with zero labels, and can flag anomaly *types* it has never seen before. This was the right starting choice: build a working, deployable detector without waiting for a labeling pipeline that doesn't exist in real telecom operations.
 
-data/                          generated fleet CSVs (not committed — regenerate locally)
+### 2. Why per-machine, per-time-window baselines
 
-kubernetes/                    namespace, postgres StatefulSet, deployment, service, hpa
+A web server idling at 30% CPU and a database server running hot at 75% CPU are both "normal" for their role -- a global threshold cannot distinguish them. Time windows (night/morning/afternoon/evening) handle predictable daily cycles: a 3 AM CPU spike on a batch server is normal, the same spike at 3 PM might be an incident. Tested rigorously (`ml-model/test_timewindow_full.py`): per-machine+window F1 = 0.6475, per-machine all-day F1 = 0.6434, adding explicit time features (hour_sin/cos) actually hurt at F1 = 0.6064 because the per-machine baseline already encodes temporal patterns implicitly.
 
-monitoring/
-  production_agent.py            the current default traffic source
-  k8s_exporter.py                  Kubernetes object exporter
-  prometheus.yml                    per-pod scrape configuration
-  replay_exporter.py, anomaly_bridge.py   earlier designs, kept, not started by default
-  grafana/                          provisioning + the dashboard JSON (30 panels)
+### 3. Why 6 features, not 3
 
-ansible/                       site.yml + roles, two profiles
+The original 3 features (cpu, ram, network) missed entire classes of real incidents. A disk filling up produces almost no signal in cpu/ram/network -- confirmed live: a disk_saturation reading with disk_usage z=4.93 and load_avg z=5.31 while cpu/ram/network stayed near zero. Expanded to 6 (adding disk_io, disk_usage, load_avg). Network gear (routers, firewalls, DNS, VoIP) intentionally have near-zero disk metrics because they are SNMP-monitored appliances with no physical disk -- this matches real telco edge architecture, not a shortcut.
 
-scripts/
-  verify_model_manifest.py        the CI model gate
-  export_feedback_dataset.py       feedback -> versioned training dataset
-  ensure_db_secret.sh               random DB password generation (demo)
-  live_k8s_validation.py             real-cluster validation, independent test set
-  smoke_test.py                       used by CI before and after deployment
-  k8s_recover.sh                       Minikube/Jenkins recovery after a restart
-  master_comparison.py                 the 12-configuration threshold/feedback experiment
-  full_verification.sh                  one-shot health check across every layer
-  capture_all_screenshots.sh             defense screenshot automation
+### 4. Why 30-second resolution, not 1-minute
 
-tests/                         58 tests -- test_api.py, test_decision.py,
-                                test_preprocess.py, test_train_production.py,
-                                test_training_console.py, conftest.py (shared fixtures)
+Tested at full scale: F1 improved 0.648 -> 0.663, recall 0.650 -> 0.667. Real gains, reproducible. Cost: 2x storage (613MB -> 1.2GB), 2x retrain time (2m -> 4m), and the first attempt to generate the 30-second dataset was killed by the OOM killer at 4.1GB RSS on the 7.7GB VM. Adopted because the accuracy gain is consistent and the memory constraint is manageable -- but the tradeoff is documented explicitly, not glossed over.
 
-jenkins/                       the custom Jenkins image (python3, kubectl,
-                                minikube, sonar-scanner, trivy, docker CLI)
+### 5. Why the four-level fallback chain
 
-docs/
-  machine_roster.txt              all 200 machines: name, type, role
-  TROUBLESHOOTING.md                real runbook: Docker networking staleness,
-                                      Minikube API timeouts, a rejected retrain
-                                      (the guardrail working as intended, not a
-                                      bug), MLflow UI issues, browser/VM
-                                      connectivity, Jenkins pytest/venv failures
+Machines the model has never seen (`machine+window` not in baseline) must still get predictions. The chain -- `machine+window` -> `machine` (all-day) -> `machine type` -> `global fleet average` -- guarantees any legitimate reading gets a valid baseline. The API returns which level was used (`baseline_used` field), so operators can see whether a prediction is on solid statistical ground or falling back to a coarser estimate.
 
-screenshots/                   12 PNGs, defense evidence
+### 6. Why the service-tier correlation was tested and rejected
 
-Dockerfile, docker-entrypoint.sh, requirements*.txt, VERSION
-Jenkinsfile, Jenkinsfile.model
-```
+The obvious next step after modeling router->machine dependencies was modeling application-tier calls (web -> app -> db). Built, tested at full scale, and reverted: every model regressed (IsolationForest 0.663 -> 0.599, z-threshold 0.657 -> 0.572). Root cause: service-tier correlation inflated the variance absorbed into each downstream machine's baseline, particularly for types 1-2 hops away, widening what counts as "normal" and making genuine anomalies harder to distinguish. **This is a real, informative negative result** -- documented rather than silently discarded, because knowing what doesn't work matters.
+
+### 7. Why novelty detection (train on normal-only) was tested and rejected
+A natural alternative for the unsupervised baseline is *novelty detection*:
+train the IsolationForest on confirmed-normal rows only (excluding every
+anomaly from training), so it learns the shape of "normal" and flags any
+deviation. Implemented in `ml-model/train_serving_telecom_novelty.py` and run
+at full scale (11.3M normal-only training rows, evaluated on the same seed-42
+mixed test split): F1 = 0.564, Precision = 0.448, Recall = 0.764, ROC-AUC =
+0.921. Training on normal-only *raises* recall (0.764 vs the mixed-training
+0.650) — the model is more sensitive because it has never been shown that
+some anomaly-adjacent readings are tolerable — but precision *collapses*
+(0.448 vs 0.646): it over-flags, because it never learned where the boundary
+of acceptable near-normal variation lies. Net F1 drops from 0.648 to 0.564,
+while ROC-AUC is essentially unchanged (0.921 vs 0.924), confirming the
+ranking ability is similar and only the operating point moved. **Another
+informative negative result**: pure novelty detection is not adopted, because
+the mixed-training baseline plus a supervised classifier on top gives better
+balanced performance. The experiment is kept because it quantifies exactly
+what novelty detection costs on this data.
+
+### 8. Why supervised (v2 RandomForest) added on top, not replacing v1
+
+IsolationForest tells you *something is wrong* but not *what*. Adding labeled cause data (`anomaly_type` column: cpu_spike, memory_leak, network_flood, disk_saturation, silent_failure, cascade) enabled a supervised classifier to explain the anomaly. RandomForest was chosen over other supervised options because it needs no feature scaling assumptions, handles the 6-feature space cleanly, and is deterministic. Result on independent seed-123 test set: F1 = 0.731 (vs IsolationForest's 0.652). But cascade recall collapsed to 0.029 -- see next decision.
+
+### 9. Why cascade is folded into normal during training
+
+The generator by design labels cascade anomalies only 40% consistently (a downstream machine affected by a router failure is labeled anomalous 40% of the time, unlabeled 60%, *for the identical feature pattern*). Training a supervised classifier on this noisy label collapses everything -- initial F1 = 0.513, cascade precision = 0.16, poisoning the other classes. Folding cascade into normal during training fixed that (F1 = 0.731) but left RandomForest blind to cascades. Solution: keep IsolationForest as a *safety net* (see next decision).
+
+### 10. Why dual-model architecture (primary + safety net)
+
+RandomForest is blind to cascades by construction (see previous). IsolationForest, being unsupervised, has no such blind spot -- it reacts to any statistical deviation regardless of label noise (0.262 cascade recall). Running both means the primary gets high accuracy on the 5 clean cause types AND cascades still get detected via the safety net. Two rejected alternatives:
+
+- **Blind ensemble (flag if either fires)**: F1 = 0.663, worse than RandomForest alone. Inherits IsolationForest's false positives without helping recall.
+- **Graph-rule cascade fix (flag all downstream when router flagged)**: F1 = 0.550. Blast radius: each router has ~22 downstream machines; one wrong router prediction = ~22 wrong flags. Cascade-rule precision on fired rows: 2.9%.
+
+Both rejections are documented with real numbers, not hand-waved. This remains the shipped architecture today: the served decision is still `classifier OR IsolationForest` (`ml-model/decision.py`), unchanged in principle since this decision was made, though the classifier and the specific safety-net numbers have moved on since (see [L0 — ML Model](#l0--ml-model) and the [unsupervised-model comparison](#the-unsupervised-model-comparison-updated) below).
+
+### 11. Why XGBoost replaced RandomForest as primary (v3)
+
+Full-scale offline comparison, same train/test data as v2:
+
+- **RandomForest**: F1 = 0.731, Precision = 0.849, Recall = 0.641, 125MB, 340s train
+- **XGBoost**: F1 = 0.718, Precision = 0.775, Recall = 0.670, 3.6MB, 74s train
+
+Overall F1 favors RandomForest by 1.3 points, but XGBoost wins per-cause recall on **every single anomaly type**: cpu_spike, memory_leak (0.688 -> 0.736 -- the previously weakest category), network_flood, disk_saturation, silent_failure, cascade. In a telecom monitoring context, **missing a real anomaly costs more than an extra investigation** -- a missed memory leak leads to a crash, a false alarm costs 5 minutes of an engineer's time. Recall priority is the right operational choice. Live K8s validation confirmed the offline result: v3 XGBoost catches 49 more real anomalies over a 33,600-request test window than v2 RF, with 2.5x throughput and lower latency.
+
+**Architectural bonus:** XGBoost's 3.6MB model fits directly in the Docker image, eliminating the entire MinIO-fetch-at-startup mechanism built for v2's 125MB RandomForest. Simpler deployment, faster startup, one less runtime dependency.
+
+### 12. Why LightGBM was tested but not adopted
+
+Same methodology as XGBoost: F1 = 0.716, Precision = 0.767, Recall = 0.671, per-cause recall within 0.001-0.002 of XGBoost on every category. Essentially identical performance, 3.0MB model (marginally smaller), 51s training (marginally faster). Kept as evidence because the negative result is genuinely useful: **it confirms the ceiling on this data with these features is a gradient-boosting-family ceiling, not an XGBoost-specific one**. Meaningfully passing F1 = 0.72 would require something structurally different (sequence-aware models, richer temporal features, or larger real-world data), not another gradient booster.
+
+### 13. Why rolling/trend features WERE integrated as v4 (updated)
+
+Per-machine rolling mean, rolling std, and delta features (10-reading window,
+cpu/ram/load_avg) were first tested on a 5-day pilot (F1 0.708 -> 0.729) and
+initially left out of production because they seemed to require a stateful
+serving path. That concern was resolved and the features were fully
+integrated as the v4 model. At full scale the gain was substantial: served
+F1 (independent seed-123 test set, 17,280,000 rows, current threshold 0.60)
+went from 0.6496 (v3) to 0.7246 (v4) -- see [L0 — ML Model](#l0--ml-model) for
+the current, corrected numbers, which supersede the offline figures this
+subsection originally quoted.
+
+The stateful-serving problem was solved WITHOUT server-side state by having
+the **client supply the recent history** in the /predict request (the pattern
+Datadog/New Relic use). The API stays stateless: when `history` is present it
+computes the 9 rolling features and uses the 15-feature v4 model; when absent
+it falls back to the 6-feature v3 model. See the "Rolling features and
+gradual-onset detection (v4)" section for the full design, and Decision #21
+for the stateless-serving rationale. This entry is kept (rather than deleted)
+to record that the original "not integrated" decision was later revisited and
+reversed on stronger full-scale evidence.
+
+### 14. Why SMD real-world validation matters
+
+F1 = 0.269 on the Server Machine Dataset (28 real servers, public benchmark used by OmniAnomaly and other sequence-model papers). Much lower than synthetic F1, and this is the honest point: **published unsupervised sequence models on SMD report F1 in the 0.40-0.55 range** using recurrent architectures that read a sliding window of history. This project prioritizes training speed, interpretability, and simple CI/CD-integrated deployment over the marginal accuracy gains of a recurrent sequence model -- a documented tradeoff, not an oversight. The SMD result's purpose is not to win on the benchmark; it confirms the same per-machine, per-window z-score methodology generalizes to real, independently-collected data and isn't an artifact of the synthetic generator. `ml-model/load_smd.py` is the adapter that makes this data loadable through the same pipeline; it remains in the repository and is not part of the production training path.
+
+### 15. Why MLflow + MinIO run outside the Kubernetes cluster
+
+Same reasoning as Jenkins, SonarQube, and the local Docker registry: **shared platform/tooling services supporting the development process are not the product being served to end users**. In a real organization, one MLflow server tracks experiments across many projects; it does not live inside a single project's own K8s namespace. Only the anomaly-api workload runs in K8s (namespace `ml-serving`), matching how production would separate stateful tooling from stateless application deployments. As of the most recent infrastructure pass, MLflow itself now runs as a supervised systemd service rather than a manually-started process -- see [L6 — Ansible](#l6--ansible-infrastructure-as-code) -- closing a real gap where it had, for a time, not been running at all.
+
+### 16. Why the CI/CD pipeline uses fail-fast pytest before SonarQube
+
+Stage 1b (pytest) runs the full test suite before any downstream stage. If a commit breaks the tests, the pipeline stops immediately, before wasting 5-10 minutes on SonarQube scanning, Docker build, Trivy CVE scan, and registry push. The Quality Gate itself, however, changed since this decision was first written: it originally did **not** abort the pipeline (`abortPipeline: false`) on the reasoning that code-quality issues are advisory. That reasoning was revisited in the most recent CI/CD pass and reversed -- `abortPipeline: true` is now set, proven live by two real pipeline runs that correctly stopped on a genuine Quality Gate failure before this change was validated. See [L3 — CI/CD](#l3--cicd) for the full current pipeline and why the change was made.
+
+### 17. Why the custom SonarQube Quality Gate
+
+The default Sonar Way gate demands 80% coverage and less than 3% duplication. Neither threshold fits a research-heavy ML repository where most of `ml-model/` is one-shot experiment scripts (not library code intended for unit testing) and 20%+ duplication is intentional (near-identical variant scripts for A/B comparison). Custom gate `devsecmlops-pfe-research`: coverage >= 5% (project has 6.7%, passes honestly), duplication <= 25% (has 21%, passes honestly), 0 New Issues (strict), Security Hotspots strict. **This is engineering judgment, not gaming the metric** -- adjusting thresholds to reflect what "good" actually means for this project, while keeping bug/security requirements strict.
+
+### 18. Why models are baked into the Docker image (v1, v3, v4), not fetched
+
+Image tag = exact model version. Immutable, reproducible, no runtime dependency on external artifact storage. v2's 125MB RandomForest violated this rule -- too large for git and too large to bake into the image comfortably -- so v2 needed the MinIO-fetch entrypoint as a workaround. The switch to v3 XGBoost (3.6MB) restored the baked-in pattern and eliminated the MinIO dependency for the primary model; v4's artifacts follow the same small-and-baked-in pattern.
+
+### 19. Why v2 code paths were kept alive after v3 switch
+
+Setting `MODEL_NAME=telecom_v2` in the K8s deployment env still fully works. The v2 loading block, MinIO fetch entrypoint, and RandomForest artifact all remain functional. Reason: **additive changes are safer than destructive ones**, and defense-day A/B comparison ("here's v2 running with RandomForest, here's v3/v4 running with XGBoost, watch them differ on the same input") is a real, tangible demonstration that would be lost if v2 were deleted.
+
+### 20. Why the decision threshold is 0.60, selected by method (revised)
+
+v3/v4 flag an anomaly when P(normal) falls below a threshold. This decision
+was originally written to justify **0.85**, and that original choice did
+have real evidence behind it -- a documented sweep at 0.50/0.85/0.95 on the
+XGBoost classifier alone, with 0.85 chosen for preserving usable alert
+precision. What that sweep never did is account for the served decision as
+a whole: it measured the classifier in isolation, never re-validated after
+the IsolationForest safety net's OR-gate was added to the served path. The
+reasoning about *priorities* -- a missed incident costing more than a false
+alarm -- was correct then and is kept now; what was missing was measuring
+the actual served decision, not the classifier alone. The
+threshold is now selected by `ml-model/select_threshold.py`, which sweeps
+0.05-0.95 on a validation fleet the classifiers and the search itself never
+train or tune on (seed 7, separate from both the seed-42 training set and the
+seed-123 test set), maximizing **F2** -- recall weighted twice precision,
+which is exactly the "a miss costs more than a false alarm" priority this
+decision always argued for, now backed by a real sweep instead of a single
+chosen number. The result, 0.60, is recorded with its full evidence curve in
+`models/manifest.json`, and a CI gate (`scripts/verify_model_manifest.py`)
+enforces that every deployment file agrees with it. See
+[Choosing the decision threshold](#choosing-the-decision-threshold-new) below
+for the full table. Configurable via the `PREDICT_THRESHOLD` env var without
+code changes, as before.
+
+### 21. Why the client supplies rolling history (stateless v4 serving)
+
+v4 needs the last 10 readings per machine to compute rolling features. Three
+ways to get them: (a) keep per-machine buffers inside the API pods -- but with
+2+ replicas sharing no state, buffers would be inconsistent and would need
+Redis or sticky routing; (b) have the API query Prometheus on every /predict
+-- couples the API to Prometheus and doubles latency; (c) have the CLIENT send
+the history in the request. We chose (c): it matches how real monitoring
+systems work (Datadog/New Relic clients compute and ship features), keeps the
+API stateless and horizontally scalable, and makes v4 backward compatible
+(history absent -> v3 fallback). The serving-side rolling computation is
+verified byte-identical to the training-time function.
+
+### 22. Why the feedback DB was rebuilt from SQLite to PostgreSQL
+
+The feedback loop was first built on SQLite (single file on a PVC). That was
+rebuilt to PostgreSQL (StatefulSet + headless Service + Secret + PVC) for
+genuine production-readiness: multiple API replicas can write concurrently
+without file-lock contention (verified: 20 parallel writes in 0.45s), data
+survives a hard pod kill (verified: StatefulSet recreates, PVC persists), and
+it is a standard client-server DB rather than a shared-file compromise. A real
+bug surfaced during the rebuild and is worth recording: the column originally
+named `window` is a PostgreSQL reserved keyword (SQLite accepted it), so it was
+renamed to `time_window`; and the K8s env ordering matters -- POSTGRES_PASSWORD
+must be declared before DATABASE_URL for `$(VAR)` substitution to resolve.
+The most recent security pass rotated this database's actual password live
+(the previous one had been committed to git) and hardened the connection
+handling further -- see [Security](#security-posture-new) and
+[L4 — Kubernetes](#l4--kubernetes) below.
+
+### 23. Why feedback logging is best-effort, not fail-loud (graceful degradation)
+
+Model serving (/health, /predict) is the critical function; the feedback log is
+secondary. Originally the API called the DB on startup and on every /predict,
+so an unreachable database crashed the whole app -- which also broke the CI
+smoke test (the container runs standalone with no PostgreSQL). Fixed with a
+FEEDBACK_DB_AVAILABLE flag and a _safe_insert_prediction wrapper: if the DB is
+down, the API logs a warning and keeps serving predictions (prediction_id comes
+back null, logging is skipped). More robust in production AND makes the smoke
+test pass -- a monitoring API should never stop detecting anomalies because its
+feedback log is offline. Hardened further in the most recent pass: the
+connection now retries automatically every 30 seconds rather than requiring a
+pod restart, and the feedback endpoints (which genuinely need the database)
+now return a proper `503` instead of an uncaught `500` when it is down.
+
+### 24. Why the retrain guardrail is strict, and what 500 rows proved (updated)
+
+The retrain pipeline only promotes a new model if aggregate F1 does not drop
+AND per-cause recall drops by no more than a small, fixed margin on any
+category. The original guardrail (`scripts/retrain_from_feedback.py`, since
+superseded) used a 5-point recall margin; the current one
+(`ml-model/train_production.py --feedback`, the single canonical training
+path — see [L0 — ML Model](#l0--ml-model)) is stricter: **zero** aggregate F1
+regression allowed at all (`--max-f1-drop 0.0`) and a 2-point recall margin
+(`--max-recall-drop 0.02`). The finding this decision records is unchanged and
+still real: tested end-to-end with 500 simulated operator verdicts, the
+retrained model scored F1 0.709 vs the current 0.718 (offline numbers from
+that test, predating the threshold and evaluation corrections elsewhere in
+this document), and the guardrail correctly **REJECTED** it. This exposed a
+real, honest finding: 500 feedback rows against millions of training rows is
+a tiny fraction of the signal -- too little to move the model regardless of
+sample-weight. Meaningful improvement needs thousands of real verdicts
+accumulated over weeks/months; the pipeline is production-ready and the
+guardrail protects production in the meantime. (A z-score evaluation bug was
+also found and fixed while verifying this: a quick eval script that skipped
+add_window_column + apply_zscore mis-scored the baseline; the canonical F1
+was confirmed once the correct preprocess path was used -- the same class of
+"evaluate through the real served path, not a shortcut" discipline that
+`ml-model/decision.py` now enforces structurally for every reported number in
+this project.)
+
+---
 
 ---
 
@@ -2046,12 +2005,12 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
-Wired into Jenkins as stage 2 (fail-fast) — a broken commit stops the
+Wired into Jenkins as stage 1b (fail-fast) — a broken commit stops the
 pipeline before any downstream stage runs, described fully in
-[CI/CD (L3)](#cicd-l3).
+[L3 — CI/CD](#l3--cicd).
 
 **Live K8s validation:** `scripts/live_k8s_validation.py` — described in
-full in [The ML pipeline](#the-ml-pipeline-current) above — replaces the earlier
+full in [Current production](#current-production-the-numbers-that-supersede-everything-above) above — replaces the earlier
 `live_k8s_demo_test.py`/`live_k8s_demo_test_v4.py` scripts, which measured
 against the training dataset rather than the independent one.
 
@@ -2101,6 +2060,18 @@ python monitoring/k8s_exporter.py &
 
 ---
 
+---
+
+## Documentation and evidence
+
+| Path | What it is |
+|---|---|
+| `docs/TROUBLESHOOTING.md` | A runbook written from real incidents: Docker networking staleness, Minikube API timeouts, a rejected retrain (the guardrail working as intended), MLflow service checks, browser-vs-VM connectivity, Jenkins pytest/venv failures. Corrected in this pass: it referenced the deleted `retrain_from_feedback.py` and told operators to hand-launch MLflow with hardcoded MinIO credentials. |
+| `docs/machine_roster.txt` | The 200 simulated machines and their roles. |
+| `screenshots/` | 12 PNGs captured at real milestones: the six-model benchmark, the final training run, a three-way model experiment, the z-score demo, the data generator, `/health`, a "3am problem" scenario, a disk-usage anomaly, the baseline fallback chain, Docker images, a container health check, a registry push. |
+
+---
+
 ## Known limitations and future work
 
 - **`cascade` recall (0.28) is genuinely the weakest result in this
@@ -2138,7 +2109,7 @@ python monitoring/k8s_exporter.py &
   beyond the existing SMD comparison. The Server Machine Dataset adapter
   (`ml-model/load_smd.py`) supports this; a next step would be a similarly
   honest comparison using the corrected benchmark methodology described in
-  [The ML model](#the-ml-model).
+  [L0 — ML Model](#l0--ml-model).
 
 ---
 
