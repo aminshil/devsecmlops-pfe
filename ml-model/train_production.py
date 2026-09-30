@@ -101,6 +101,7 @@ USECOLS = ["timestamp", "machine", "type", *FEATURES, "label", "anomaly_type"]
 # every reported metric is built from integer counts that sum exactly across
 # chunks. Memory then scales with the chunk, not with the 17.28M-row test set.
 EVAL_MACHINES_PER_CHUNK = 20
+V4_AT_05 = "v4_at_0.5"   # evaluation key: v4 at the classic 0.5 threshold, for reference
 
 
 def log(msg: str) -> None:
@@ -201,8 +202,12 @@ def _accumulate(c: dict, proba, classes, threshold, iso_hit, y_bin, y_type) -> N
     pred, final_cause = decision.final_verdict_batch(hit, cause, iso_hit)
     pos = np.asarray(y_bin) == 1
     pb, hb = np.asarray(pred).astype(bool), np.asarray(hit).astype(bool)
-    c["tp"] += int(np.sum(pb & pos)); c["fp"] += int(np.sum(pb & ~pos)); c["fn"] += int(np.sum(~pb & pos))
-    c["tp_h"] += int(np.sum(hb & pos)); c["fp_h"] += int(np.sum(hb & ~pos)); c["fn_h"] += int(np.sum(~hb & pos))
+    c["tp"] += int(np.sum(pb & pos))
+    c["fp"] += int(np.sum(pb & ~pos))
+    c["fn"] += int(np.sum(~pb & pos))
+    c["tp_h"] += int(np.sum(hb & pos))
+    c["fp_h"] += int(np.sum(hb & ~pos))
+    c["fn_h"] += int(np.sum(~hb & pos))
     for t in np.unique(y_type):
         m = y_type == t
         c["type_rows"][t] = c["type_rows"].get(t, 0) + int(m.sum())
@@ -256,7 +261,7 @@ def evaluate_set(art_dir: Path, test: pd.DataFrame, threshold: float) -> dict:
     b = json.load(open(art_dir / ARTIFACTS["baselines"]))
     m = {k: joblib.load(art_dir / v) for k, v in ARTIFACTS.items() if v.endswith(".pkl")}
     v3_classes, v4_classes = list(m["v3_encoder"].classes_), list(m["v4_encoder"].classes_)
-    acc = {"v3": _new_counts(), "v4": _new_counts(), "v4_at_0.5": _new_counts()}
+    acc = {"v3": _new_counts(), "v4": _new_counts(), V4_AT_05: _new_counts()}
     rows_by_machine = test.groupby("machine", sort=True).indices
     machines = list(rows_by_machine)
     for i in range(0, len(machines), EVAL_MACHINES_PER_CHUNK):
@@ -267,7 +272,7 @@ def evaluate_set(art_dir: Path, test: pd.DataFrame, threshold: float) -> dict:
         p4 = m["v4_model"].predict_proba(z15)              # once, reused for both thresholds
         _accumulate(acc["v3"], m["v3_model"].predict_proba(z), v3_classes, threshold, iso_hit, yb, yt)
         _accumulate(acc["v4"], p4, v4_classes, threshold, iso_hit, yb, yt)
-        _accumulate(acc["v4_at_0.5"], p4, v4_classes, 0.5, iso_hit, yb, yt)
+        _accumulate(acc[V4_AT_05], p4, v4_classes, 0.5, iso_hit, yb, yt)
         log(f"  evaluated machines {i + 1}-{min(i + EVAL_MACHINES_PER_CHUNK, len(machines))} of {len(machines)}")
     return {k: _finalize(v) for k, v in acc.items()}
 
@@ -303,7 +308,7 @@ def evaluate_production_only(args) -> int:
     test = load_fleet(args.test)
     test_fp["rows"] = int(len(test))
     ev = evaluate_set(args.models_dir, test, args.threshold)
-    for p in ("v3", "v4", "v4_at_0.5"):
+    for p in ("v3", "v4", V4_AT_05):
         log(f"production {p}: F1={ev[p]['f1']:.4f} P={ev[p]['precision']:.4f} "
             f"R={ev[p]['recall']:.4f} classifier-only F1={ev[p]['classifier_only_f1']:.4f}")
     manifest = read_manifest(args.models_dir)
