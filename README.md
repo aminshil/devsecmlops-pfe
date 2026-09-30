@@ -43,7 +43,7 @@ A production-oriented anomaly detection platform for a simulated 200-machine tel
 
 Live-validated against the real, running Kubernetes cluster: 2,200 real requests, 0 errors, F1 0.7267.
 
-**Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — two SonarQube Quality Gate blocks (proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, and a SonarQube server-side failure caused by the VM's disk reaching 95%. The most recent run (build `2.20.3-b87`) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
+**Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — two SonarQube Quality Gate blocks (proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, a SonarQube server-side failure caused by the VM's disk reaching 95%, a Quality Gate block on new code (a duplicated literal in the chunked evaluation), and an image-scan block on 6 HIGH OpenSSL CVEs that Debian had already fixed but a stale cached build layer never picked up. The most recent run (build `2.20.3-b92`) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
 
 **What makes this project genuinely defensible, beyond the final metrics:**
 
@@ -1257,7 +1257,7 @@ across the whole platform in one place:
 | Containers | Both the API and PostgreSQL run as non-root, with `readOnlyRootFilesystem`, all Linux capabilities dropped, `seccompProfile: RuntimeDefault`, and `automountServiceAccountToken: false`. |
 | Operations console | `/ui/*` does not exist (404) unless `ENABLE_OPS_UI=1` is explicitly set — the Kubernetes serving pods never set it. When enabled, it requires HTTP Basic auth, compared in constant time, and fails closed (`503`) if enabled without a password configured. This console previously had no authentication of any kind. |
 | Supply chain | Every production model artifact's SHA-256 is verified against `models/manifest.json` before it is unpickled — both in the API and in CI. A CycloneDX SBOM is generated and archived on every image build. |
-| Image | Python 3.12 on Debian trixie (was 3.10-slim); `pip` and `ensurepip` are removed from the final image after dependencies are installed. |
+| Image | Python 3.12 on Debian trixie (was 3.10-slim); `pip` and `ensurepip` are removed from the final image after dependencies are installed; Debian security updates are applied on every build (a cached upgrade layer once shipped an already-fixed OpenSSL, caught by the image scan). |
 | Input handling | Path traversal in the training console's dataset selector closed. `NaN`/`infinity` rejected at the API boundary. `history` validated strictly (exact keys, exact length). |
 | Scanning | Trivy scans both the repository (dependencies, committed secrets, Kubernetes/Dockerfile misconfigurations) and the built image, both blocking (`--exit-code 1`) in CI. |
 | Secrets in transit | The PostgreSQL Secret is assembled by Ansible and applied via `stdin`, never a command line or a shell pipe. |
@@ -1309,7 +1309,7 @@ Stage labels below match the Jenkins console exactly.
 - **2. SAST** — SonarQube.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, and that every deployment file uses the evaluated threshold — *before* an image is built.
-- **4. Build Docker image**
+- **4. Build Docker image** — `docker build --pull --build-arg APT_REFRESH=<build tag>`: refreshes the base image and re-runs the OS security upgrade on every build, while the Python dependency layer stays cached.
 - **5. Container smoke test** — the image runs with the **same runtime restrictions the real pod uses** (`--read-only`, `--tmpfs /tmp`, `--cap-drop ALL`, `--security-opt no-new-privileges`, `--user 10001:10001`) on `devsecmlops-net`, checked by `scripts/smoke_test.py` (health, version, a v3 prediction, a v4 prediction, metrics, ops UI absent).
 - **6. Image scan + SBOM** — `trivy image --exit-code 1`, plus a CycloneDX SBOM archived as a build artifact.
 - **7. Push to registry** — followed by a registry-catalog check over `registry:5000`.
@@ -1331,6 +1331,10 @@ Each failure below was a genuine problem, diagnosed from the log and fixed befor
 | 5 | Failed at 2 | `sonarqube: Name or service not known` | Declared `devsecmlops-net` on registry, minio, sonarqube in Ansible |
 | 6 | Failed at 2b | SonarQube task `FAILED` — Elasticsearch read-only at 95% disk | Reclaimed ~11GB of unused images and build cache |
 | 7 | **SUCCESS** | — | Build `2.20.3-b87`: all stages passed, zero vulnerabilities, model gate F1 0.7246, post-deploy smoke test through the live pod |
+| 8 | **SUCCESS** | — | Build `2.20.3-b88`: first run with the `MODEL_NAME` check in the model gate; then used to prove Ansible no longer rolls back Jenkins releases (see L6) |
+| 9 | Stopped at 2b | Quality Gate `ERROR`: `"v4_at_0.5"` duplicated 3 times in the new chunked evaluation (S1192) | Named constant `V4_AT_05`; `;`-joined statements split |
+| 10 | Failed at 6 | 6 HIGH OpenSSL CVEs (fixed in Debian `3.5.7-1~deb13u3`): the `apt-get upgrade` layer had been cached since 2026-09-29 | Upgrade moved after pip and re-run on every build (`APT_REFRESH`), plus `--pull` (see L2) |
+| 11 | **SUCCESS** | — | Build `2.20.3-b92`: OpenSSL at `deb13u3`, zero image vulnerabilities, all stages passed, deployed and smoke-tested in the live pod |
 
 Runs 1 and 2 are the evidence that the gate genuinely blocks: every later stage was skipped, nothing was built, pushed, or deployed.
 
