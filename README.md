@@ -42,8 +42,8 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Served v3 fallback | F1 0.6496 · precision 0.5721 · recall 0.7513 | `models/manifest.json` |
 | Weakest cause | `cascade`, recall 0.2699 (label noise by design) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 2,200 requests, 0 errors, F1 0.7267, 100% served by v4 | `scripts/live_k8s_validation.py` |
-| Latest green pipeline | Build `2.20.3-b92`: all 11 stages, 0 image vulnerabilities, smoke-tested in the live pod | [L3 run history](#l3--cicd) |
-| Tests | 58 passing | `pytest tests/` (stage 1b) |
+| Latest green pipeline | Build `2.20.3-b93`: all 11 stages, 0 image vulnerabilities, smoke-tested in the live pod | [L3 run history](#l3--cicd) |
+| Tests | 65 passing | `pytest tests/` (stage 1b) |
 | Dashboard | 30 Grafana panels, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Production = July models adopted on 2026-09-25 with hashes and an independent evaluation; a pipeline-trained candidate (MLflow run `1cc2b5a0…`, v4 F1 0.7278) is deliberately not promoted yet | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-model-registry), [Known limitations](#known-limitations-and-future-work) |
 | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
@@ -56,7 +56,7 @@ A production-oriented anomaly detection platform for a simulated 200-machine tel
 
 The current numbers, build and deployment state are summarized in [At a glance](#at-a-glance).
 
-**Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — two SonarQube Quality Gate blocks (proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, a SonarQube server-side failure caused by the VM's disk reaching 95%, a Quality Gate block on new code (a duplicated literal in the chunked evaluation), and an image-scan block on 6 HIGH OpenSSL CVEs that Debian had already fixed but a stale cached build layer never picked up. The most recent run (build `2.20.3-b92`) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
+**Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — two SonarQube Quality Gate blocks (proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, a SonarQube server-side failure caused by the VM's disk reaching 95%, a Quality Gate block on new code (a duplicated literal in the chunked evaluation), and an image-scan block on 6 HIGH OpenSSL CVEs that Debian had already fixed but a stale cached build layer never picked up. The most recent run (build `2.20.3-b93`) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
 
 **What makes this project genuinely defensible, beyond the final metrics:**
 
@@ -1302,7 +1302,7 @@ Jenkins, `Jenkinsfile`, 11 stages, every one a real gate — a failure stops the
 Stage labels below match the Jenkins console exactly.
 
 - **1. Checkout**
-- **1b. Unit tests** — pytest, 58 tests, coverage report. Fail-fast: a broken commit stops here.
+- **1b. Unit tests** — pytest, 65 tests, coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that every deployment file uses the evaluated threshold, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
@@ -1332,6 +1332,7 @@ Each failure below was a genuine problem, diagnosed from the log and fixed befor
 | 9 | Stopped at 2b | Quality Gate `ERROR`: `"v4_at_0.5"` duplicated 3 times in the new chunked evaluation (S1192) | Named constant `V4_AT_05`; `;`-joined statements split |
 | 10 | Failed at 6 | 6 HIGH OpenSSL CVEs (fixed in Debian `3.5.7-1~deb13u3`): the `apt-get upgrade` layer had been cached since 2026-09-29 | Upgrade moved after pip and re-run on every build (`APT_REFRESH`), plus `--pull` (see L2) |
 | 11 | **SUCCESS** | — | Build `2.20.3-b92`: OpenSSL at `deb13u3`, zero image vulnerabilities, all stages passed, deployed and smoke-tested in the live pod |
+| 12 | **SUCCESS** | — | Build `2.20.3-b93`: first CI run of the model gate that requires the threshold selection to match the promoted artifacts, Sonar analyzing as Python 3.12, `boto3`/`msgpack` pinned; 65 tests |
 
 Runs 1 and 2 are the evidence that the gate genuinely blocks: every later stage was skipped, nothing was built, pushed, or deployed.
 
@@ -2025,7 +2026,7 @@ this project.)
 
 ## Testing
 
-**58 tests** (up from 15), `pytest`, in `tests/`:
+**65 tests** (up from 15), `pytest`, in `tests/`:
 
 - `test_api.py` (27 tests) — every endpoint, input validation (NaN/inf
   rejection, machine length, metrics count, history shape), v3/v4
@@ -2037,11 +2038,15 @@ this project.)
   without per-class overrides.
 - `test_preprocess.py` — baseline construction, the fallback chain, z-score
   correctness, the standard-deviation floor that prevents division by zero.
-- `test_train_production.py` — the full training pipeline: promotion with
+- `test_train_production.py` — the full training pipeline and the model gate: promotion with
   correct lineage, the CI gate accepting a genuinely promoted model and
   rejecting a tampered or low-F1 one, retraining determinism, a rejected
   candidate leaving production byte-for-byte untouched, and feedback rows
-  with an unrecognized cause skipped rather than crashing.
+  with an unrecognized cause skipped rather than crashing. The threshold lifecycle has its own
+  tests: the gate accepts a selection made for these artifacts and rejects a missing selection,
+  a selection made for other artifacts, an evaluation at another threshold, and a validation
+  fleet that is the test set; promotion refuses a missing, test, or train file as the validation
+  fleet; and a promoted threshold is selected for the candidate that carries it.
 - `test_training_console.py` — the dataset whitelist (rejects path
   traversal in every form tried), that sampling genuinely spreads across
   the whole file, and that a candidate is compared against production on
