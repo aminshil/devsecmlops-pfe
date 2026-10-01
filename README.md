@@ -771,6 +771,8 @@ deployment actually returns), applies the guardrail described in
 and — only with `--promote` and only if the guardrail passes — writes
 artifacts and records full lineage in `models/manifest.json`.
 
+With `--promote`, the candidate first gets **its own** decision threshold: it is selected on the independent validation fleet (seed 7), maximizing F2 of the served decision, for exactly the candidate's artifacts (the selection record carries their SHA-256). The candidate is then evaluated at that threshold and production at its own recorded one, so the guardrail compares each model at its own operating point. `--promote` refuses to run without a validation fleet, and refuses one that is byte-identical to the train or test file.
+
 #### Choosing the decision threshold
 
 v3/v4 flag an anomaly when `P(normal)` falls below a threshold. As explained
@@ -1011,6 +1013,7 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 ### Real bugs found and fixed
 
 - **Evaluation did not fit in memory, and it froze the VM.** `evaluate_set` built features for all 17.28M test rows at once (a full DataFrame copy, the 6- and 15-feature matrices, three sets of class probabilities, and the IsolationForest run three times on the same input), for the candidate and then for production. With the platform running alongside it, the VM swapped until it became unresponsive and had to be hard-restarted. Re-run under a hard cap (`systemd-run -p MemoryMax=11G -p MemorySwapMax=0`), the kernel killed only the training process at 11.5 GB resident, which confirmed the cause without taking the VM down. Fixed by evaluating 20 whole machines at a time: rolling features are per machine, so whole-machine chunks produce identical features, and every metric is built from integer counts (TP/FP/FN, hits per cause, correct causes) that sum exactly across chunks. The IsolationForest now runs once per chunk instead of three times, and v4 probabilities are computed once for both thresholds. **Proven exact, not assumed:** re-scoring the production model with the new code rewrote its recorded evaluation with every metric byte-identical (`git diff` changed only the timestamp), and a full train-and-evaluate run then completed under the same 11 GiB cap.
+- **Promotion could inherit the previous model's threshold.** `train_production.py` defaulted to the production model's recorded threshold, so a promoted candidate was evaluated, compared by the guardrail, and recorded at a threshold that had been selected for a different model; the promoted manifest also dropped the selection evidence, which the CI gate only checked when present. `Jenkinsfile.model` additionally defaulted `PROMOTE` to true and never selected a threshold. Fixed so the lifecycle is enforced instead of documented: `--promote` selects the candidate's own threshold on the validation fleet (and refuses a missing or non-independent one), the selection record carries the SHA-256 of the artifacts it was computed for, the CI gate requires that record and rejects a mismatch, `PROMOTE` defaults to false, and the model job runs the gate before committing. The chunked selection reproduced the recorded 0.60 selection of the current production model (maximum difference 0.0001 over 19 thresholds and 4 metrics), which is what justified attesting the existing artifacts.
 
 ### Files
 
@@ -1302,7 +1305,7 @@ Stage labels below match the Jenkins console exactly.
 - **1b. Unit tests** — pytest, 58 tests, coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube.
 - **2b. Quality Gate** — `abortPipeline: true`.
-- **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, and that every deployment file uses the evaluated threshold — *before* an image is built.
+- **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that every deployment file uses the evaluated threshold, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
 - **4. Build Docker image** — `docker build --pull --build-arg APT_REFRESH=<build tag>`: refreshes the base image and re-runs the OS security upgrade on every build, while the Python dependency layer stays cached.
 - **5. Container smoke test** — the image runs with the **same runtime restrictions the real pod uses** (`--read-only`, `--tmpfs /tmp`, `--cap-drop ALL`, `--security-opt no-new-privileges`, `--user 10001:10001`) on `devsecmlops-net`, checked by `scripts/smoke_test.py` (health, version, a v3 prediction, a v4 prediction, metrics, ops UI absent).
 - **6. Image scan + SBOM** — `trivy image --exit-code 1`, plus a CycloneDX SBOM archived as a build artifact.
@@ -1789,7 +1792,7 @@ Every hardening measure across the platform, in one place:
 | Containers | Both the API and PostgreSQL run as non-root, with `readOnlyRootFilesystem`, all Linux capabilities dropped, `seccompProfile: RuntimeDefault`, and `automountServiceAccountToken: false`. |
 | Operations console | `/ui/*` does not exist (404) unless `ENABLE_OPS_UI=1` is explicitly set — the Kubernetes serving pods never set it. When enabled, it requires HTTP Basic auth, compared in constant time, and fails closed (`503`) if enabled without a password configured. This console previously had no authentication of any kind. |
 | Supply chain | Every production model artifact's SHA-256 is verified against `models/manifest.json` before it is unpickled — both in the API and in CI. A CycloneDX SBOM is generated and archived on every image build. |
-| Model governance | The CI model gate refuses a build unless the artifact hashes, the recorded F1, the deployed threshold and `MODEL_NAME` all agree with `models/manifest.json`; the API refuses to start if any production artifact is missing or modified. |
+| Model governance | The CI model gate refuses a build unless the artifact hashes, the recorded F1, the deployed threshold (selected for exactly these artifacts on an independent validation fleet) and `MODEL_NAME` all agree with `models/manifest.json`; the API refuses to start if any production artifact is missing or modified. |
 | Image | Python 3.12 on Debian trixie (was 3.10-slim); `pip` and `ensurepip` are removed from the final image after dependencies are installed; Debian security updates are applied on every build (a cached upgrade layer once shipped an already-fixed OpenSSL, caught by the image scan). |
 | Input handling | Path traversal in the training console's dataset selector closed. `NaN`/`infinity` rejected at the API boundary. `history` validated strictly (exact keys, exact length). |
 | Scanning | Trivy scans both the repository (dependencies, committed secrets, Kubernetes/Dockerfile misconfigurations) and the built image, both blocking (`--exit-code 1`) in CI. |
@@ -2069,12 +2072,20 @@ pip install -r requirements.txt
 # Generate the synthetic fleet
 python ml-model/generate_telecom_fleet.py --machines 200 --days 30 --anomaly-ratio 0.05
 
-# Train via the canonical path
-python ml-model/train_production.py --train data/telecom_fleet_v2_labeled.csv \
-  --test data/telecom_fleet_v2_test.csv --promote --report build/report.json
+# Generate the independent validation fleet (its own seed; used only to select the threshold)
+python ml-model/generate_telecom_fleet.py --machines 200 --days 14 --seed 7 \
+  --output data/telecom_fleet_v2_val.csv
 
-# Select the decision threshold by method
-python ml-model/select_threshold.py
+# Evaluate a candidate WITHOUT promoting: trains it and compares it with production on the test set
+python ml-model/train_production.py --report build/report.json
+
+# Promote: first selects the candidate's OWN threshold on the validation fleet, then evaluates the
+# candidate at that threshold and production at its own, applies the guardrail, and only then promotes
+python ml-model/train_production.py --promote --report build/report.json
+
+# Re-select the threshold for the model currently in production, then re-record its evaluation
+python ml-model/select_threshold.py --record
+python ml-model/train_production.py --evaluate-production
 
 # Benchmark the unsupervised safety net against 5 alternatives
 python ml-model/benchmark.py --data data/telecom_fleet_v2_test.csv --max-rows 0
@@ -2116,7 +2127,7 @@ python monitoring/k8s_exporter.py &
 
 ## Known limitations and future work
 
-- **Production artifacts predate the canonical pipeline.** The served models were trained in July by earlier scripts and adopted with hashes and an independent evaluation; they were not produced by `train_production.py` (manifest `git_commit: null`). A pipeline-trained candidate exists (MLflow run `1cc2b5a0…`, v4 F1 0.7278, guardrail PASS). Planned promotion path: `train_production.py --promote`, then re-run `select_threshold.py` on the new model, update the deployed threshold (enforced by the CI gate), rebuild through Jenkins, and redo `scripts/live_k8s_validation.py`, after which every production number becomes reproducible from a recorded commit.
+- **Production artifacts predate the canonical pipeline.** The served models were trained in July by earlier scripts and adopted with hashes and an independent evaluation; they were not produced by `train_production.py` (manifest `git_commit: null`). A pipeline-trained candidate exists (MLflow run `1cc2b5a0…`, v4 F1 0.7278, guardrail PASS). Planned promotion path: `train_production.py --promote` (which first selects the candidate's own threshold on the validation fleet), update `PREDICT_THRESHOLD` in the deployment files if the threshold changed (the CI gate refuses a build until they agree), rebuild through Jenkins, and redo `scripts/live_k8s_validation.py`, after which every production number becomes reproducible from a recorded commit. Syncing the deployment files with a new threshold is manual; `Jenkinsfile.model` stops with a clear message instead of committing an inconsistent state.
 
 - **No NetworkPolicy.** Pods are hardened individually (non-root, read-only filesystem, no capabilities, seccomp), but nothing restricts pod-to-pod traffic inside `ml-serving`. Adding a policy alone would not be enough: Minikube's default network plugin does not enforce NetworkPolicy, so it would need a CNI that does (e.g. Calico) and a test proving traffic is actually blocked.
 

@@ -13,7 +13,12 @@ Refuses the build unless:
   3. the threshold the evaluation was recorded at is the selected one
      (production.decision_threshold) and is exactly the value every
      deployment file configures -- so the F1 the gate checks is the F1 of
-     what is actually deployed.
+     what is actually deployed;
+  4. that threshold was SELECTED for exactly these artifacts on an independent
+     validation fleet: the manifest carries the selection record, its artifact
+     SHA-256s equal the promoted artifacts', and the validation fleet is not the
+     test set. (Checks 3 and 4 are part of the deployment check, which tests
+     outside the repository skip with --skip-deploy-check.)
 
 Exit 0 = pass, 1 = fail (with the reason printed).
 """
@@ -83,12 +88,35 @@ def deployed_thresholds(root: Path) -> dict:
     return found
 
 
+def _selection_problems(prod: dict) -> list[str]:
+    """The threshold must have been selected for exactly these artifacts, on a
+    validation fleet that is not the test set."""
+    ev = prod.get("evaluation") or {}
+    selected = prod.get("decision_threshold")
+    sel = prod.get("threshold_selection") or {}
+    if selected is None or not sel:
+        return ["no recorded threshold selection: the threshold must be selected on an independent "
+                "validation fleet for exactly these artifacts "
+                "(ml-model/select_threshold.py --record, or train_production.py --promote)"]
+    val_sha = (sel.get("validation_set") or {}).get("sha256")
+    test_sha = (ev.get("test_set") or {}).get("sha256")
+    checks = [
+        (ev.get("threshold") != selected,
+         f"evaluation recorded at {ev.get('threshold')}, but the selected threshold is {selected}"),
+        ((sel.get("selected") or {}).get("threshold") != selected,
+         "the selection evidence names a different threshold than decision_threshold"),
+        (sel.get("artifacts") != prod.get("artifacts"),
+         "the threshold was selected for different artifacts than the promoted ones "
+         "(re-run the selection for the promoted model)"),
+        (val_sha is not None and val_sha == test_sha,
+         "the validation fleet used to select the threshold is the test set"),
+    ]
+    return [msg for bad, msg in checks if bad]
+
+
 def check_threshold(prod: dict, root: Path) -> list[str]:
     evaluated = (prod.get("evaluation") or {}).get("threshold")
-    problems = []
-    selected = prod.get("decision_threshold")
-    if selected is not None and evaluated != selected:
-        problems.append(f"evaluation recorded at {evaluated}, but the selected threshold is {selected}")
+    problems = _selection_problems(prod)
     for rel, value in deployed_thresholds(root).items():
         if value is None:
             problems.append(f"{rel}: PREDICT_THRESHOLD not found")

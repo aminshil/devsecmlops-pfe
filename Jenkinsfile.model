@@ -2,9 +2,11 @@
 //
 //   1  Checkout
 //   2  Export operator feedback as a versioned dataset   (optional)
-//   3  Train candidate -> evaluate candidate AND production on the
+//   3  Train candidate -> (PROMOTE) select the candidate's own threshold on the
+//      independent validation fleet -> evaluate candidate AND production on the
 //      independent test set -> guardrail                 (train_production.py)
-//   4  Promote: commit the approved artifacts + manifest lineage to git
+//   4  Promote: run the CI model gate on the promoted manifest, then commit the
+//      approved artifacts + manifest lineage to git
 //   5  Trigger the application pipeline, which gates, builds, scans,
 //      deploys and verifies the image containing the new model
 //
@@ -23,8 +25,8 @@ pipeline {
     parameters {
         booleanParam(name: 'INCLUDE_FEEDBACK', defaultValue: true,
                      description: 'Export operator verdicts and include them in training')
-        booleanParam(name: 'PROMOTE', defaultValue: true,
-                     description: 'Commit and deploy the candidate if the guardrail passes')
+        booleanParam(name: 'PROMOTE', defaultValue: false,
+                     description: 'Select the candidate threshold on the validation fleet, then commit and deploy the candidate if the guardrail passes')
     }
 
     environment {
@@ -33,6 +35,7 @@ pipeline {
         // Tracking server on the host (Docker bridge gateway); artifacts are
         // proxied by the server, so no storage credentials are needed here.
         MLFLOW_TRACKING_URI = "http://172.17.0.1:5001"
+        F1_THRESHOLD = "0.60"
     }
 
     options {
@@ -61,17 +64,18 @@ pipeline {
             }
         }
 
-        stage('3. Train, evaluate, guardrail') {
+        stage('3. Train, select threshold, evaluate, guardrail') {
             steps {
                 script {
                     def fb = sh(script: 'ls build/feedback/*.csv 2>/dev/null | tr "\\n" " "',
                                 returnStdout: true).trim()
+                    def promoteArgs = params.PROMOTE ? "--promote --val ${env.DATA}/telecom_fleet_v2_val.csv" : ''
                     def rc = sh(returnStatus: true, script: """
                         python3 ml-model/train_production.py \
                           --train \${DATA}/telecom_fleet_v2_labeled.csv \
                           --test  \${DATA}/telecom_fleet_v2_test.csv \
                           ${fb ? '--feedback ' + fb : ''} \
-                          ${params.PROMOTE ? '--promote' : ''} \
+                          ${promoteArgs} \
                           --report build/model-report.json
                     """)
                     if (rc == 1) {
@@ -96,6 +100,7 @@ pipeline {
                                                   usernameVariable: 'GIT_USER',
                                                   passwordVariable: 'GIT_TOKEN')]) {
                     sh '''
+                        python3 scripts/verify_model_manifest.py --min-f1 ${F1_THRESHOLD} || { echo "CI model gate refused the promoted model (see above). If the threshold changed, update PREDICT_THRESHOLD in the deployment files it lists, then re-run."; exit 1; }
                         F1=$(python3 -c "import json;print(json.load(open('models/manifest.json'))['production']['evaluation']['v4']['f1'])")
                         git config user.name  "devsecmlops-model-pipeline"
                         git config user.email "model-pipeline@devsecmlops.local"

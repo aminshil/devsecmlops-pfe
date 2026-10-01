@@ -12,12 +12,28 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ml-model"))
 import train_production as tp  # noqa: E402
+sys.path.insert(0, str(ROOT / "scripts"))
+import verify_model_manifest as gate  # noqa: E402
+
+
+def _validation_for(fleet) -> Path:
+    """A validation file distinct from the train and test files. Mechanics only: it is
+    the tiny test fixture minus its last row, so its bytes differ (the independence
+    guard compares SHA-256) and it still contains anomalies. A real validation fleet is
+    generated with its own seed (data/telecom_fleet_v2_val.csv)."""
+    path = Path(fleet["test"]).with_name("derived_validation.csv")
+    if not path.exists():
+        pd.read_csv(fleet["test"]).iloc[:-1].to_csv(path, index=False)
+    return path
 
 
 def _args(fleet, models_dir, work_dir, *extra):
-    return ["--train", str(fleet["train"]), "--test", str(fleet["test"]),
+    args = ["--train", str(fleet["train"]), "--test", str(fleet["test"]),
             "--normal-sample", "5000", "--models-dir", str(models_dir),
             "--work-dir", str(work_dir), *extra]
+    if "--promote" in extra and "--val" not in extra:
+        args += ["--val", str(_validation_for(fleet))]
+    return args
 
 
 @pytest.fixture(scope="module")
@@ -148,3 +164,59 @@ def test_feedback_rows_are_used_and_unknown_causes_skipped(tiny_fleet, promoted,
 def test_missing_dataset_exits_2(tmp_path):
     assert tp.main(["--train", str(tmp_path / "nope.csv"), "--test", str(tmp_path / "nope.csv"),
                     "--models-dir", str(tmp_path)]) == 2
+
+
+# --- threshold lifecycle: a promoted model's threshold is selected for that model ---
+
+def _selected_prod():
+    arts = {"models/a.pkl": "h1"}
+    return {"artifacts": dict(arts), "decision_threshold": 0.6,
+            "evaluation": {"threshold": 0.6, "test_set": {"sha256": "test-sha"}},
+            "threshold_selection": {"selected": {"threshold": 0.6}, "artifacts": dict(arts),
+                                    "validation_set": {"sha256": "val-sha"}}}
+
+
+def test_gate_accepts_a_selection_made_for_these_artifacts(tmp_path):
+    assert gate.check_threshold(_selected_prod(), tmp_path) == []
+
+
+def test_gate_requires_a_threshold_selection(tmp_path):
+    prod = _selected_prod()
+    del prod["threshold_selection"], prod["decision_threshold"]
+    assert any("no recorded threshold selection" in p for p in gate.check_threshold(prod, tmp_path))
+
+
+def test_gate_rejects_a_threshold_selected_for_other_artifacts(tmp_path):
+    prod = _selected_prod()
+    prod["threshold_selection"]["artifacts"] = {"models/a.pkl": "other"}
+    assert any("different artifacts" in p for p in gate.check_threshold(prod, tmp_path))
+
+
+def test_gate_rejects_an_evaluation_at_another_threshold(tmp_path):
+    prod = _selected_prod()
+    prod["evaluation"]["threshold"] = 0.85
+    assert any("evaluation recorded at 0.85" in p for p in gate.check_threshold(prod, tmp_path))
+
+
+def test_gate_rejects_the_test_set_as_validation_fleet(tmp_path):
+    prod = _selected_prod()
+    prod["threshold_selection"]["validation_set"]["sha256"] = "test-sha"
+    assert any("is the test set" in p for p in gate.check_threshold(prod, tmp_path))
+
+
+def test_promotion_requires_an_independent_validation_fleet(tiny_fleet, tmp_path):
+    models, work = tmp_path / "models", tmp_path / "work"
+    models.mkdir()
+    for bad in (tmp_path / "missing.csv", Path(tiny_fleet["test"]), Path(tiny_fleet["train"])):
+        assert tp.main(_args(tiny_fleet, models, work, "--promote", "--val", str(bad))) == 2, bad
+    assert not (models / "manifest.json").exists()
+    assert not list(models.glob("*.pkl"))
+
+
+def test_promoted_threshold_is_selected_for_the_candidate(promoted):
+    prod = json.loads((promoted["models"] / "manifest.json").read_text())["production"]
+    sel = prod["threshold_selection"]
+    assert prod["decision_threshold"] == sel["selected"]["threshold"] == prod["evaluation"]["threshold"]
+    assert sel["artifacts"] == prod["artifacts"]
+    assert sel["validation_set"]["sha256"] != prod["evaluation"]["test_set"]["sha256"]
+    assert gate.check_threshold(prod, promoted["models"]) == []

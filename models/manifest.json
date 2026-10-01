@@ -196,7 +196,16 @@
           "f1": 0.5908,
           "f2": 0.7124
         }
-      ]
+      ],
+      "artifacts": {
+        "models/telecom_xgb_classifier_v2.pkl": "e141d1fac786c01e1967d4fc0300c6ceba28251aa998cfa6d0e78dde31458b33",
+        "models/telecom_xgb_label_encoder_v2.pkl": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
+        "models/telecom_xgb_v4_rolling.pkl": "181c8880ae8c3e75e346dcb89866a225f2df318e56bdea0326160325077cda8f",
+        "models/telecom_xgb_v4_rolling_encoder.pkl": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
+        "models/telecom_iso_v2.pkl": "570495a0f15ffe4d3c99e947202c36ee3f97e6696f0fbe245b3730a96d7b6ba2",
+        "models/telecom_baselines_v2.json": "616210d4c29ffeb6e5a91a2a61ea7984119b5d690495b9b13a41cd51478aa09d"
+      },
+      "artifacts_attested": "added 2026-10-01 after re-running the selection with the chunked implementation on exactly these artifacts and reproducing the recorded curve"
     },
     "evaluation": {
       "test_set": {

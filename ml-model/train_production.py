@@ -36,7 +36,7 @@ MLFLOW_TRACKING_URI is set, logged to MLflow.
 
 Usage (on the VM, from the repo root):
   python ml-model/train_production.py                 # evaluate only
-  python ml-model/train_production.py --promote       # promote if it passes
+  python ml-model/train_production.py --promote       # select the candidate's own threshold on the validation fleet, then promote if it passes
   python ml-model/train_production.py --feedback data/feedback/feedback_*.csv --promote
 """
 from __future__ import annotations
@@ -102,6 +102,8 @@ USECOLS = ["timestamp", "machine", "type", *FEATURES, "label", "anomaly_type"]
 # chunks. Memory then scales with the chunk, not with the 17.28M-row test set.
 EVAL_MACHINES_PER_CHUNK = 20
 V4_AT_05 = "v4_at_0.5"   # evaluation key: v4 at the classic 0.5 threshold, for reference
+THRESHOLD_GRID = [round(float(t), 2) for t in np.arange(0.05, 0.951, 0.05)]
+DEFAULT_VAL = ROOT / "data" / "telecom_fleet_v2_val.csv"
 
 
 def log(msg: str) -> None:
@@ -240,6 +242,86 @@ def evaluate(clf, enc, iso, x_clf, x_iso, y_bin, y_type, threshold) -> dict:
     _accumulate(c, clf.predict_proba(x_clf), list(enc.classes_), threshold,
                 iso.predict(x_iso) == -1, y_bin, y_type)
     return _finalize(c)
+
+
+def served_curve(art_dir: Path, fleet: pd.DataFrame, grid: list, beta: float) -> list[dict]:
+    """Served decision (classifier OR IsolationForest, v4 path) at every threshold of
+    the grid, from one pass of the models over the fleet, EVAL_MACHINES_PER_CHUNK whole
+    machines at a time. Exact (integer counts sum across chunks), bounded memory."""
+    baselines = json.load(open(art_dir / ARTIFACTS["baselines"]))
+    clf = joblib.load(art_dir / ARTIFACTS["v4_model"])
+    classes = list(joblib.load(art_dir / ARTIFACTS["v4_encoder"]).classes_)
+    iso = joblib.load(art_dir / ARTIFACTS["iso_model"])
+    counts = {t: {"tp": 0, "fp": 0, "fn": 0} for t in grid}
+    rows_by_machine = fleet.groupby("machine", sort=True).indices
+    machines = list(rows_by_machine)
+    for i in range(0, len(machines), EVAL_MACHINES_PER_CHUNK):
+        idx = np.concatenate([rows_by_machine[k] for k in machines[i:i + EVAL_MACHINES_PER_CHUNK]])
+        t, z, z15 = fleet_features(fleet.iloc[idx].copy(), baselines)
+        pos = t["label"].to_numpy() == 1
+        iso_hit = iso.predict(z) == -1
+        proba = clf.predict_proba(z15)
+        for th in grid:
+            hit, cause = decision.classifier_vote_batch(proba, classes, th)
+            pred, _ = decision.final_verdict_batch(hit, cause, iso_hit)
+            pb = np.asarray(pred).astype(bool)
+            counts[th]["tp"] += int(np.sum(pb & pos))
+            counts[th]["fp"] += int(np.sum(pb & ~pos))
+            counts[th]["fn"] += int(np.sum(~pb & pos))
+    b2, key, curve = beta ** 2, f"f{beta:g}", []
+    for th in grid:
+        c = counts[th]
+        p, r, f1 = _prf(c["tp"], c["fp"], c["fn"])
+        denom = (1 + b2) * c["tp"] + b2 * c["fn"] + c["fp"]
+        fb = (1 + b2) * c["tp"] / denom if denom else 0.0
+        curve.append({"threshold": th, "precision": round(p, 4), "recall": round(r, 4),
+                      "f1": round(f1, 4), key: round(fb, 4)})
+    return curve
+
+
+def select_candidate_threshold(art_dir: Path, val: pd.DataFrame, val_fp: dict, beta: float = 2.0) -> dict:
+    """Choose the decision threshold for THESE artifacts on the independent validation
+    fleet, maximising F-beta of the served decision. The record names the exact
+    artifacts it was computed for; the CI gate refuses a model whose threshold was
+    selected for anything else."""
+    curve = served_curve(art_dir, val, THRESHOLD_GRID, beta)
+    key = f"f{beta:g}"
+    best = max(curve, key=lambda r: (r[key], r["recall"]))
+    return {
+        "selected_at": datetime.now(timezone.utc).isoformat(),
+        "method": f"maximise F{beta:g} of the served decision (classifier OR "
+                  f"IsolationForest) on an independent validation fleet",
+        "validation_set": val_fp,
+        "beta": beta,
+        "selected": best,
+        "curve": curve,
+        "artifacts": {f"models/{n}": sha256(art_dir / n) for n in ARTIFACTS.values()},
+    }
+
+
+def validation_fingerprint(path: Path, datasets: dict) -> tuple[dict | None, str | None]:
+    """Fingerprint the validation fleet; refuse it if it is missing or is the train or
+    test file (the threshold must be selected on data that is neither)."""
+    try:
+        fp = fingerprint({"val": path})["val"]
+    except FileNotFoundError:
+        return None, f"validation fleet not found: {path} (generation command: see select_threshold.py --help)"
+    for name in ("train", "test"):
+        if fp["sha256"] == datasets[name]["sha256"]:
+            return None, f"the validation fleet is the {name} file ({path}); select the threshold on independent data"
+    return fp, None
+
+
+def _select_for_promotion(args, val_fp: dict) -> dict:
+    """--promote: choose the candidate's own threshold on the validation fleet, freed
+    again before the (larger) test set is loaded."""
+    val = load_fleet(args.val)
+    val_fp["rows"] = int(len(val))
+    log(f"selecting the candidate's threshold on the validation fleet ({val_fp['rows']:,} rows)")
+    selection = select_candidate_threshold(args.work_dir, val, val_fp)
+    log(f"selected threshold {selection['selected']['threshold']} "
+        f"(F2 {selection['selected']['f2']}), not inherited from production")
+    return selection
 
 
 def guardrail(cand: dict, prod: dict, max_f1_drop: float, max_recall_drop: float) -> tuple[bool, list[str]]:
@@ -408,6 +490,8 @@ def record_run(args, run: dict) -> None:
     manifest.setdefault("schema", 2)
     manifest.setdefault("history", [])
     if args.promote and run["guardrail_passed"]:
+        if run["threshold_selection"] is None:
+            raise RuntimeError("refusing to promote: no threshold was selected for the candidate")
         for name in ARTIFACTS.values():
             shutil.copy2(args.work_dir / name, args.models_dir / name)
         run["promoted"] = True
@@ -419,7 +503,9 @@ def record_run(args, run: dict) -> None:
             "datasets": run["datasets"],
             "feedback": run["feedback"],
             "params": run["params"],
-            "evaluation": {"test_set": run["datasets"]["test"], "threshold": args.threshold,
+            "decision_threshold": run["params"]["threshold"],
+            "threshold_selection": run["threshold_selection"],
+            "evaluation": {"test_set": run["datasets"]["test"], "threshold": run["params"]["threshold"],
                            **run["candidate_evaluation"]},
             "artifacts": {f"models/{n}": sha256(args.models_dir / n) for n in ARTIFACTS.values()},
         }
@@ -440,6 +526,9 @@ def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--train", type=Path, default=ROOT / "data/telecom_fleet_v2_labeled.csv")
     ap.add_argument("--test", type=Path, default=ROOT / "data/telecom_fleet_v2_test.csv")
+    ap.add_argument("--val", type=Path, default=DEFAULT_VAL,
+                    help="independent validation fleet (own seed); --promote selects the candidate's "
+                         "threshold on it and refuses a file identical to --train or --test")
     ap.add_argument("--feedback", type=Path, nargs="*", default=[])
     ap.add_argument("--normal-sample", type=int, default=2_000_000)
     ap.add_argument("--threshold", type=float, default=None,
@@ -469,6 +558,12 @@ def run_pipeline(args) -> int:
     inputs.update({f"feedback_{i}": p for i, p in enumerate(args.feedback)})
     datasets = fingerprint(inputs)
     log("dataset fingerprints: " + ", ".join(f"{k}={v['sha256'][:12]}" for k, v in datasets.items()))
+    val_fp = None
+    if args.promote:
+        val_fp, problem = validation_fingerprint(args.val, datasets)
+        if problem:
+            log(f"FATAL: cannot promote -- {problem}")
+            return 2
 
     train = load_fleet(args.train)
     datasets["train"]["rows"] = int(len(train))
@@ -480,9 +575,16 @@ def run_pipeline(args) -> int:
     train_candidate(x6, y6, x15, y15, x_iso, contamination, baselines, args.work_dir)
     del x_iso
 
+    selection = None
+    cand_threshold = args.threshold
+    if args.promote:
+        selection = _select_for_promotion(args, val_fp)
+        cand_threshold = float(selection["selected"]["threshold"])
+    log(f"candidate evaluated at threshold {cand_threshold}, production at its own {args.threshold}")
+
     test = load_fleet(args.test)
     datasets["test"]["rows"] = int(len(test))
-    cand_eval = evaluate_set(args.work_dir, test, args.threshold)
+    cand_eval = evaluate_set(args.work_dir, test, cand_threshold)
     log(f"candidate  v4 F1={cand_eval['v4']['f1']:.4f}  v3 F1={cand_eval['v3']['f1']:.4f}")
     has_prod = all((args.models_dir / v).exists() for v in ARTIFACTS.values())
     prod_eval = evaluate_set(args.models_dir, test, args.threshold) if has_prod else None
@@ -501,12 +603,13 @@ def run_pipeline(args) -> int:
         "feedback": fb_info,
         "params": {"xgb": XGB_PARAMS, "iso": {**ISO_PARAMS, "contamination": contamination},
                    "normal_sample": n_norm, "rolling_window": ROLLING_WINDOW_SIZE,
-                   "rolling_base_cols": list(ROLLING_FEATURE_BASE_COLS), "threshold": args.threshold,
+                   "rolling_base_cols": list(ROLLING_FEATURE_BASE_COLS), "threshold": cand_threshold,
                    "max_f1_drop": args.max_f1_drop, "max_recall_drop": args.max_recall_drop},
         "candidate_evaluation": cand_eval,
         "production_evaluation": prod_eval,
         "guardrail_passed": passed,
         "guardrail_reasons": reasons,
+        "threshold_selection": selection,
         "promoted": False,
         "mlflow_run_id": None,
     }
