@@ -26,7 +26,8 @@ production.threshold_selection, and production.decision_threshold is set.
 Ownership: train_production.py --promote is the only path that creates a new production
 model and its threshold. This tool only re-selects the threshold for the artifacts already in
 production (the record binds their SHA-256) and clears the recorded evaluation, so the CI gate
-fails until --evaluate-production has redone it.
+fails until --evaluate-production has redone it. Enforced: --record refuses any --models-dir
+other than models/ (a read-only run on another directory still prints the curve).
 The test-set evaluation must then be recorded at that threshold:
 
     python ml-model/train_production.py --evaluate-production
@@ -57,6 +58,11 @@ def main(argv=None) -> int:
                     help="test fleet; --val must not be this file")
     ap.add_argument("--record", action="store_true", help="write the choice into the manifest")
     a = ap.parse_args(argv)
+
+    if a.record and a.models_dir.resolve() != tp.MODELS.resolve():
+        tp.log("FATAL: --record writes threshold evidence, so it is only allowed for the production "
+               f"artifacts ({tp.MODELS}); a new model gets its threshold from train_production.py --promote")
+        return 2
 
     if not a.val.exists():
         tp.log(f"FATAL: missing validation fleet {a.val} (see the generation command in --help)")

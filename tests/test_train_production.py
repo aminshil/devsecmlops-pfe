@@ -222,15 +222,29 @@ def test_promoted_threshold_is_selected_for_the_candidate(promoted):
     assert gate.check_threshold(prod, promoted["models"]) == []
 
 
-def test_select_threshold_refuses_a_non_independent_validation_fleet(tiny_fleet, promoted, tmp_path):
+def test_select_threshold_refuses_a_non_independent_validation_fleet(tiny_fleet, promoted, tmp_path, monkeypatch):
     """The rule lives where the evidence is written: the selection tool itself must refuse the
     test or train file as validation data, and must leave the manifest untouched."""
     import select_threshold as st
     models = tmp_path / "models"
     shutil.copytree(promoted["models"], models)
+    monkeypatch.setattr(tp, "MODELS", models)      # treat the copy as the production directory
     before = (models / "manifest.json").read_bytes()
     for bad in (tiny_fleet["test"], tiny_fleet["train"]):
         rc = st.main(["--val", str(bad), "--train", str(tiny_fleet["train"]), "--test", str(tiny_fleet["test"]),
                       "--models-dir", str(models), "--record"])
         assert rc == 2, bad
     assert (models / "manifest.json").read_bytes() == before
+
+
+def test_select_threshold_record_is_only_for_the_production_artifacts(tiny_fleet, promoted, tmp_path):
+    """--record writes threshold evidence, so it must refuse any directory other than models/,
+    and leave that directory's manifest untouched."""
+    import select_threshold as st
+    candidate = tmp_path / "candidate"
+    shutil.copytree(promoted["models"], candidate)
+    before = (candidate / "manifest.json").read_bytes()
+    rc = st.main(["--val", str(_validation_for(tiny_fleet)), "--train", str(tiny_fleet["train"]),
+                  "--test", str(tiny_fleet["test"]), "--models-dir", str(candidate), "--record"])
+    assert rc == 2
+    assert (candidate / "manifest.json").read_bytes() == before

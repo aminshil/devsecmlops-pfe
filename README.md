@@ -43,7 +43,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Weakest cause | `cascade`, recall 0.2699 (label noise by design) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 2,200 requests, 0 errors, F1 0.7267, 100% served by v4 | `scripts/live_k8s_validation.py` |
 | Latest green pipeline | Build `2.20.3-b94`: all 11 stages, 0 image vulnerabilities, smoke-tested in the live pod | [L3 run history](#l3--cicd) |
-| Tests | 66 passing | `pytest tests/` (stage 1b) |
+| Tests | 67 passing | `pytest tests/` (stage 1b) |
 | Dashboard | 30 Grafana panels, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Production = July models adopted on 2026-09-25 with hashes and an independent evaluation; a pipeline-trained candidate (MLflow run `1cc2b5a0…`, v4 F1 0.7278) is deliberately not promoted yet | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-model-registry), [Known limitations](#known-limitations-and-future-work) |
 | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
@@ -771,7 +771,7 @@ deployment actually returns), applies the guardrail described in
 and — only with `--promote` and only if the guardrail passes — writes
 artifacts and records full lineage in `models/manifest.json`.
 
-With `--promote`, the candidate first gets **its own** decision threshold: it is selected on the independent validation fleet (seed 7), maximizing F2 of the served decision, for exactly the candidate's artifacts (the selection record carries their SHA-256). The candidate is then evaluated at that threshold and production at its own recorded one, so the guardrail compares each model at its own operating point. This is deliberate: a threshold is a setting of one particular model, so judging a new model at the old model's number would measure the wrong thing, and each history entry records both thresholds and the validation file the candidate's was selected on. In `models/manifest.json` history, `promoted_to_workspace` means the guardrail approved the candidate and its artifacts were written to the working tree; the `production` entry that CI deploys changes only after the CI model gate passes and `Jenkinsfile.model` commits it. `--promote` refuses to run without a validation fleet, and refuses one that is byte-identical to the train or test file; so does `select_threshold.py`, so evidence can never be written from the test set. `train_production.py --promote` is the only path that creates a new production model and its threshold. `select_threshold.py --record` only re-selects the threshold for the artifacts already in production (the record binds their SHA-256) and clears the recorded evaluation, so the CI gate fails until `train_production.py --evaluate-production` has redone it.
+With `--promote`, the candidate first gets **its own** decision threshold: it is selected on the independent validation fleet (seed 7), maximizing F2 of the served decision, for exactly the candidate's artifacts (the selection record carries their SHA-256). The candidate is then evaluated at that threshold and production at its own recorded one, so the guardrail compares each model at its own operating point. This is deliberate: a threshold is a setting of one particular model, so judging a new model at the old model's number would measure the wrong thing, and each history entry records both thresholds and the validation file the candidate's was selected on. In `models/manifest.json` history, `promoted_to_workspace` means the guardrail approved the candidate and its artifacts were written to the working tree; the `production` entry that CI deploys changes only after the CI model gate passes and `Jenkinsfile.model` commits it. `--promote` refuses to run without a validation fleet, and refuses one that is byte-identical to the train or test file; so does `select_threshold.py`, so evidence can never be written from the test set. `train_production.py --promote` is the only path that creates a new production model and its threshold. `select_threshold.py --record` only re-selects the threshold for the artifacts already in production (the record binds their SHA-256) and clears the recorded evaluation, so the CI gate fails until `train_production.py --evaluate-production` has redone it. This is enforced: `--record` refuses any `--models-dir` other than `models/`.
 
 #### Choosing the decision threshold
 
@@ -1302,7 +1302,7 @@ Jenkins, `Jenkinsfile`, 11 stages, every one a real gate — a failure stops the
 Stage labels below match the Jenkins console exactly.
 
 - **1. Checkout**
-- **1b. Unit tests** — pytest, 66 tests, coverage report. Fail-fast: a broken commit stops here.
+- **1b. Unit tests** — pytest, 67 tests, coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that every deployment file uses the evaluated threshold, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
@@ -2027,7 +2027,7 @@ this project.)
 
 ## Testing
 
-**66 tests** (up from 15), `pytest`, in `tests/`:
+**67 tests** (up from 15), `pytest`, in `tests/`:
 
 - `test_api.py` (27 tests) — every endpoint, input validation (NaN/inf
   rejection, machine length, metrics count, history shape), v3/v4
@@ -2047,7 +2047,7 @@ this project.)
   tests: the gate accepts a selection made for these artifacts and rejects a missing selection,
   a selection made for other artifacts, an evaluation at another threshold, and a validation
   fleet that is the test set; promotion refuses a missing, test, or train file as the validation
-  fleet; and a promoted threshold is selected for the candidate that carries it.
+  fleet; and a promoted threshold is selected for the candidate that carries it. The standalone selection tool refuses a non-independent validation fleet, and refuses `--record` for any directory other than `models/`.
 - `test_training_console.py` — the dataset whitelist (rejects path
   traversal in every form tried), that sampling genuinely spreads across
   the whole file, and that a candidate is compared against production on
