@@ -57,7 +57,7 @@ def test_initial_training_is_promoted_with_lineage(promoted):
     assert len(prod["artifacts"]) == len(tp.ARTIFACTS)
     for key in ("v3", "v4", "v4_at_0.5"):
         assert 0.0 <= prod["evaluation"][key]["f1"] <= 1.0
-    assert manifest["history"][-1]["promoted"] is True
+    assert manifest["history"][-1]["promoted_to_workspace"] is True
 
 
 def test_ci_gate_accepts_promoted_model(promoted):
@@ -105,7 +105,7 @@ def test_rejected_candidate_leaves_production_untouched(tiny_fleet, promoted, tm
     assert rc == 1
     assert {p.name: p.read_bytes() for p in models.glob("*.pkl")} == before
     history = json.loads((models / "manifest.json").read_text())["history"]
-    assert history[-1]["promoted"] is False
+    assert history[-1]["promoted_to_workspace"] is False
     assert history[-1]["guardrail_reasons"] == ["forced rejection"]
 
 

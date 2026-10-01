@@ -22,6 +22,11 @@ With --record, the choice and its evidence (validation-set fingerprint, beta,
 the full precision/recall/F curve, and the SHA-256 of the artifacts it was
 computed for) are written to models/manifest.json under
 production.threshold_selection, and production.decision_threshold is set.
+
+Ownership: train_production.py --promote is the only path that creates a new production
+model and its threshold. This tool only re-selects the threshold for the artifacts already in
+production (the record binds their SHA-256) and clears the recorded evaluation, so the CI gate
+fails until --evaluate-production has redone it.
 The test-set evaluation must then be recorded at that threshold:
 
     python ml-model/train_production.py --evaluate-production

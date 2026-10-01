@@ -518,7 +518,10 @@ def record_run(args, run: dict) -> None:
         log("not promoted: guardrail rejected the candidate")
     manifest["history"].append({k: run[k] for k in (
         "finished_at", "git_commit", "datasets", "feedback", "guardrail_passed",
-        "guardrail_reasons", "promoted", "mlflow_run_id")} | {
+        "guardrail_reasons", "mlflow_run_id")} | {
+        # approved by the guardrail and written to the working tree; the production entry that
+        # CI deploys only changes once the CI model gate passes and Jenkinsfile.model commits it
+        "promoted_to_workspace": run["promoted"],
         "candidate_f1": {p: run["candidate_evaluation"][p]["f1"] for p in ("v3", "v4")},
         "candidate_threshold": run["params"]["threshold"],
         "production_threshold": args.threshold,
