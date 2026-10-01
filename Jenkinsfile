@@ -41,7 +41,7 @@ pipeline {
                         sonar-scanner \
                           -Dsonar.projectKey=devsecmlops-pfe \
                           -Dsonar.sources=api,ml-model \
-                          -Dsonar.python.version=3.10 \
+                          -Dsonar.python.version=3.12 \
                           -Dsonar.python.coverage.reportPaths=coverage.xml
                     '''
                 }
