@@ -35,7 +35,7 @@ pipeline {
         // Tracking server on the host (Docker bridge gateway); artifacts are
         // proxied by the server, so no storage credentials are needed here.
         MLFLOW_TRACKING_URI = "http://172.17.0.1:5001"
-        F1_THRESHOLD = "0.60"
+        MIN_F1 = "0.60"          // minimum served v4 F1 the CI model gate accepts
     }
 
     options {
@@ -53,6 +53,7 @@ pipeline {
                     python3 -m pip install --quiet --break-system-packages -r requirements-api.txt mlflow==3.16.1
                     test -f ${DATA}/telecom_fleet_v2_labeled.csv
                     test -f ${DATA}/telecom_fleet_v2_test.csv
+                    test -f ${DATA}/telecom_fleet_v2_val.csv
                 '''
             }
         }
@@ -100,7 +101,7 @@ pipeline {
                                                   usernameVariable: 'GIT_USER',
                                                   passwordVariable: 'GIT_TOKEN')]) {
                     sh '''
-                        python3 scripts/verify_model_manifest.py --min-f1 ${F1_THRESHOLD} || { echo "CI model gate refused the promoted model (see above). If the threshold changed, update PREDICT_THRESHOLD in the deployment files it lists, then re-run."; exit 1; }
+                        python3 scripts/verify_model_manifest.py --min-f1 ${MIN_F1} || { echo "CI model gate refused the promoted model (see above). If the threshold changed, update PREDICT_THRESHOLD in the deployment files it lists, then re-run."; exit 1; }
                         F1=$(python3 -c "import json;print(json.load(open('models/manifest.json'))['production']['evaluation']['v4']['f1'])")
                         git config user.name  "devsecmlops-model-pipeline"
                         git config user.email "model-pipeline@devsecmlops.local"

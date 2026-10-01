@@ -205,7 +205,11 @@
         "models/telecom_iso_v2.pkl": "570495a0f15ffe4d3c99e947202c36ee3f97e6696f0fbe245b3730a96d7b6ba2",
         "models/telecom_baselines_v2.json": "616210d4c29ffeb6e5a91a2a61ea7984119b5d690495b9b13a41cd51478aa09d"
       },
-      "artifacts_attested": "added 2026-10-01 after re-running the selection with the chunked implementation on exactly these artifacts and reproducing the recorded curve"
+      "attestation": {
+        "method": "sha256 of the promoted artifacts, recorded after re-running the selection",
+        "verified_at": "2026-10-01",
+        "result": "the chunked selection reproduced the recorded curve exactly (max difference 0.0)"
+      }
     },
     "evaluation": {
       "test_set": {

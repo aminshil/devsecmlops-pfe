@@ -771,7 +771,7 @@ deployment actually returns), applies the guardrail described in
 and — only with `--promote` and only if the guardrail passes — writes
 artifacts and records full lineage in `models/manifest.json`.
 
-With `--promote`, the candidate first gets **its own** decision threshold: it is selected on the independent validation fleet (seed 7), maximizing F2 of the served decision, for exactly the candidate's artifacts (the selection record carries their SHA-256). The candidate is then evaluated at that threshold and production at its own recorded one, so the guardrail compares each model at its own operating point. `--promote` refuses to run without a validation fleet, and refuses one that is byte-identical to the train or test file.
+With `--promote`, the candidate first gets **its own** decision threshold: it is selected on the independent validation fleet (seed 7), maximizing F2 of the served decision, for exactly the candidate's artifacts (the selection record carries their SHA-256). The candidate is then evaluated at that threshold and production at its own recorded one, so the guardrail compares each model at its own operating point. This is deliberate: a threshold is a setting of one particular model, so judging a new model at the old model's number would measure the wrong thing, and each history entry records both thresholds and the validation file the candidate's was selected on. `--promote` refuses to run without a validation fleet, and refuses one that is byte-identical to the train or test file; so does `select_threshold.py`, so evidence can never be written from the test set.
 
 #### Choosing the decision threshold
 

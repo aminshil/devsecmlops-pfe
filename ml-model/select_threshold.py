@@ -46,13 +46,20 @@ def main(argv=None) -> int:
     ap.add_argument("--val", type=Path, default=ROOT / "data/telecom_fleet_v2_val.csv")
     ap.add_argument("--models-dir", type=Path, default=tp.MODELS)
     ap.add_argument("--beta", type=float, default=2.0)
+    ap.add_argument("--train", type=Path, default=tp.ROOT / "data/telecom_fleet_v2_labeled.csv",
+                    help="training fleet; --val must not be this file")
+    ap.add_argument("--test", type=Path, default=tp.ROOT / "data/telecom_fleet_v2_test.csv",
+                    help="test fleet; --val must not be this file")
     ap.add_argument("--record", action="store_true", help="write the choice into the manifest")
     a = ap.parse_args(argv)
 
     if not a.val.exists():
         tp.log(f"FATAL: missing validation fleet {a.val} (see the generation command in --help)")
         return 2
-    fp = tp.fingerprint({"val": a.val})["val"]
+    fp, problem = tp.validation_fingerprint(a.val, tp.fingerprint({"train": a.train, "test": a.test}))
+    if problem:
+        tp.log(f"FATAL: {problem}")
+        return 2
     fleet = tp.load_fleet(a.val)
     fp["rows"] = int(len(fleet))
     tp.log(f"validation fleet {fp['file']}: {fp['rows']:,} rows, sha256 {fp['sha256'][:12]}")

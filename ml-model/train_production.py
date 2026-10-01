@@ -21,7 +21,11 @@ path by which a model reaches production:
      from the stored raw metrics and history using the CANDIDATE's baselines.
   3. Evaluate the candidate AND the current production artifacts with the
      same code, on the same independent test set, using the serving decision
-     rule (ml-model/decision.py) at the production threshold.
+     rule (ml-model/decision.py), each at its OWN serving threshold: with --promote the
+     candidate is evaluated at the threshold selected for it on the independent
+     validation fleet (step 2b), production at its currently deployed one. The guardrail
+     therefore compares what each model would actually serve, not two models at one
+     number chosen for only one of them.
   4. Guardrail: the candidate is promotable only if, for both the v4 (primary)
      and v3 (fallback) serving paths, F1 does not drop by more than
      --max-f1-drop and no cause's recall drops by more than --max-recall-drop.
@@ -515,7 +519,10 @@ def record_run(args, run: dict) -> None:
     manifest["history"].append({k: run[k] for k in (
         "finished_at", "git_commit", "datasets", "feedback", "guardrail_passed",
         "guardrail_reasons", "promoted", "mlflow_run_id")} | {
-        "candidate_f1": {p: run["candidate_evaluation"][p]["f1"] for p in ("v3", "v4")}})
+        "candidate_f1": {p: run["candidate_evaluation"][p]["f1"] for p in ("v3", "v4")},
+        "candidate_threshold": run["params"]["threshold"],
+        "production_threshold": args.threshold,
+        "threshold_selected_on": ((run["threshold_selection"] or {}).get("validation_set") or {}).get("sha256")})
     write_manifest(args.models_dir, manifest)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)

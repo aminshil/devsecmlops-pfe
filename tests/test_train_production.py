@@ -220,3 +220,17 @@ def test_promoted_threshold_is_selected_for_the_candidate(promoted):
     assert sel["artifacts"] == prod["artifacts"]
     assert sel["validation_set"]["sha256"] != prod["evaluation"]["test_set"]["sha256"]
     assert gate.check_threshold(prod, promoted["models"]) == []
+
+
+def test_select_threshold_refuses_a_non_independent_validation_fleet(tiny_fleet, promoted, tmp_path):
+    """The rule lives where the evidence is written: the selection tool itself must refuse the
+    test or train file as validation data, and must leave the manifest untouched."""
+    import select_threshold as st
+    models = tmp_path / "models"
+    shutil.copytree(promoted["models"], models)
+    before = (models / "manifest.json").read_bytes()
+    for bad in (tiny_fleet["test"], tiny_fleet["train"]):
+        rc = st.main(["--val", str(bad), "--train", str(tiny_fleet["train"]), "--test", str(tiny_fleet["test"]),
+                      "--models-dir", str(models), "--record"])
+        assert rc == 2, bad
+    assert (models / "manifest.json").read_bytes() == before
