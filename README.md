@@ -1289,7 +1289,7 @@ docker run -p 8000:8000 devsecmlops-api:$(cat VERSION)
 | `Dockerfile` | The image build — Python 3.12, non-root, hardened, model artifacts baked in. |
 | `docker-entrypoint.sh` | Startup script; only does real work for the legacy `telecom_v2` path (MinIO fetch), fails closed if MinIO credentials aren't supplied. |
 | `.dockerignore` | Excludes `venv/`, `data/`, old models from the build context. |
-| `requirements-api.txt` | Pinned, curated dependencies — the same versions the host venv uses, since pickled models must be loaded by the version that wrote them. |
+| `requirements-api.txt` | Pinned, curated dependencies — the same versions the host venv uses, since pickled models must be loaded by the version that wrote them. `boto3` (used only by the legacy v2 MinIO path) and `msgpack` (a security floor) are pinned in the Dockerfile; their transitive dependencies are bounded by those pins, not locked. |
 
 ---
 

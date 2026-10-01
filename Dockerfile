@@ -28,7 +28,7 @@ COPY requirements-api.txt .
 # wheels are never used at runtime; removing them shrinks the attack
 # surface and removes stale vendored copies that scanners report.
 RUN pip install --no-cache-dir -r requirements-api.txt && \
-    pip install --no-cache-dir "msgpack>=1.2.1" boto3 && \
+    pip install --no-cache-dir "msgpack==1.2.3" "boto3==1.43.106" && \
     pip uninstall -y pip && \
     rm -rf /usr/local/lib/python3.12/ensurepip
 
