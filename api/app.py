@@ -1498,10 +1498,137 @@ def ui_verify(body: _RunRef):
     return _training.verify_run(body.run_id)
 
 
-@app.post("/ui/register")
-def ui_register(body: _RunRef):
-    """Register a verified run + return the real kubectl deploy commands (shown)."""
-    return _training.register_run(body.run_id)
+# ===========================================================================
+# Continuous training: judge predictions served by the CLUSTER and see the model lifecycle.
+# This panel's own API has no database (its /predict logs nothing), so these routes forward
+# to the cluster API, whose predictions ARE logged in PostgreSQL. They live under /ui/, so the
+# operations middleware (Basic auth, 404 unless ENABLE_OPS_UI=1) covers them.
+# ===========================================================================
+import urllib.error as _ue
+import uuid as _uuid
+from fastapi import HTTPException as _HTTPException
+
+_CLUSTER_SCHEME = "http"   # the NodePort on the VM's private Minikube network has no TLS
+_CLUSTER_API = (os.environ.get("CLUSTER_API_URL") or f"{_CLUSTER_SCHEME}://192.168.49.2:30080").rstrip("/")
+_VERDICT_NAMES = frozenset({"true_positive", "false_positive", "true_negative", "false_negative"})
+_PENDING = "_pending"
+_RUN_ID = "mlflow_run_id"
+
+
+class _ClusterError(RuntimeError):
+    """The cluster API did not answer as expected."""
+
+
+def _cluster_call(method: str, path: str, body: dict | None = None, timeout: int = 15) -> dict:
+    """Call the cluster API. `path` is a constant or is built from a validated UUID."""
+    data = json.dumps(body).encode() if body is not None else None
+    req = _ur.Request(_CLUSTER_API + path, method=method, data=data,
+                      headers={"Content-Type": "application/json"})
+    try:
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except _ue.HTTPError as e:
+        raise _ClusterError(f"cluster API {method} {path} -> HTTP {e.code}") from e
+    except (OSError, ValueError) as e:
+        raise _ClusterError(f"cluster API unreachable at {_CLUSTER_API}: {e}") from e
+
+
+class _ClusterPredict(BaseModel):
+    machine: str
+    hour: int | None = None
+    timestamp: str | None = None
+    metrics: dict
+    history: dict | None = None
+
+
+class _ClusterVerdict(BaseModel):
+    verdict: str
+    notes: str | None = None
+
+
+@app.post("/ui/cluster/predict")
+def ui_cluster_predict(body: _ClusterPredict):
+    """Score one reading on the cluster API (v4 when history is supplied); it logs the prediction."""
+    try:
+        return _cluster_call("POST", "/predict", body.model_dump(exclude_none=True))
+    except _ClusterError as e:
+        raise _HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/ui/cluster/feedback/{prediction_id}")
+def ui_cluster_feedback(prediction_id: str, body: _ClusterVerdict):
+    """Record an operator verdict for a prediction the cluster logged."""
+    try:
+        pid = str(_uuid.UUID(prediction_id))
+    except ValueError as e:
+        raise _HTTPException(status_code=400, detail="prediction id must be a UUID") from e
+    if body.verdict not in _VERDICT_NAMES:
+        raise _HTTPException(status_code=400, detail="verdict must be one of " + ", ".join(sorted(_VERDICT_NAMES)))
+    payload = {"verdict": body.verdict}
+    if body.notes:
+        payload["notes"] = body.notes[:200]
+    try:
+        return _cluster_call("POST", "/feedback/" + pid, payload)
+    except _ClusterError as e:
+        raise _HTTPException(status_code=502, detail=str(e)) from e
+
+
+def _ct_feedback() -> dict:
+    out = {"reachable": False, "error": "", "total_predictions": None, "by_verdict": {}, "judged": 0, "pending": 0}
+    try:
+        stats = _cluster_call("GET", "/feedback/stats")
+    except _ClusterError as e:
+        out["error"] = str(e)
+        return out
+    by = dict(stats.get("by_verdict") or {})
+    out.update(reachable=True, total_predictions=stats.get("total_predictions"),
+               pending=int(by.pop(_PENDING, 0)), judged=sum(int(v) for v in by.values()), by_verdict=by)
+    return out
+
+
+def _ct_deployed() -> dict:
+    try:
+        health = _cluster_call("GET", "/health")
+    except _ClusterError:
+        return {}
+    return {"version": health.get("version"), "lineage": health.get("model_lineage") or {}}
+
+
+def _ct_manifest() -> dict:
+    try:
+        return json.loads(MANIFEST_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _ct_history(manifest: dict, limit: int = 8) -> list:
+    rows = []
+    for h in reversed((manifest.get("history") or [])[-limit:]):
+        rows.append({
+            "finished_at": h.get("finished_at"),
+            "git_commit": (h.get("git_commit") or "")[:8],
+            "guardrail_passed": h.get("guardrail_passed"),
+            "promoted": h.get("promoted_to_workspace", h.get("promoted")),
+            "candidate_v4_f1": (h.get("candidate_f1") or {}).get("v4"),
+            "candidate_threshold": h.get("candidate_threshold"),
+            "production_threshold": h.get("production_threshold"),
+            "feedback_files": sum(1 for k in (h.get("datasets") or {}) if str(k).startswith("feedback")),
+            _RUN_ID: h.get(_RUN_ID),
+        })
+    return rows
+
+
+@app.get("/ui/ct")
+def ui_ct():
+    """Read-only view of the continuous-training loop: feedback counts, the serving model, the history."""
+    manifest = _ct_manifest()
+    prod = manifest.get("production") or {}
+    v4 = (prod.get("evaluation") or {}).get("v4") or {}
+    return {"cluster_api": _CLUSTER_API, "feedback": _ct_feedback(), "deployed": _ct_deployed(),
+            "manifest": {"served_v4_f1": v4.get("f1"), "threshold": prod.get("decision_threshold"),
+                         "source": prod.get("source"), "promoted_at": prod.get("promoted_at"),
+                         _RUN_ID: prod.get(_RUN_ID)},
+            "history": _ct_history(manifest)}
 # ===========================================================================
 # Operator-tab helpers + pipeline control (drive the Grafana-feeding pipeline
 # and the sim clock from the control panel). Demo/ops surface.

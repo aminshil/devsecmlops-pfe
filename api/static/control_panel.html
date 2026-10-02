@@ -114,6 +114,7 @@
     <button type="button" data-tab="demo">Demo</button>
     <button type="button" data-tab="infra">Infrastructure</button>
     <button type="button" data-tab="training">Training</button>
+    <button type="button" data-tab="ct">Continuous training</button>
     <button type="button" data-tab="summary">Project</button>
   </div>
 
@@ -201,11 +202,12 @@
   <div class="tabpage" id="demo">
     <div class="card">
       <h3>Send test readings &amp; evaluate</h3>
-      <div class="sub">Each reading is a real, held-out test row (seed-123) with its true label. The model predicts; we score it right/wrong live.</div>
+      <div class="sub">Each reading is a real, held-out test row (seed-123) with its true label. The model predicts; we score it right/wrong live. Readings are answered by the cluster API, which logs them: judge them and the verdicts feed the retraining (see the Continuous training tab).</div>
       <div class="btnrow">
         <button type="button" class="btn" data-batch="20">Send 20 readings</button>
         <button type="button" class="btn sec" data-batch="5">Send 5</button>
         <button type="button" class="btn sec" id="btnClearResults">Clear</button>
+        <button type="button" class="btn sec" id="btnJudgeAll">Judge all with the real labels</button>
       </div>
       <div id="scoreBar" style="margin-top:16px"></div>
       <div id="resultsTable"></div>
@@ -264,6 +266,14 @@
 
   </div>
 
+  <div class="tabpage" id="ct">
+    <div class="card" style="margin-bottom:16px">
+      <h3>Continuous training <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshCt">↻</button></h3>
+      <div class="sub">The loop: the cluster logs every prediction, an operator judges some of them (Demo and Operator tabs), the Jenkins job <span class="mono">devsecmlops-model</span> exports the judged rows, retrains and lets a guardrail decide, then the model gate and the main pipeline deploy it. This tab only reads: the retraining itself runs in Jenkins.</div>
+      <div id="ct_body"><div class="hint">Open this tab to load.</div></div>
+    </div>
+  </div>
+
   <div class="tabpage" id="summary">
     <div class="card">
       <h3>Project summary</h3>
@@ -293,11 +303,93 @@
   function kv(k,v){ return '<div class="kv"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>'; }
   function sectionTitle(t){ return '<div style="margin:18px 0 6px;font-family:var(--mono);font-size:12px;color:var(--teal)">'+t+'</div>'; }
   async function getJSON(url, opts){ const r=await fetch(url,opts); const d=await r.json(); if(!r.ok){ throw new Error((d&&d.detail)?d.detail:("HTTP "+r.status)); } return d; }
+  const CT_VERDICT={TP:"true_positive",TN:"true_negative",FP:"false_positive",FN:"false_negative"};
+  const CT_JSON={"Content-Type":"application/json"};
+  function ctEsc(s){ return String(s==null?"—":s).replace(/[&<>"]/g,function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
+  async function predictLogged(body){
+    try{ return await getJSON(API+"/ui/cluster/predict",{method:"POST",headers:CT_JSON,body:JSON.stringify(body)}); }
+    catch(e){ console.debug("cluster API unavailable, using the local API (prediction not logged)", e); return await getJSON(API+"/predict",{method:"POST",headers:CT_JSON,body:JSON.stringify(body)}); }
+  }
+  async function sendVerdict(predictionId,verdict,notes){
+    return getJSON(API+"/ui/cluster/feedback/"+encodeURIComponent(predictionId),{method:"POST",headers:CT_JSON,body:JSON.stringify({verdict:verdict,notes:notes})});
+  }
+  function judgeCell(r,i){
+    const pid=r.detail&&r.detail.prediction_id;
+    if(!pid){ return '<span class="hint">not logged</span>'; }
+    if(r.operator){ return '<span class="tag norm">'+ctEsc(r.operator.replace("_"," "))+'</span>'; }
+    const flagged=r.predicted==="anomaly";
+    const opts=flagged?[["true_positive","Real"],["false_positive","False alarm"]]:[["true_negative","Normal"],["false_negative","Missed"]];
+    return opts.map(function(o){ return '<button type="button" class="linkbtn" data-judge="'+i+'|'+o[0]+'">'+o[1]+'</button>'; }).join(" ");
+  }
+  async function judgeRow(i,verdict){
+    const r=RESULTS[i];
+    if(!r||!r.detail||!r.detail.prediction_id||r.operator){ return; }
+    try{ await sendVerdict(r.detail.prediction_id,verdict,"control-panel demo tab"); r.operator=verdict; }
+    catch(e){ alert("Could not record the verdict: "+e.message); return; }
+    renderResults();
+  }
+  async function judgeAll(){
+    let n=0;
+    for(let i=0;i<RESULTS.length;i++){
+      const r=RESULTS[i];
+      if(r.detail&&r.detail.prediction_id&&!r.operator){
+        try{ await sendVerdict(r.detail.prediction_id,CT_VERDICT[r.verdict],"control-panel demo tab: real label"); r.operator=CT_VERDICT[r.verdict]; n++; }
+        catch(e){ console.debug("verdict not recorded", e); }
+      }
+    }
+    renderResults();
+    if(!n){ alert("Nothing to judge: send readings first (readings answered by the local API are not logged)."); }
+  }
+  function opJudgeHtml(d){
+    if(!d.prediction_id){ return '<div class="hint" style="margin-top:12px">Not logged: the cluster API did not answer, so this prediction cannot be judged.</div>'; }
+    const flagged=d.is_anomaly===1;
+    const opts=flagged?[["true_positive","It is a real anomaly"],["false_positive","False alarm"]]:[["true_negative","Really normal"],["false_negative","It missed one"]];
+    let h='<div style="margin-top:14px">'+sectionTitle("Operator verdict (feeds the retraining)");
+    opts.forEach(function(o){ h+='<button type="button" class="btn sec small" data-opjudge="'+o[0]+'" data-pid="'+ctEsc(d.prediction_id)+'">'+o[1]+'</button> '; });
+    return h+'<div class="hint" id="op_judge_note" style="margin-top:6px"></div></div>';
+  }
+  async function opJudge(btn){
+    const note=document.getElementById("op_judge_note");
+    try{ await sendVerdict(btn.dataset.pid,btn.dataset.opjudge,"control-panel operator tab"); note.textContent="recorded: "+btn.dataset.opjudge.replace("_"," "); }
+    catch(e){ note.textContent="not recorded: "+e.message; }
+  }
+  function ctHistoryTable(rows){
+    if(!rows.length){ return '<div class="hint">No retraining run recorded yet.</div>'; }
+    let h='<table><thead><tr><th>When</th><th>Commit</th><th>Candidate v4 F1</th><th>Threshold (cand / prod)</th><th>Guardrail</th><th>Promoted</th><th>Feedback files</th><th>MLflow run</th></tr></thead><tbody>';
+    rows.forEach(function(x){
+      h+='<tr><td class="mono">'+ctEsc(x.finished_at)+'</td><td class="mono">'+ctEsc(x.git_commit)+'</td><td class="mono">'+ctEsc(x.candidate_v4_f1)+'</td>';
+      h+='<td class="mono">'+ctEsc(x.candidate_threshold)+' / '+ctEsc(x.production_threshold)+'</td>';
+      h+='<td><span class="tag '+(x.guardrail_passed?"norm":"anom")+'">'+(x.guardrail_passed?"pass":"reject")+'</span></td>';
+      h+='<td class="mono">'+ctEsc(x.promoted)+'</td><td class="mono">'+ctEsc(x.feedback_files)+'</td><td class="mono">'+ctEsc(x.mlflow_run_id)+'</td></tr>';
+    });
+    return h+"</tbody></table>";
+  }
+  async function loadCt(){
+    const body=document.getElementById("ct_body");
+    body.innerHTML='<div class="hint"><span class="spin"></span> loading…</div>';
+    let d;
+    try{ d=await getJSON(API+"/ui/ct"); }
+    catch(e){ body.innerHTML='<div class="hint" style="color:var(--red)">Failed to load: '+ctEsc(e.message)+'</div>'; return; }
+    const fb=d.feedback||{}, dep=d.deployed||{}, lin=dep.lineage||{}, man=d.manifest||{}, base=location.protocol+"//"+location.hostname;
+    let h=sectionTitle("1 · Feedback logged by the cluster");
+    if(fb.reachable){ h+=kv("predictions logged",ctEsc(fb.total_predictions))+kv("judged by an operator",ctEsc(fb.judged))+kv("not judged",ctEsc(fb.pending))+kv("verdicts",ctEsc(JSON.stringify(fb.by_verdict))); }
+    else{ h+='<div class="hint" style="color:var(--red)">Cluster API unreachable: '+ctEsc(fb.error)+'</div>'; }
+    h+=sectionTitle("2 · Model the cluster is serving");
+    h+=kv("version",ctEsc(dep.version))+kv("served v4 F1 (recorded)",ctEsc(lin.served_v4_f1))+kv("promoted at",ctEsc(lin.promoted_at))+kv("MLflow run",ctEsc(lin.mlflow_run_id));
+    h+=sectionTitle("3 · Model in the repository manifest");
+    h+=kv("served v4 F1",ctEsc(man.served_v4_f1))+kv("decision threshold",ctEsc(man.threshold))+kv("source",ctEsc(man.source))+kv("MLflow run",ctEsc(man.mlflow_run_id));
+    h+=sectionTitle("4 · Retraining runs (manifest history, newest first)");
+    h+=ctHistoryTable(d.history||[]);
+    h+=sectionTitle("5 · Where the retraining runs");
+    h+='<div class="hint"><a href="'+base+':8080/job/devsecmlops-model/" target="_blank" rel="noopener noreferrer">Jenkins job devsecmlops-model</a> · <a href="'+base+':5001/" target="_blank" rel="noopener noreferrer">MLflow</a></div>';
+    body.innerHTML=h;
+  }
   function activateTab(id){
     document.querySelectorAll(".tabpage").forEach(function(p){ p.classList.remove("on"); });
     document.querySelectorAll(".tabs button").forEach(function(b){ b.classList.toggle("on", b.dataset.tab===id); });
     const page=document.getElementById(id); if(page){ page.classList.add("on"); }
     if(id==="status"){ refreshStatus(); loadFixLog(); }
+    if(id==="ct"){ loadCt(); }
     if(id==="infra"){ loadInfra(); loadPipeline(); }
     if(id==="training"){ loadDatasets(); loadRuns(); }
     if(id==="summary"){ loadSummary(); }
@@ -559,7 +651,7 @@
     document.getElementById("op_verdict").innerHTML='<span class="spin"></span> analyzing…';
     document.getElementById("op_rbody").innerHTML="";
     try{
-      const d=await getJSON(API+"/predict",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      const d=await predictLogged(body);
       renderPrediction(d);
     }catch(e){
       document.getElementById("op_verdict").className="verdict anom";
@@ -577,7 +669,7 @@
     if(d.iso_vote){ h+=kv("IsolationForest",(d.iso_vote.is_anomaly?"anomaly":"normal")+" · "+d.iso_vote.score); }
     h+=kv("rolling (v4)",d.rolling_features_used?"yes":"no")+kv("baseline",d.baseline_used||"—");
     if(d.z_scores){ h+='<div class="zgrid">'; Object.keys(d.z_scores).forEach(function(k){ const val=d.z_scores[k]; h+='<div class="zchip '+zClass(val)+'"><div class="zn">'+k+'</div><div class="zv">'+(val>0?"+":"")+val+'</div></div>'; }); h+='</div>'; }
-    document.getElementById("op_rbody").innerHTML=h;
+    document.getElementById("op_rbody").innerHTML=h+opJudgeHtml(d);
   }
   async function injectCascade(){
     const anomalies={"router-06":0.55,"web-06":0.62,"app-06":0.60,"db-03":0.58,"cache-05":0.59,"queue-01":0.57};
@@ -690,7 +782,7 @@
       try{
         const body={machine:s.machine,hour:s.hour,metrics:s.metrics};
         if(s.history){ body.history=s.history; }
-        const d=await getJSON(API+"/predict",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+        const d=await predictLogged(body);
         const msTaken=Math.round(performance.now()-t0);
         const predicted=d.is_anomaly===1;
         RESULTS.unshift({time:new Date().toLocaleTimeString(),machine:s.machine,truth:isAnom?"anomaly":"normal",predicted:predicted?"anomaly":"normal",cause:d.likely_cause||"—",verdict:verdictOf(isAnom,predicted),ms:msTaken,detail:d});
@@ -732,8 +824,9 @@
     h+='<td class="mono">'+r.cause+'</td>';
     h+='<td><span class="tag '+vtag+'">'+VERDICT_LABEL[r.verdict]+'</span></td>';
     h+='<td class="mono">'+r.ms+'</td>';
+    h+='<td>'+judgeCell(r,i)+'</td>';
     h+='<td><button type="button" class="linkbtn" data-detail="'+i+'">details</button></td></tr>';
-    h+='<tr id="det-'+i+'" style="display:none"><td colspan="8" style="background:#0c1119">'+detailHtml(r.detail)+'</td></tr>';
+    h+='<tr id="det-'+i+'" style="display:none"><td colspan="9" style="background:#0c1119">'+detailHtml(r.detail)+'</td></tr>';
     return h;
   }
   function renderResults(){
@@ -746,7 +839,7 @@
     if(PAGE>totalPages){ PAGE=totalPages; }
     const startI=(PAGE-1)*perPage;
     const pageRows=RESULTS.slice(startI,startI+perPage);
-    let h='<table><thead><tr><th>Time</th><th>Machine</th><th>Real</th><th>Predicted</th><th>Cause</th><th>Result</th><th>ms</th><th></th></tr></thead><tbody>';
+    let h='<table><thead><tr><th>Time</th><th>Machine</th><th>Real</th><th>Predicted</th><th>Cause</th><th>Result</th><th>ms</th><th>Operator verdict</th><th></th></tr></thead><tbody>';
     pageRows.forEach(function(r,pi){ h+=rowHtml(r,startI+pi); });
     h+="</tbody></table>";
     let pager='<div style="display:flex;gap:8px;align-items:center;margin-top:12px;font-family:var(--mono);font-size:12px">';
@@ -774,7 +867,10 @@
   document.getElementById("btnCascade").addEventListener("click", injectCascade);
   document.getElementById("btnClearRC").addEventListener("click", function(){ document.getElementById("rc_result").classList.remove("show"); });
   document.getElementById("btnClearResults").addEventListener("click", clearResults);
-  document.getElementById("resultsTable").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.detail!==undefined){ toggleDetail(Number(t.dataset.detail)); } if(t.dataset.page!==undefined){ gotoPage(Number(t.dataset.page)); } });
+  document.getElementById("btnJudgeAll").addEventListener("click", judgeAll);
+  document.getElementById("btnRefreshCt").addEventListener("click", loadCt);
+  document.getElementById("op_rbody").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.opjudge!==undefined){ opJudge(t); } });
+  document.getElementById("resultsTable").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.detail!==undefined){ toggleDetail(Number(t.dataset.detail)); } if(t.dataset.page!==undefined){ gotoPage(Number(t.dataset.page)); } if(t.dataset.judge!==undefined){ const p=t.dataset.judge.split("|"); judgeRow(Number(p[0]),p[1]); } });
   await refreshStatus();
   await loadFixLog();
   await loadMachines();

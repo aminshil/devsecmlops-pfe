@@ -43,7 +43,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Weakest cause | `cascade`, recall 0.2699 (label noise by design) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 2,200 requests, 0 errors, F1 0.7267, 100% served by v4 | `scripts/live_k8s_validation.py` |
 | Latest green pipeline | Build `2.20.3-b95`: all 11 stages, 0 image vulnerabilities, smoke-tested in the live pod | [L3 run history](#l3--cicd) |
-| Tests | 67 passing | `pytest tests/` (stage 1b) |
+| Tests | 78 passing | `pytest tests/` (stage 1b) |
 | Dashboard | 30 Grafana panels, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Production = July models adopted on 2026-09-25 with hashes and an independent evaluation; a pipeline-trained candidate (MLflow run `1cc2b5a0…`, v4 F1 0.7278) is deliberately not promoted yet | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
 | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
@@ -1138,13 +1138,14 @@ Tabs:
 - **Root Cause** — inject a router cascade (a router plus its real
   `dependency_graph.json` dependents) and watch `/root-cause` rank the
   culprit vs the downstream victims.
-- **Demo** — send batches of **real, held-out test readings** and score the
+- **Demo** — readings are answered by the cluster API, which logs them, so each result has operator-verdict buttons (or one button that judges them all with the real labels) that feed the retraining; if the cluster is unreachable it falls back to the local API and marks the rows "not logged".  send batches of **real, held-out test readings** and score the
   model live: a table of real-vs-predicted with a TP/TN/FP/FN verdict per
   row, a running precision/recall/accuracy scorebar, and an expandable
   per-prediction detail.
 - **Infrastructure** — Docker containers and images, Kubernetes pods (image
   tags, restart counts), `kubectl top`, HPA status, Prometheus target
   health, and the machines currently flagged anomalous.
+- **Continuous training** — read-only view of the retraining loop: predictions logged by the cluster and how many an operator judged, the model the cluster serves (from its `/health`), the model in the repository manifest, the recent retraining runs, and links to the Jenkins job and MLflow. The retraining itself runs in Jenkins (`Jenkinsfile.model`).
 - **Project** — a results summary.
 
 #### Honest demo evaluation, and a bug it exposed
@@ -1302,7 +1303,7 @@ Jenkins, `Jenkinsfile`, 11 stages, every one a real gate — a failure stops the
 Stage labels below match the Jenkins console exactly.
 
 - **1. Checkout**
-- **1b. Unit tests** — pytest, 67 tests, coverage report. Fail-fast: a broken commit stops here.
+- **1b. Unit tests** — pytest, 78 tests, coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that every deployment file uses the evaluated threshold, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
@@ -2028,7 +2029,7 @@ this project.)
 
 ## Testing
 
-**67 tests** (up from 15), `pytest`, in `tests/`:
+**78 tests** (up from 15), `pytest`, in `tests/`:
 
 - `test_api.py` (27 tests) — every endpoint, input validation (NaN/inf
   rejection, machine length, metrics count, history shape), v3/v4
