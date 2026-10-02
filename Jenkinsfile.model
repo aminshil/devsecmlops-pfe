@@ -1,41 +1,48 @@
 // DevSecMLOps model pipeline (Jenkins job "devsecmlops-model", run on demand).
 //
-//   1  Checkout
-//   2  Export operator feedback as a versioned dataset   (optional)
-//   3  Train candidate -> (PROMOTE) select the candidate's own threshold on the
-//      independent validation fleet -> evaluate candidate AND production on the
-//      independent test set -> guardrail                 (train_production.py)
-//   4  Promote: run the CI model gate on the promoted manifest, then commit the
-//      approved artifacts + manifest lineage to git
-//   5  Trigger the application pipeline, which gates, builds, scans,
-//      deploys and verifies the image containing the new model
+// This job produces a new model and hands it to the normal pipeline. It never builds an image.
 //
-// A rejected candidate is a valid outcome: the build is marked UNSTABLE,
-// production is untouched and nothing is committed. The run report is
-// archived either way.
+//   1  Checkout and preflight   dependencies, datasets, MLflow reachability, memory guard (full)
+//   2  Export operator feedback as a versioned dataset   (optional; kubectl exec into PostgreSQL)
+//   3  Prepare smoke data       smoke only: tiny generated fleets + a scratch copy of the production artifacts
+//   4  Train candidate -> (full + PROMOTE) select the candidate's own threshold on the independent
+//      validation fleet -> evaluate candidate AND production on the test set -> guardrail
+//   5  Evidence                 report summary; smoke: the real models/ is byte-for-byte untouched
+//   6  Verify MLflow + MinIO    full only: the run exists and its model files are readable from MinIO
+//   7  Commit promoted model    run the CI model gate on the promoted manifest, then git commit + push
+//   8  Trigger the application pipeline, which gates, builds, scans, deploys and verifies the image
+//
+// SCOPE=smoke (default): tiny fleets, scratch directories, no MLflow logging (keeps the production
+//   experiment clean), never commits or deploys. About 5 minutes. Proves the wiring in Jenkins.
+// SCOPE=full: the real 17M-row datasets from the data mount, logs to MLflow (artifacts land in MinIO).
+//   Needs about 9 GB of free memory: stop SonarQube first. PROMOTE is honoured only here.
+//
+// A rejected candidate is a valid outcome: the build is marked UNSTABLE, production is untouched and
+// nothing is committed. The run report is archived either way.
 //
 // Prerequisites this job needs (provisioned by Ansible, not by this file):
-//   - the Jenkins container has data/ mounted read-only at
-//     /var/jenkins_home/fleet-data (ansible/roles/prerequisites)
-//   - a Jenkins credential "github-pat-devsecmlops" (username+PAT) exists,
-//     with push access to this repo
+//   - the Jenkins container has data/ mounted read-only at /var/jenkins_home/fleet-data
+//   - a Jenkins credential "github-pat-devsecmlops" (username+PAT), with push access to this repo
+//     (only needed to promote)
 pipeline {
     agent any
 
     parameters {
+        choice(name: 'SCOPE', choices: ['smoke', 'full'],
+               description: 'smoke: tiny generated fleets, scratch directories, never commits or deploys. full: the real datasets, logs to MLflow, needs about 9 GB free memory.')
         booleanParam(name: 'INCLUDE_FEEDBACK', defaultValue: true,
-                     description: 'Export operator verdicts and include them in training')
+                     description: 'Export operator verdicts from PostgreSQL (kubectl exec) and train on them too')
         booleanParam(name: 'PROMOTE', defaultValue: false,
-                     description: 'Select the candidate threshold on the validation fleet, then commit and deploy the candidate if the guardrail passes')
+                     description: 'full scope only: select the candidate threshold on the validation fleet, then commit and deploy the candidate if the guardrail passes')
     }
 
     environment {
         DATA          = "/var/jenkins_home/fleet-data"      // read-only mount of repo data/
         KUBECONFIG    = "/home/pfe/.kube/config"
-        // Tracking server on the host (Docker bridge gateway); artifacts are
-        // proxied by the server, so no storage credentials are needed here.
+        // Tracking server on the host (Docker bridge gateway); artifacts are proxied by the
+        // server into MinIO, so no storage credentials are needed here.
         MLFLOW_TRACKING_URI = "http://172.17.0.1:5001"
-        MIN_F1 = "0.60"          // minimum served v4 F1 the CI model gate accepts
+        MIN_F1        = "0.60"          // minimum served v4 F1 the CI model gate accepts
     }
 
     options {
@@ -45,16 +52,44 @@ pipeline {
     }
 
     stages {
-        stage('1. Checkout') {
+        stage('1. Checkout and preflight') {
             steps {
                 checkout scm
                 sh '''
                     git log --oneline -1
+                    rm -rf build
                     python3 -m pip install --quiet --break-system-packages -r requirements-api.txt mlflow==3.16.1
-                    test -f ${DATA}/telecom_fleet_v2_labeled.csv
-                    test -f ${DATA}/telecom_fleet_v2_test.csv
-                    test -f ${DATA}/telecom_fleet_v2_val.csv
                 '''
+                script {
+                    env.DO_PROMOTE = (params.SCOPE == 'full' && params.PROMOTE) ? 'true' : 'false'
+                    if (params.PROMOTE && params.SCOPE != 'full') {
+                        echo 'PROMOTE is ignored in smoke scope: nothing is committed or deployed'
+                    }
+                    def mlflowOk = sh(returnStatus: true,
+                                      script: 'curl -sf --max-time 10 ${MLFLOW_TRACKING_URI}/health') == 0
+                    if (mlflowOk) {
+                        echo 'MLflow reachable'
+                    } else if (params.SCOPE == 'full') {
+                        error("MLflow is not reachable at ${env.MLFLOW_TRACKING_URI}")
+                    } else {
+                        echo 'WARNING: MLflow is not reachable (not needed in smoke scope)'
+                    }
+                    if (params.SCOPE == 'full') {
+                        sh '''
+                            test -f ${DATA}/telecom_fleet_v2_labeled.csv
+                            test -f ${DATA}/telecom_fleet_v2_test.csv
+                            test -f ${DATA}/telecom_fleet_v2_val.csv
+                            avail=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+                            echo "memory available: ${avail} MiB"
+                            if [ "$avail" -lt 9000 ]; then
+                                echo "the full scope needs about 9000 MiB free: stop SonarQube (docker stop sonarqube) and retry"
+                                exit 1
+                            fi
+                        '''
+                    } else {
+                        sh 'test -f ml-model/generate_telecom_fleet.py'
+                    }
+                }
             }
         }
 
@@ -65,36 +100,87 @@ pipeline {
             }
         }
 
-        stage('3. Train, select threshold, evaluate, guardrail') {
+        stage('3. Prepare smoke data') {
+            when { expression { params.SCOPE == 'smoke' } }
+            steps {
+                sh '''
+                    mkdir -p build/smoke-data build/smoke-models
+                    python3 ml-model/generate_telecom_fleet.py --machines 30 --days 3 --seed 42  --anomaly-ratio 0.08 --output build/smoke-data/train.csv > build/smoke-data/gen-train.log
+                    python3 ml-model/generate_telecom_fleet.py --machines 30 --days 3 --seed 123 --anomaly-ratio 0.08 --output build/smoke-data/test.csv  > build/smoke-data/gen-test.log
+                    cp models/telecom_xgb_classifier_v2.pkl models/telecom_xgb_label_encoder_v2.pkl \
+                       models/telecom_xgb_v4_rolling.pkl models/telecom_xgb_v4_rolling_encoder.pkl \
+                       models/telecom_iso_v2.pkl models/telecom_baselines_v2.json models/manifest.json \
+                       build/smoke-models/
+                    sha256sum models/*.pkl models/*.json > build/production-before.sha256
+                    tail -n 3 build/smoke-data/gen-train.log
+                '''
+            }
+        }
+
+        stage('4. Train, evaluate, guardrail') {
             steps {
                 script {
                     def fb = sh(script: 'ls build/feedback/*.csv 2>/dev/null | tr "\\n" " "',
                                 returnStdout: true).trim()
-                    def promoteArgs = params.PROMOTE ? "--promote --val ${env.DATA}/telecom_fleet_v2_val.csv" : ''
-                    def rc = sh(returnStatus: true, script: """
-                        python3 ml-model/train_production.py \
-                          --train \${DATA}/telecom_fleet_v2_labeled.csv \
-                          --test  \${DATA}/telecom_fleet_v2_test.csv \
-                          ${fb ? '--feedback ' + fb : ''} \
-                          ${promoteArgs} \
-                          --report build/model-report.json
-                    """)
+                    def feedbackArg = fb ? '--feedback ' + fb : ''
+                    def cmd
+                    if (params.SCOPE == 'smoke') {
+                        cmd = "env -u MLFLOW_TRACKING_URI python3 ml-model/train_production.py " +
+                              "--train build/smoke-data/train.csv --test build/smoke-data/test.csv " +
+                              "--normal-sample 5000 --models-dir build/smoke-models --work-dir build/smoke-work " +
+                              "${feedbackArg} --report build/model-report.json"
+                    } else {
+                        def promoteArgs = env.DO_PROMOTE == 'true' ? "--promote --val ${env.DATA}/telecom_fleet_v2_val.csv" : ''
+                        cmd = "python3 ml-model/train_production.py " +
+                              "--train ${env.DATA}/telecom_fleet_v2_labeled.csv --test ${env.DATA}/telecom_fleet_v2_test.csv " +
+                              "${feedbackArg} ${promoteArgs} --report build/model-report.json"
+                    }
+                    def rc = sh(returnStatus: true, script: cmd)
                     if (rc == 1) {
                         env.MODEL_OUTCOME = 'rejected'
                         unstable('Guardrail rejected the candidate -- production model unchanged')
                     } else if (rc != 0) {
                         error("training pipeline failed (exit ${rc})")
                     } else {
-                        env.MODEL_OUTCOME = params.PROMOTE ? 'promoted' : 'passed'
+                        env.MODEL_OUTCOME = env.DO_PROMOTE == 'true' ? 'promoted' : 'passed'
                     }
                 }
             }
-            post {
-                always { archiveArtifacts artifacts: 'build/model-report.json', allowEmptyArchive: true }
+        }
+
+        stage('5. Evidence') {
+            steps {
+                sh 'python3 scripts/model_report_summary.py build/model-report.json'
+                script {
+                    if (params.SCOPE == 'smoke') {
+                        sh '''
+                            sha256sum -c build/production-before.sha256
+                            test -z "$(git status --porcelain models/)"
+                            echo "the real models/ directory is untouched (hashes identical, git status clean)"
+                        '''
+                    }
+                }
             }
         }
 
-        stage('4. Commit promoted model') {
+        stage('6. Verify MLflow and MinIO') {
+            when { expression { params.SCOPE == 'full' } }
+            steps {
+                sh '''
+                    RUN=$(python3 -c "import json;print(json.load(open('build/model-report.json')).get('mlflow_run_id') or '')")
+                    test -n "$RUN" || { echo "MLflow logging was skipped: the report has no run id"; exit 1; }
+                    echo "MLflow run: $RUN"
+                    curl -sf "${MLFLOW_TRACKING_URI}/api/2.0/mlflow/artifacts/list?run_id=${RUN}&path=model" | python3 -c "
+import json, sys
+files = [f['path'] for f in json.load(sys.stdin).get('files', [])]
+print('model files readable from MLflow (stored in MinIO):', len(files))
+[print('  ', f) for f in files]
+sys.exit(0 if len(files) >= 6 else 1)"
+                '''
+            }
+        }
+
+        stage('7. Commit promoted model') {
             when { expression { env.MODEL_OUTCOME == 'promoted' } }
             steps {
                 withCredentials([usernamePassword(credentialsId: 'github-pat-devsecmlops',
@@ -113,7 +199,7 @@ pipeline {
             }
         }
 
-        stage('5. Deploy through the application pipeline') {
+        stage('8. Deploy through the application pipeline') {
             when { expression { env.MODEL_OUTCOME == 'promoted' } }
             steps {
                 build job: 'devsecmlops-pipeline', wait: true
@@ -122,8 +208,9 @@ pipeline {
     }
 
     post {
-        success  { echo "Model pipeline: ${env.MODEL_OUTCOME}" }
-        unstable { echo "Model pipeline: candidate rejected by the guardrail; production unchanged" }
+        always   { archiveArtifacts artifacts: 'build/model-report.json,build/feedback/*', allowEmptyArchive: true }
+        success  { echo "Model pipeline (${params.SCOPE}): ${env.MODEL_OUTCOME}" }
+        unstable { echo "Model pipeline (${params.SCOPE}): candidate rejected by the guardrail; production unchanged" }
         failure  { echo "Model pipeline FAILED at ${env.STAGE_NAME}" }
     }
 }
