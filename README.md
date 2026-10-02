@@ -45,7 +45,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Latest green pipeline | Build `2.20.3-b95`: all 11 stages, 0 image vulnerabilities, smoke-tested in the live pod | [L3 run history](#l3--cicd) |
 | Tests | 67 passing | `pytest tests/` (stage 1b) |
 | Dashboard | 30 Grafana panels, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
-| Model provenance | Production = July models adopted on 2026-09-25 with hashes and an independent evaluation; a pipeline-trained candidate (MLflow run `1cc2b5a0…`, v4 F1 0.7278) is deliberately not promoted yet | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-model-registry), [Known limitations](#known-limitations-and-future-work) |
+| Model provenance | Production = July models adopted on 2026-09-25 with hashes and an independent evaluation; a pipeline-trained candidate (MLflow run `1cc2b5a0…`, v4 F1 0.7278) is deliberately not promoted yet | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
 | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
 
 ---
@@ -1555,9 +1555,9 @@ screenshot, not just the query) and fixed in the most recent pass.
 web, 35 app, 30 db, 20 cache, 20 queue, 15 batch, 15 edge, 8 router, 7
 firewall, 5 dns, 5 voip.
 
-### MLflow and MinIO (experiment tracking, model registry)
+### MLflow and MinIO (experiment tracking, artifact store)
 
-MLflow (tracking + model registry) backed by MinIO (self-hosted
+MLflow (experiment tracking and artifact store; the pipeline does not use the Model Registry: a model version is identified by its manifest hashes and the MLflow run ID) backed by MinIO (self-hosted
 S3-compatible artifact storage) — self-hosted rather than a cloud SaaS,
 satisfying the data-sovereignty constraint from the original project
 requirements.
@@ -1694,7 +1694,7 @@ survive a reboot. The unified, systemd-everywhere design closes that gap.
 #### MLflow provisioned and supervised
 
 MLflow runs as a systemd service (`:5001`) with `--serve-artifacts`,
-proxying uploads to MinIO — see [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-model-registry)
+proxying uploads to MinIO — see [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store)
 above for the real round-trip verification. It was not consistently running
 before this pass.
 
