@@ -1743,6 +1743,23 @@ def _fix_result(ok, note=None, error=None, **extra):
     return out
 
 
+# The host layers are systemd units (Restart=always, enabled at boot). Stopping one by killing its process is
+# undone seconds later, and starting one by spawning it makes a second copy outside systemd (a Prometheus with
+# another storage path, a second production agent doubling the traffic): systemctl is the single authority.
+_UNIT_FOR_TARGET = {"prometheus": "prometheus", "monitoring/k8s_exporter.py": "k8s-exporter",
+                    _AGENT_SCRIPT: "production-agent"}
+
+
+def _systemctl(action, unit, layer_name):
+    try:
+        r = _sp.run(["systemctl", action, unit], capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        return _fix_result(False, error=str(e))
+    if r.returncode == 0:
+        return _fix_result(True, note=f"{action} {layer_name} (systemd unit '{unit}')")
+    return _fix_result(False, error=r.stderr.strip() or f"systemctl {action} {unit} failed")
+
+
 def _stop_docker(target):
     try:
         r = _sp.run(["docker", "stop", target], capture_output=True, text=True, timeout=30)
@@ -1754,6 +1771,9 @@ def _stop_docker(target):
 
 
 def _stop_process(target, layer_name):
+    unit = _UNIT_FOR_TARGET.get(target)
+    if unit:
+        return _systemctl("stop", unit, layer_name)
     pat = "prometheus --config" if target == "prometheus" else target
     try:
         _sp.run(["pkill", "-f", pat], capture_output=True)
@@ -1792,6 +1812,9 @@ def _spawn_process(target, layer_name):
 
 
 def _start_process(target, layer_name):
+    unit = _UNIT_FOR_TARGET.get(target)
+    if unit:
+        return _systemctl("start", unit, layer_name)
     if _process_already_running(target):
         return _fix_result(True, note=f"{layer_name} already running")
     try:
