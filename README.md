@@ -42,7 +42,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Served v3 fallback | F1 0.6496 · precision 0.5721 · recall 0.7513 | `models/manifest.json` |
 | Weakest cause | `cascade`, recall 0.2699 (label noise by design) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 2,200 requests, 0 errors, F1 0.7267, 100% served by v4 | `scripts/live_k8s_validation.py` |
-| Latest green pipeline | Build `2.20.3-b95`: all 11 stages, 0 image vulnerabilities, smoke-tested in the live pod | [L3 run history](#l3--cicd) |
+| Latest green pipeline | Build `2.20.3-b97`: all 11 stages, 0 image vulnerabilities, smoke-tested in the live pod | [L3 run history](#l3--cicd) |
 | Tests | 86 passing | `pytest tests/` (stage 1b) |
 | Dashboard | 30 Grafana panels, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Production = July models adopted on 2026-09-25 with hashes and an independent evaluation; a pipeline-trained candidate (MLflow run `1cc2b5a0…`, v4 F1 0.7278) is deliberately not promoted yet | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
@@ -56,7 +56,7 @@ A production-oriented anomaly detection platform for a simulated 200-machine tel
 
 The current numbers, build and deployment state are summarized in [At a glance](#at-a-glance).
 
-**Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — two SonarQube Quality Gate blocks (proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, a SonarQube server-side failure caused by the VM's disk reaching 95%, a Quality Gate block on new code (a duplicated literal in the chunked evaluation), and an image-scan block on 6 HIGH OpenSSL CVEs that Debian had already fixed but a stale cached build layer never picked up. The most recent run (build `2.20.3-b95`) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
+**Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — two SonarQube Quality Gate blocks (proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, a SonarQube server-side failure caused by the VM's disk reaching 95%, a Quality Gate block on new code (a duplicated literal in the chunked evaluation), and an image-scan block on 6 HIGH OpenSSL CVEs that Debian had already fixed but a stale cached build layer never picked up. The most recent run (build `2.20.3-b97`) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
 
 **What makes this project genuinely defensible, beyond the final metrics:**
 
@@ -1335,6 +1335,8 @@ Each failure below was a genuine problem, diagnosed from the log and fixed befor
 | 12 | **SUCCESS** | — | Build `2.20.3-b93`: first CI run of the model gate that requires the threshold selection to match the promoted artifacts, Sonar analyzing as Python 3.12, `boto3`/`msgpack` pinned; 65 tests |
 | 13 | **SUCCESS** | — | Build `2.20.3-b94`, the first green run on the final code: 66 tests, Sonar Python 3.12 gate OK on the new selection-tool code, model gate with the structured threshold attestation, 0 image vulnerabilities, smoke-tested in the live pod |
 | 14 | **SUCCESS** | — | Build `2.20.3-b95` on the final commit: 67 tests, Sonar gate OK on the enforced `--record` rule, model gate OK, 0 image vulnerabilities, smoke-tested in the live pod |
+| 15 | Stopped at 2b | Quality Gate `ERROR` on the continuous-training panel code (build `b96`): a hardcoded-IP review item, four undocumented HTTP error codes on the cluster routes, a `for` loop in the panel JS | Error codes documented in `responses=`, `for-of`; the IP (Minikube's fixed node address) reviewed in SonarQube |
+| 16 | **SUCCESS** | — | Build `2.20.3-b97`: 86 tests, Sonar gate OK on the panel, sampler and history-logging code, 0 image vulnerabilities, deployed and smoke-tested; the first image whose API logs the rolling history with every prediction |
 
 Runs 1 and 2 are the evidence that the gate genuinely blocks: every later stage was skipped, nothing was built, pushed, or deployed.
 
