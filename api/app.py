@@ -1519,6 +1519,8 @@ _CLUSTER_API = (os.environ.get("CLUSTER_API_URL") or f"{_CLUSTER_SCHEME}://192.1
 _VERDICT_NAMES = frozenset({"true_positive", "false_positive", "true_negative", "false_negative"})
 _PENDING = "_pending"
 _RUN_ID = "mlflow_run_id"
+_CLUSTER_DOWN = {"description": "The cluster API did not answer as expected"}
+_BAD_INPUT = {"description": "Malformed prediction id or unknown verdict"}
 
 
 class _ClusterError(RuntimeError):
@@ -1552,7 +1554,7 @@ class _ClusterVerdict(BaseModel):
     notes: str | None = None
 
 
-@app.post("/ui/cluster/predict")
+@app.post("/ui/cluster/predict", responses={502: _CLUSTER_DOWN})
 def ui_cluster_predict(body: _ClusterPredict):
     """Score one reading on the cluster API (v4 when history is supplied); it logs the prediction."""
     try:
@@ -1561,7 +1563,7 @@ def ui_cluster_predict(body: _ClusterPredict):
         raise _HTTPException(status_code=502, detail=str(e)) from e
 
 
-@app.post("/ui/cluster/feedback/{prediction_id}")
+@app.post("/ui/cluster/feedback/{prediction_id}", responses={400: _BAD_INPUT, 502: _CLUSTER_DOWN})
 def ui_cluster_feedback(prediction_id: str, body: _ClusterVerdict):
     """Record an operator verdict for a prediction the cluster logged."""
     try:

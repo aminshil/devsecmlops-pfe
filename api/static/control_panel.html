@@ -331,8 +331,7 @@
   }
   async function judgeBatch(onlyFlagged){
     let n=0;
-    for(let i=0;i<RESULTS.length;i++){
-      const r=RESULTS[i];
+    for(const r of RESULTS){
       if(r.detail&&r.detail.prediction_id&&!r.operator&&(!onlyFlagged||r.predicted==="anomaly")){
         try{ await sendVerdict(r.detail.prediction_id,CT_VERDICT[r.verdict],"control-panel demo tab: real label"); r.operator=CT_VERDICT[r.verdict]; n++; }
         catch(e){ console.debug("verdict not recorded", e); }
