@@ -43,7 +43,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Weakest cause | `cascade`, recall 0.2699 (label noise by design) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 2,200 requests, 0 errors, F1 0.7267, 100% served by v4 | `scripts/live_k8s_validation.py` |
 | Latest green pipeline | Build `2.20.3-b97`: all 11 stages, 0 image vulnerabilities, smoke-tested in the live pod | [L3 run history](#l3--cicd) |
-| Tests | 86 passing | `pytest tests/` (stage 1b) |
+| Tests | 96 passing | `pytest tests/` (stage 1b) |
 | Dashboard | 30 Grafana panels, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Production = July models adopted on 2026-09-25 with hashes and an independent evaluation; a pipeline-trained candidate (MLflow run `1cc2b5a0…`, v4 F1 0.7278) is deliberately not promoted yet; a Jenkins full-scale run reproduced it (MLflow `57e33ba0…`, v4 F1 0.7280, guardrail PASS, model files read back from MinIO) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
 | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
@@ -1043,6 +1043,8 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 | `models/manifest.json` | Full lineage: artifact SHA-256 hashes, dataset fingerprints, the selected threshold and its evidence, the recorded evaluation. |
 | `models/history/` | Every promoted model, timestamped — a real evidence trail. |
 | `data/telecom_fleet_v2_labeled.csv` (seed 42), `_val.csv` (seed 7), `_test.csv` (seed 123) | Training, threshold-selection, and evaluation data — three separate files, never mixed. |
+| `data/telecom_fleet_v2_operator.csv` (seed 2026, 200 machines, 3 days) | The operator-stream fleet the control panel samples from. Judged readings become feedback rows used for retraining, so it is deliberately not the training, validation or test file. |
+| smoke-scope fleets (generated in the Jenkins workspace: 30 machines, 3 days, seeds 42 and 123) | A plumbing check for `Jenkinsfile.model` with `SCOPE=smoke`: 5 minutes, no memory risk, production untouched. They are not subsets of the real files, and their scores must never be quoted as performance (production scores 0.7708 on the tiny test fleet and 0.7246 on the real one). `SCOPE=full` uses the real files above. |
 
 ---
 
@@ -1302,7 +1304,7 @@ Jenkins, `Jenkinsfile`, 11 stages, every one a real gate — a failure stops the
 Stage labels below match the Jenkins console exactly.
 
 - **1. Checkout**
-- **1b. Unit tests** — pytest, 86 tests, coverage report. Fail-fast: a broken commit stops here.
+- **1b. Unit tests** — pytest, 96 tests, coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that every deployment file uses the evaluated threshold, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
@@ -2033,7 +2035,7 @@ this project.)
 
 ## Testing
 
-**86 tests** (up from 15), `pytest`, in `tests/`:
+**96 tests** (up from 15), `pytest`, in `tests/`:
 
 - `test_api.py` (27 tests) — every endpoint, input validation (NaN/inf
   rejection, machine length, metrics count, history shape), v3/v4
