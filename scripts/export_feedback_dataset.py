@@ -35,6 +35,7 @@ def main() -> int:
     ap.add_argument("--pod", default="postgres-0")
     ap.add_argument("--out-dir", type=Path, default=ROOT / "data" / "feedback")
     a = ap.parse_args()
+    a.out_dir = a.out_dir.resolve()   # Jenkins passes a relative path
 
     cmd = ["kubectl", "-n", a.namespace, "exec", a.pod, "--", "sh", "-c",
            f'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c "{QUERY}"']
@@ -51,7 +52,8 @@ def main() -> int:
     out.write_text(res.stdout)
     digest = hashlib.sha256(out.read_bytes()).hexdigest()
     out.with_suffix(".csv.sha256").write_text(f"{digest}  {out.name}\n")
-    print(f"{out.relative_to(ROOT)}  rows={rows}  sha256={digest}")
+    shown = out.relative_to(ROOT) if ROOT in out.parents else out
+    print(f"{shown}  rows={rows}  sha256={digest}")
     return 0
 
 

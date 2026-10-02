@@ -208,6 +208,7 @@
         <button type="button" class="btn sec" data-batch="5">Send 5</button>
         <button type="button" class="btn sec" id="btnClearResults">Clear</button>
         <button type="button" class="btn sec" id="btnJudgeAll">Judge all with the real labels</button>
+        <button type="button" class="btn sec" id="btnJudgeFlagged">Review alerts only (flagged readings)</button>
       </div>
       <div id="scoreBar" style="margin-top:16px"></div>
       <div id="resultsTable"></div>
@@ -328,17 +329,17 @@
     catch(e){ alert("Could not record the verdict: "+e.message); return; }
     renderResults();
   }
-  async function judgeAll(){
+  async function judgeBatch(onlyFlagged){
     let n=0;
     for(let i=0;i<RESULTS.length;i++){
       const r=RESULTS[i];
-      if(r.detail&&r.detail.prediction_id&&!r.operator){
+      if(r.detail&&r.detail.prediction_id&&!r.operator&&(!onlyFlagged||r.predicted==="anomaly")){
         try{ await sendVerdict(r.detail.prediction_id,CT_VERDICT[r.verdict],"control-panel demo tab: real label"); r.operator=CT_VERDICT[r.verdict]; n++; }
         catch(e){ console.debug("verdict not recorded", e); }
       }
     }
     renderResults();
-    if(!n){ alert("Nothing to judge: send readings first (readings answered by the local API are not logged)."); }
+    if(!n){ alert("Nothing to judge: send readings first, or none of them was flagged (readings answered by the local API are not logged)."); }
   }
   function opJudgeHtml(d){
     if(!d.prediction_id){ return '<div class="hint" style="margin-top:12px">Not logged: the cluster API did not answer, so this prediction cannot be judged.</div>'; }
@@ -867,7 +868,8 @@
   document.getElementById("btnCascade").addEventListener("click", injectCascade);
   document.getElementById("btnClearRC").addEventListener("click", function(){ document.getElementById("rc_result").classList.remove("show"); });
   document.getElementById("btnClearResults").addEventListener("click", clearResults);
-  document.getElementById("btnJudgeAll").addEventListener("click", judgeAll);
+  document.getElementById("btnJudgeAll").addEventListener("click", function(){ judgeBatch(false); });
+  document.getElementById("btnJudgeFlagged").addEventListener("click", function(){ judgeBatch(true); });
   document.getElementById("btnRefreshCt").addEventListener("click", loadCt);
   document.getElementById("op_rbody").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.opjudge!==undefined){ opJudge(t); } });
   document.getElementById("resultsTable").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.detail!==undefined){ toggleDetail(Number(t.dataset.detail)); } if(t.dataset.page!==undefined){ gotoPage(Number(t.dataset.page)); } if(t.dataset.judge!==undefined){ const p=t.dataset.judge.split("|"); judgeRow(Number(p[0]),p[1]); } });
