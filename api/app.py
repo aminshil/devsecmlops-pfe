@@ -732,6 +732,7 @@ def _predict_v4(reading, X, z_scores, window, machine_type, baseline_used):
     else:
         likely_cause = None
     prediction_id = _safe_insert_prediction(
+        history=reading.history,
         machine=reading.machine,
         machine_type=machine_type,
         window=window,
@@ -803,6 +804,7 @@ def _predict_v3_v4(reading, X, z_scores, window, machine_type, baseline_used):
         likely_cause = None
     
     prediction_id = _safe_insert_prediction(
+        history=reading.history,
         machine=reading.machine,
         machine_type=machine_type,
         window=window,

@@ -43,7 +43,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Weakest cause | `cascade`, recall 0.2699 (label noise by design) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 2,200 requests, 0 errors, F1 0.7267, 100% served by v4 | `scripts/live_k8s_validation.py` |
 | Latest green pipeline | Build `2.20.3-b95`: all 11 stages, 0 image vulnerabilities, smoke-tested in the live pod | [L3 run history](#l3--cicd) |
-| Tests | 78 passing | `pytest tests/` (stage 1b) |
+| Tests | 86 passing | `pytest tests/` (stage 1b) |
 | Dashboard | 30 Grafana panels, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Production = July models adopted on 2026-09-25 with hashes and an independent evaluation; a pipeline-trained candidate (MLflow run `1cc2b5a0…`, v4 F1 0.7278) is deliberately not promoted yet | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
 | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
@@ -1245,6 +1245,7 @@ found and fixed in the most recent security pass; see
 - **Inputs that silently distorted predictions.** `NaN`/`inf` were accepted, and a `history` window of the wrong length computed rolling features on a different scale than v4 was trained on. Both are now rejected at the API boundary.
 - **One database failure disabled feedback logging until the next restart.** It now retries every 30 s, and the feedback endpoints return `503` instead of an uncaught `500`.
 - **Three bugs found only by running the tests:** a metrics function that was called but never defined (`NameError` on every request), a missing `p_anomaly` field in both prediction paths, and five IsolationForest call sites passing a DataFrame to a model fitted on arrays (caught by re-running the suite with warnings as errors).
+- **The API never logged the rolling history, so operator feedback could not reach v4.** `feedback_db.insert_prediction` accepts and stores `history`, but the two calls in `api/app.py` never passed it: `history_json` stayed NULL on every row, and the model-job smoke run reported `rows_used_v4: 0` although 132 judged rows were used by v3. Fixed by passing the request's history to the logger; covered by two tests (a v4 request logs its history, a request without one logs none).
 - **A missing production model file failed with an unclear error.** Removing the v4 model already stopped startup, but only as a bare `FileNotFoundError`; it now raises `RuntimeError: production artifact missing: <file>`. Proven by removing the v4 file and importing the app: v4 cannot silently degrade to v3-only.
 
 ### Files
@@ -1301,7 +1302,7 @@ Jenkins, `Jenkinsfile`, 11 stages, every one a real gate — a failure stops the
 Stage labels below match the Jenkins console exactly.
 
 - **1. Checkout**
-- **1b. Unit tests** — pytest, 78 tests, coverage report. Fail-fast: a broken commit stops here.
+- **1b. Unit tests** — pytest, 86 tests, coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that every deployment file uses the evaluated threshold, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
@@ -2027,7 +2028,7 @@ this project.)
 
 ## Testing
 
-**78 tests** (up from 15), `pytest`, in `tests/`:
+**86 tests** (up from 15), `pytest`, in `tests/`:
 
 - `test_api.py` (27 tests) — every endpoint, input validation (NaN/inf
   rejection, machine length, metrics count, history shape), v3/v4
