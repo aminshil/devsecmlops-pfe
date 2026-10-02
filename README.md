@@ -1154,9 +1154,7 @@ The Demo tab is deliberately built to be *honest*, and getting there
 surfaced a real, instructive bug. Two design rules make it trustworthy:
 
 1. **It evaluates on genuinely held-out data.** The readings are sampled
-   from `data/telecom_fleet_v2_test.csv` — the same independent seed-123
-   test set used for every evaluation number in this document — never seen
-   during training. The sampler seeks across the whole file so all machine
+   from `data/telecom_fleet_v2_operator.csv`, a fleet generated with its own seed that is disjoint from the training, validation and test sets (judged readings are used for retraining, so they must never come from the test set). It is held-out in the sense that no model was trained on it before the operator feedback. The sampler seeks across the whole file so all machine
    types appear, and supplies each row's 10-reading rolling history so the
    demo exercises the v4 model, with the row's true label and true
    `anomaly_type` as ground truth.
@@ -2083,6 +2081,10 @@ python ml-model/generate_telecom_fleet.py --machines 200 --days 30 --anomaly-rat
 # Generate the independent validation fleet (its own seed; used only to select the threshold)
 python ml-model/generate_telecom_fleet.py --machines 200 --days 14 --seed 7 \
   --output data/telecom_fleet_v2_val.csv
+
+# Generate the operator-stream fleet the control panel samples from (its own seed; never trained on until judged)
+python ml-model/generate_telecom_fleet.py --machines 200 --days 3 --seed 2026 \
+  --output data/telecom_fleet_v2_operator.csv
 
 # Evaluate a candidate WITHOUT promoting: trains it and compares it with production on the test set
 python ml-model/train_production.py --report build/report.json

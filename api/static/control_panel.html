@@ -202,7 +202,7 @@
   <div class="tabpage" id="demo">
     <div class="card">
       <h3>Send test readings &amp; evaluate</h3>
-      <div class="sub">Each reading is a real, held-out test row (seed-123) with its true label. The model predicts; we score it right/wrong live. Readings are answered by the cluster API, which logs them: judge them and the verdicts feed the retraining (see the Continuous training tab).</div>
+      <div class="sub">Each reading is a labelled row from the operator-stream fleet (its own seed, never part of the training, validation or test sets) with its true label. The model predicts; we score it right/wrong live. Readings are answered by the cluster API, which logs them: judge them and the verdicts feed the retraining (see the Continuous training tab).</div>
       <div class="btnrow">
         <button type="button" class="btn" data-batch="20">Send 20 readings</button>
         <button type="button" class="btn sec" data-batch="5">Send 5</button>

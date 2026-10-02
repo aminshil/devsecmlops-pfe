@@ -1380,9 +1380,15 @@ def _collect_samples(path, header, size, n_seeks=800):
     return samples
 
 
+# Operator-stream fleet: the readings the panel's Demo and Operator tabs send, which operators then judge.
+# Deliberately NOT the train, validation or test fleet: judged rows are used for retraining, and the
+# test set must never be trained on. Generated with its own seed (README, "Reproducing locally").
+_SAMPLE_PATH = Path(__file__).resolve().parent.parent / "data" / "telecom_fleet_v2_operator.csv"
+
+
 def _load_sample_pool():
-    """Fleet-wide sample from the INDEPENDENT test set (telecom_fleet_v2_test.csv,
-    the held-out seed-123 set used for evaluation, never seen in training).
+    """Fleet-wide sample from the operator-stream fleet (telecom_fleet_v2_operator.csv, its own seed,
+    disjoint from the training, validation and test sets). Fails closed: no file, no samples.
     Seeks across the file so ALL machine types appear, reading a run of
     consecutive same-machine rows at each seek for the v4 rolling history."""
     if _SAMPLE_CACHE["rows"] is not None:
@@ -1390,7 +1396,7 @@ def _load_sample_pool():
     import os as _os
     import random as _random
     _rng = _random.SystemRandom()
-    path = Path(__file__).resolve().parent.parent / "data" / "telecom_fleet_v2_test.csv"
+    path = _SAMPLE_PATH
     try:
         with open(path, "r") as f:
             header = f.readline().strip().split(",")
@@ -1409,7 +1415,7 @@ def ui_sample(n: int = 20):
     _rng = _random.SystemRandom()
     pool = _load_sample_pool()
     if not pool:
-        return {"rows": [], "error": "test dataset not available"}
+        return {"rows": [], "error": "operator-stream dataset not available (generate data/telecom_fleet_v2_operator.csv)"}
     n = max(1, min(n, 100))
     picks = _rng.sample(pool, min(n, len(pool)))
     out = []
