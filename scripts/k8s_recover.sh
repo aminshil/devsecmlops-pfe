@@ -85,13 +85,72 @@ disconnect_ip_holder() {
   holder="$(docker network inspect minikube \
     --format '{{range $k,$v := .Containers}}{{if eq $v.IPv4Address "192.168.49.2/24"}}{{$v.Name}}{{end}}{{end}}' \
     2>/dev/null)"
+  if [ "$holder" = "minikube" ]; then
+    return 0   # the cluster container legitimately owns .2 -- never evict it
+  fi
   if [ -n "$holder" ]; then
     echo "disconnecting '$holder' from the minikube network (holding 192.168.49.2, which the cluster container needs for itself)"
     docker network disconnect minikube "$holder" >/dev/null 2>&1 || true
   fi
 }
+PIN_JENKINS_IP="${PIN_JENKINS_IP:-192.168.49.10}"
 reconnect_jenkins() {
-  docker network connect minikube jenkins >/dev/null 2>&1 || true
+  # Pinned so Jenkins can never take 192.168.49.2 from the cluster after a reboot.
+  local cur
+  cur="$(docker inspect jenkins --format '{{with index .NetworkSettings.Networks "minikube"}}{{.IPAddress}}{{end}}' 2>/dev/null)"
+  if [ "$cur" = "$PIN_JENKINS_IP" ]; then return 0; fi
+  [ -n "$cur" ] && docker network disconnect minikube jenkins >/dev/null 2>&1 || true
+  docker network connect --ip "$PIN_JENKINS_IP" minikube jenkins >/dev/null 2>&1 || true
+}
+
+# ---- operator feedback survives a cluster rebuild ---------------------------
+# A rebuild deletes the Docker volume that holds PostgreSQL. Judged rows are
+# dumped first and put back afterwards. The dump only replaces the saved file
+# when it is non-empty, so a wedged cluster can never overwrite a good backup.
+FEEDBACK_BACKUP="${FEEDBACK_BACKUP:-$(dirname "$MINIKUBE_HOME")/feedback_backup.tsv}"
+backup_feedback() {
+  local tmp="${FEEDBACK_BACKUP}.new"
+  if timeout 40 "$KC" -n "$NS" exec -i postgres-0 -- sh -c \
+      'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -qAt -c "COPY (SELECT * FROM predictions WHERE operator_verdict IS NOT NULL) TO STDOUT"' \
+      > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+    mv "$tmp" "$FEEDBACK_BACKUP"
+    echo "feedback backed up: $(wc -l < "$FEEDBACK_BACKUP") judged rows -> $FEEDBACK_BACKUP"
+  else
+    rm -f "$tmp"
+    if [ -s "$FEEDBACK_BACKUP" ]; then
+      echo "cluster DB not readable -- keeping the previous backup ($(wc -l < "$FEEDBACK_BACKUP") rows)"
+    else
+      echo "no feedback backup available (nothing judged yet, or DB unreadable)"
+    fi
+  fi
+}
+restore_feedback() {
+  [ -s "$FEEDBACK_BACKUP" ] || { echo "no feedback backup to restore"; return 0; }
+  local i n
+  echo "waiting for postgres + the predictions table before restoring feedback..."
+  for i in $(seq 1 60); do
+    if "$KC" -n "$NS" exec postgres-0 -- sh -c \
+        'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -qAt -c "SELECT 1 FROM predictions LIMIT 1"' >/dev/null 2>&1; then
+      break
+    fi
+    sleep 5
+  done
+  n="$("$KC" -n "$NS" exec postgres-0 -- sh -c \
+      'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -qAt -c "SELECT count(*) FROM predictions"' 2>/dev/null || echo x)"
+  if [ "$n" != "0" ]; then
+    echo "predictions table not empty or unreadable (count=$n) -- not restoring"
+    return 0
+  fi
+  if "$KC" -n "$NS" exec -i postgres-0 -- sh -c \
+      'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -q -c "COPY predictions FROM STDIN"' \
+      < "$FEEDBACK_BACKUP"; then
+    echo "feedback restored: $(wc -l < "$FEEDBACK_BACKUP") judged rows"
+    # if the id column is a serial, move its sequence past the restored ids
+    printf '%s\n' "SELECT setval(pg_get_serial_sequence('predictions','id'), (SELECT max(id) FROM predictions)) WHERE pg_get_serial_sequence('predictions','id') IS NOT NULL" |
+      "$KC" -n "$NS" exec -i postgres-0 -- sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -qAt' >/dev/null 2>&1 || true
+  else
+    echo "WARNING: feedback restore failed -- backup kept at $FEEDBACK_BACKUP"
+  fi
 }
 
 # Self-heals the base-image cache if something has wiped it (e.g. a stray
@@ -139,8 +198,9 @@ fix_minikube_home_perms() {
 }
 
 # 1) Try a gentle start first (handles a merely-stopped cluster, fast)
+disconnect_ip_holder
 echo "[1/5] gentle start attempt..."
-timeout 120 "$MK" start --driver=docker --force && {
+timeout 240 "$MK" start --driver=docker --force && {
   if timeout 15 "$KC" get nodes >/dev/null 2>&1; then
     echo "gentle start worked — cluster responding"
     reconnect_jenkins
@@ -178,6 +238,7 @@ echo "[2/5] gentle start failed or cluster still not serving — full rebuild"
 # kubernetes/minikube#13074, #12894, #13729) -- there is no single flag
 # that prevents it; force-removing the container/network/volume before
 # the next start is the fix across those threads.
+backup_feedback
 disconnect_ip_holder
 timeout 120 "$MK" delete 2>&1 | tail -10
 docker rm -f minikube >/dev/null 2>&1 || true
@@ -198,6 +259,7 @@ echo "[4/5] load image + metrics-server..."
 # 5) Apply manifests and confirm real readiness
 echo "[5/5] apply manifests..."
 apply_manifests
+restore_feedback
 
 echo "waiting for pods to become ready..."
 if pods_actually_ready; then
