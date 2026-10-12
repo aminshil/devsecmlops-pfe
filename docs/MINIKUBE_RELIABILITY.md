@@ -27,6 +27,14 @@ After a VM reboot the cluster came back by itself, with no recovery script: the 
 PostgreSQL pod and its persistent volume were the same objects as before the reboot, and
 the database kept all its data (60,699 predictions, 180 operator verdicts).
 
+## Alternative tested and rejected: Docker `restart=always`
+Setting `docker update --restart=always minikube` and disabling the systemd unit was tried.
+After a reboot the container came back (`host: Running`) but `kubelet` and `apiserver` stayed
+`Stopped`, so `kubectl` was refused and the API returned no response. Only `minikube start`
+starts Kubernetes inside the container, so the systemd unit is required. Jenkins staying
+pinned at `192.168.49.10` held in that test. Restored with `minikube start --driver=docker
+--force`, no data lost. Two further reboots with the unit alone came back by themselves.
+
 ## Check after any reboot
     systemctl is-active minikube-start.service
     kubectl get nodes && kubectl -n ml-serving get pods
