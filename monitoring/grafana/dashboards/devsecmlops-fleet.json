@@ -538,7 +538,7 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
-          "expr": "sum by (machine) (increase(api_root_cause_incidents_total{job=\"anomaly-api-pods\"}[1m])) > 0",
+          "expr": "sum by (machine) (api_root_cause_incidents_total{job=\"anomaly-api-pods\"})",
           "legendFormat": "{{machine}}"
         }
       ]
