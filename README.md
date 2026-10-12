@@ -1433,6 +1433,23 @@ recent pass:**
   occasion the real cause was a transient clash during simultaneous
   container recreation, not a squatter; `scripts/k8s_recover.sh` (the
   productionized version of this same fix) resolved it.
+- **Cluster unreachable after a reboot, stop or pause (root-caused, fixed
+  permanently).** Three faults were stacked. (1) A boot-order race over the
+  fixed address: Docker restarts the Jenkins container (restart policy)
+  before anything starts Minikube, and Jenkins, attached to the same
+  network, could take `192.168.49.2`, so the cluster container failed with
+  "address already in use". (2) Nothing started the cluster: the `minikube`
+  container has restart policy `no`. (3) `minikube start --driver=docker`
+  as root is refused without `--force`, so the gentle start failed and the
+  recovery script escalated to a destructive rebuild. Fix: Jenkins is
+  pinned to `192.168.49.10` (re-applied by `scripts/k8s_recover.sh`, which
+  also never evicts the `minikube` container and now evicts a squatter
+  before the gentle start), and `scripts/systemd/minikube-start.service`
+  starts the cluster after Docker. Verified by a VM reboot: the cluster
+  returned by itself with no recovery script, the same PostgreSQL pod and
+  volume came back, and all data survived (60,699 predictions, 180 operator
+  verdicts). The pause/resume scenario is not covered by a test. Details and
+  verification commands: `docs/MINIKUBE_RELIABILITY.md`.
 - **A real, live-tested password rotation.** PostgreSQL only applies a
   password at first initialization — rotating the Secret alone would not
   change a running database's actual password. The full rotation this
@@ -1455,7 +1472,7 @@ kubectl get pods -n ml-serving
 ### Real bugs found and fixed
 
 - **The Ansible Kubernetes template had drifted far behind the real manifest.** `kubernetes/deployment.yaml` was hardened (uid/gid 10001, seccomp `RuntimeDefault`, read-only root filesystem, all capabilities dropped, no service-account token, DB user/password/database all from the Secret). The Ansible template — which is what Ansible *actually* deploys, via `ansible.builtin.template` — still had only `runAsUser: 999`, none of the rest, and a hardcoded `postgresql://feedback:...@.../feedback` connection string. A production-profile Ansible deploy would have shipped an unhardened pod that could not authenticate against a production Secret with a different username. Fixed by syncing the template line-for-line with the real manifest, keeping only the legitimate templating (`api_replicas`, `api_image`, resource-limit toggles). Verified with `--syntax-check` on the production profile and the full test suite, then deployed through the real pipeline.
-- **A cluster rebuild resets the deployed image to the git-pinned baseline.** Found live: after Jenkins build `2.20.3-b87`, the Deployment was later running `devsecmlops-api:2.20.3` with rollout history at revision 1, meaning the Deployment had been recreated (a full Minikube rebuild), not updated. A fresh cluster has no record of the last release, so `scripts/k8s_recover.sh` restores the tag pinned in `kubernetes/deployment.yaml`. This is intended: recovery restores a reproducible baseline from git, and the next Jenkins run redeploys the latest release. Ansible rebuilds the baseline image only if it is missing, so after code changes, rebuild it or run Jenkins before a demo. The rebuild also creates a new, empty PostgreSQL volume, so every logged prediction and operator verdict is lost (observed after a VM restart: 57,592 predictions and 48 judged rows before, 14,642 and none after); record judged rows only once the cluster state is final.
+- **A cluster rebuild resets the deployed image to the git-pinned baseline.** Found live: after Jenkins build `2.20.3-b87`, the Deployment was later running `devsecmlops-api:2.20.3` with rollout history at revision 1, meaning the Deployment had been recreated (a full Minikube rebuild), not updated. A fresh cluster has no record of the last release, so `scripts/k8s_recover.sh` restores the tag pinned in `kubernetes/deployment.yaml`. This is intended: recovery restores a reproducible baseline from git, and the next Jenkins run redeploys the latest release. Ansible rebuilds the baseline image only if it is missing, so after code changes, rebuild it or run Jenkins before a demo. The rebuild also creates a new, empty PostgreSQL volume, so every logged prediction and operator verdict is lost (observed after a VM restart: 57,592 predictions and 48 judged rows before, 14,642 and none after); record judged rows only once the cluster state is final. Since the reboot fix, `scripts/k8s_recover.sh` also dumps the judged rows to `feedback_backup.tsv` before deleting the cluster (or keeps the last saved copy if the database is unreadable) and restores them afterwards; unjudged predictions are still lost.
 - **A committed database password** (`feedback-dev-password`, in the now-deleted `kubernetes/postgres-secret.yaml`) — removed, replaced by `scripts/ensure_db_secret.sh`, and rotated live in the running cluster (see the password-rotation incident above).
 - **`scripts/k8s_recover.sh` made the Minikube home directory world-readable and world-writable** (`chmod -R a+rwX`) — that directory holds the cluster CA's private key and admin credentials, so any local user could have become cluster-admin. Replaced with a POSIX ACL granting access to exactly one uid.
 
