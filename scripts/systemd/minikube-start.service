@@ -1,0 +1,16 @@
+[Unit]
+Description=Start the Minikube cluster after Docker
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=MINIKUBE_HOME=/home/pfe/.minikube
+Environment=KUBECONFIG=/home/pfe/.kube/config
+ExecStart=/usr/local/bin/minikube start --driver=docker --force
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

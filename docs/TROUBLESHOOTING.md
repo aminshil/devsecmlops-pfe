@@ -260,3 +260,16 @@ due to missing ensurepip):
 ```groovy
 python3 -m pip install --quiet --break-system-packages -r requirements-api.txt
 ```
+
+<!-- minikube-reliability -->
+## Minikube unreachable after reboot / stop / pause
+
+**Symptom:** `kubectl` cannot reach the cluster after the VM restarts; `minikube start` fails
+or `scripts/k8s_recover.sh` falls through to a full rebuild.
+
+**Cause:** three stacked faults: Jenkins taking `192.168.49.2` (boot-order race), nothing
+starting the cluster (container restart policy `no`), and `--force` missing for the Docker
+driver as root.
+
+**Fix:** Jenkins pinned to `192.168.49.10`; `scripts/systemd/minikube-start.service` enabled;
+`scripts/k8s_recover.sh` hardened. Details and verification: `docs/MINIKUBE_RELIABILITY.md`.
