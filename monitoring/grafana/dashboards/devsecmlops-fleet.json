@@ -336,14 +336,7 @@
       ]
     },
     {
-      "type": "bargauge",
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "options": {
-        "orientation": "horizontal"
-      },
+      "type": "table",
       "id": 12,
       "title": "Classifier anomaly probability by machine (top 25)",
       "datasource": {
@@ -356,7 +349,7 @@
         "x": 12,
         "y": 32
       },
-      "description": "XGBoost's own P(anomaly) = 1 - P(normal) for each machine's most recent reading, 0-1, same scale whether v3 or v4 served it. The production decision threshold is 0.6 (chosen by ml-model/select_threshold.py on an independent validation set) -- values clustered just under 0.6 are 'nearly flagged' and worth watching. The served verdict also OR's in the IsolationForest safety net, so a machine can be anomalous here even with a low bar shown. The word after each machine name is the model's likely cause for its current anomaly ('normal' = not flagged).",
+      "description": "Each machine's most recent classifier P(anomaly) (green bar) and the model's likely cause (red) when its latest verdict is an anomaly; 'normal' = not flagged. Production decision threshold 0.6; the IsolationForest safety net can flag a machine even with a low bar ('safety-net only').",
       "targets": [
         {
           "datasource": {
@@ -364,11 +357,140 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
+          "instant": true,
+          "range": false,
+          "format": "table",
           "expr": "sort_desc(topk(25, max by (machine, cause) (api_anomaly_cause_p{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) or on(machine) label_replace(max by (machine) (api_classifier_p_anomaly{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))), \"cause\", \"normal\", \"\", \"\")))",
-          "legendFormat": "{{machine}} · {{cause}}",
-          "instant": true
+          "legendFormat": "__auto"
         }
-      ]
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "machine": 0,
+              "cause": 1,
+              "Value": 2
+            },
+            "renameByName": {
+              "machine": "Machine",
+              "cause": "Likely cause",
+              "Value": "P(anomaly)"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "P(anomaly)",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Likely cause"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "normal": {
+                        "text": "normal",
+                        "color": "#8a8f98",
+                        "index": 0
+                      },
+                      "unknown (flagged by safety-net model only)": {
+                        "text": "safety-net only",
+                        "color": "orange",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "P(anomaly)"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "basic",
+                  "valueDisplayMode": "text"
+                }
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 1
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "type": "timeseries",
