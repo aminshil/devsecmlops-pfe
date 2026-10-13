@@ -497,8 +497,9 @@ project prioritizes training speed, interpretability, and straightforward
 CI/CD-integrated deployment over the marginal accuracy gains of a
 recurrent sequence model — a deliberate, documented tradeoff, not an
 oversight. The SMD result's purpose is not to win on the leaderboard; it
-confirms the same methodology generalizes to real, independently-collected
-data and isn't an artifact of the synthetic generator. `ml-model/load_smd.py`
+shows the methodology transfers to real, independently-collected data at
+reduced accuracy (F1 0.269), so the synthetic-data scores must not be read as
+real-world accuracy. `ml-model/load_smd.py`
 is the adapter for this dataset; it remains in the repository, still fully
 functional, and was not touched by the v4/threshold work described later
 in this document.
@@ -1930,7 +1931,7 @@ reversed on stronger full-scale evidence.
 
 ### 14. Why SMD real-world validation matters
 
-F1 = 0.269 on the Server Machine Dataset (28 real servers, public benchmark used by OmniAnomaly and other sequence-model papers). Much lower than synthetic F1, and this is the honest point: **published unsupervised sequence models on SMD report F1 in the 0.40-0.55 range** using recurrent architectures that read a sliding window of history. This project prioritizes training speed, interpretability, and simple CI/CD-integrated deployment over the marginal accuracy gains of a recurrent sequence model -- a documented tradeoff, not an oversight. The SMD result's purpose is not to win on the benchmark; it confirms the same per-machine, per-window z-score methodology generalizes to real, independently-collected data and isn't an artifact of the synthetic generator. `ml-model/load_smd.py` is the adapter that makes this data loadable through the same pipeline; it remains in the repository and is not part of the production training path.
+F1 = 0.269 on the Server Machine Dataset (28 real servers, public benchmark used by OmniAnomaly and other sequence-model papers). Much lower than synthetic F1, and this is the honest point: **published unsupervised sequence models on SMD report F1 in the 0.40-0.55 range** using recurrent architectures that read a sliding window of history. This project prioritizes training speed, interpretability, and simple CI/CD-integrated deployment over the marginal accuracy gains of a recurrent sequence model -- a documented tradeoff, not an oversight. The SMD result's purpose is not to win on the benchmark; it shows the per-machine, per-window z-score methodology transfers to real, independently-collected data at reduced accuracy (F1 0.269), so the synthetic-data scores must not be read as real-world accuracy. `ml-model/load_smd.py` is the adapter that makes this data loadable through the same pipeline; it remains in the repository and is not part of the production training path.
 
 ### 15. Why MLflow + MinIO run outside the Kubernetes cluster
 
@@ -2181,6 +2182,7 @@ python monitoring/k8s_exporter.py &
   to all six is real, larger work (retraining v4 from scratch, re-selecting
   the threshold, re-evaluating), not attempted in this pass.
 - **`Jenkinsfile.model` has run, but never with promotion.** It has run end to end in Jenkins in both scopes: `smoke` (tiny generated fleets and a scratch copy of the production artifacts, production proven untouched by hash) and `full` (the real datasets, logged to MLflow and MinIO; see L5). Never run: `PROMOTE=true`, which also needs the `github-pat-devsecmlops` token to have push access to `main` (not verified) and the deployment files to carry the new threshold. The promotion path is covered by tests and the CI model gate, not by a run.
+- **Headline scores are on synthetic data.** The F1, precision and recall quoted for the deployed model (0.7246 / 0.664 / 0.797) are measured on a generated fleet whose anomalies and labels come from the same generator, and the operator verdicts in the feedback loop are simulated from those labels. The only real-data check is SMD (F1 0.269), so these numbers must not be read as real-world detection accuracy.
 - **Sequence-aware detection remains future work.** The current models
   evaluate the current reading plus a short rolling window, not a full
   learned sequence model. State-of-the-art results on SMD (OmniAnomaly,
