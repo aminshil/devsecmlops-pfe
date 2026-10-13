@@ -1,268 +1,279 @@
 {
   "schema": 2,
   "production": {
-    "source": "initial training, July-August 2026 (before ml-model/train_production.py existed)",
+    "promoted_at": "2026-10-13T20:52:54.178423+00:00",
+    "source": "ml-model/train_production.py",
+    "git_commit_at_training": "53b6573f26bf9ce116cd726bc2cd8a593f0e4ebd",
+    "mlflow_run_id": "f622a7a9b1554c97ad421a92f51f081a",
     "datasets": {
       "train": {
-        "file": "data/telecom_fleet_v2_labeled.csv",
-        "generator": "ml-model/generate_telecom_fleet.py --machines 200 --days 30 --seed 42",
+        "file": "/var/jenkins_home/fleet-data/telecom_fleet_v2_labeled.csv",
+        "sha256": "b4a8080965f4f0bc12b2727916969c6fe728a4dcb78bb169616155bba16e43cf",
         "rows": 17280000
       },
       "test": {
-        "file": "data/telecom_fleet_v2_test.csv",
-        "generator": "ml-model/generate_telecom_fleet.py --machines 200 --days 30 --seed 123"
+        "file": "/var/jenkins_home/fleet-data/telecom_fleet_v2_test.csv",
+        "sha256": "3b6b6e2144100d43522a79a9a685eecc49e2bcecc573b001584614f0a5a8894a",
+        "rows": 17280000
+      },
+      "feedback_0": {
+        "file": "build/feedback/feedback_20261013T203546Z.csv",
+        "sha256": "09257956de94251ee6a5fd75eb09cd26f659804d861ebbf835c25a504e25a18f"
       }
     },
+    "feedback": {
+      "rows_used_v3": 253,
+      "rows_used_v4": 214,
+      "rows_skipped_unknown_cause": 9
+    },
     "params": {
-      "classifier_training_rows": 3165947,
-      "composition": "all 1,165,947 anomaly rows + 2,000,000 sampled normal rows (seed 42); cascade labelled normal",
       "xgb": {
         "objective": "multi:softprob",
         "n_estimators": 150,
         "max_depth": 6,
         "learning_rate": 0.1,
-        "random_state": 42
+        "random_state": 42,
+        "n_jobs": -1,
+        "verbosity": 0
       },
       "iso": {
         "n_estimators": 200,
-        "contamination": 0.06747378472222222,
-        "random_state": 42
+        "random_state": 42,
+        "n_jobs": -1,
+        "contamination": 0.06747378472222222
       },
+      "normal_sample": 2000000,
       "rolling_window": 10,
       "rolling_base_cols": [
         "cpu",
         "ram",
         "load_avg"
       ],
-      "note": "hyperparameters read back from the committed pickles"
+      "threshold": 0.6,
+      "max_f1_drop": 0.0,
+      "max_recall_drop": 0.02
     },
-    "artifacts": {
-      "models/telecom_xgb_classifier_v2.pkl": "e141d1fac786c01e1967d4fc0300c6ceba28251aa998cfa6d0e78dde31458b33",
-      "models/telecom_xgb_label_encoder_v2.pkl": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
-      "models/telecom_xgb_v4_rolling.pkl": "181c8880ae8c3e75e346dcb89866a225f2df318e56bdea0326160325077cda8f",
-      "models/telecom_xgb_v4_rolling_encoder.pkl": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
-      "models/telecom_iso_v2.pkl": "570495a0f15ffe4d3c99e947202c36ee3f97e6696f0fbe245b3730a96d7b6ba2",
-      "models/telecom_baselines_v2.json": "616210d4c29ffeb6e5a91a2a61ea7984119b5d690495b9b13a41cd51478aa09d"
-    },
-    "evaluated_at": "2026-09-25T20:14:31.949697+00:00",
     "decision_threshold": 0.6,
     "threshold_selection": {
-      "selected_at": "2026-09-25T19:48:21.658005+00:00",
+      "selected_at": "2026-10-13T20:44:30.207034+00:00",
       "method": "maximise F2 of the served decision (classifier OR IsolationForest) on an independent validation fleet",
       "validation_set": {
-        "file": "data/telecom_fleet_v2_val.csv",
+        "file": "/var/jenkins_home/fleet-data/telecom_fleet_v2_val.csv",
         "sha256": "ea0a20c29f8d3e34a77c8db79abc43ccd0d051d5049003cda659e0194c1148a0",
         "rows": 8064000
       },
       "beta": 2.0,
       "selected": {
         "threshold": 0.6,
-        "precision": 0.6632,
-        "recall": 0.8005,
-        "f1": 0.7254,
-        "f2": 0.7687
+        "precision": 0.6717,
+        "recall": 0.7974,
+        "f1": 0.7292,
+        "f2": 0.7686
       },
       "curve": [
         {
           "threshold": 0.05,
-          "precision": 0.6849,
-          "recall": 0.7554,
-          "f1": 0.7184,
-          "f2": 0.7401
+          "precision": 0.6927,
+          "recall": 0.7535,
+          "f1": 0.7218,
+          "f2": 0.7405
         },
         {
           "threshold": 0.1,
-          "precision": 0.6868,
-          "recall": 0.7676,
-          "f1": 0.725,
+          "precision": 0.6946,
+          "recall": 0.7651,
+          "f1": 0.7282,
           "f2": 0.7499
         },
         {
           "threshold": 0.15,
-          "precision": 0.6872,
-          "recall": 0.7744,
-          "f1": 0.7282,
-          "f2": 0.7553
+          "precision": 0.695,
+          "recall": 0.7717,
+          "f1": 0.7313,
+          "f2": 0.7551
         },
         {
           "threshold": 0.2,
-          "precision": 0.6867,
-          "recall": 0.7793,
-          "f1": 0.7301,
-          "f2": 0.7588
+          "precision": 0.6945,
+          "recall": 0.7765,
+          "f1": 0.7332,
+          "f2": 0.7586
         },
         {
           "threshold": 0.25,
-          "precision": 0.6856,
-          "recall": 0.7832,
-          "f1": 0.7311,
-          "f2": 0.7615
+          "precision": 0.6936,
+          "recall": 0.7803,
+          "f1": 0.7344,
+          "f2": 0.7613
         },
         {
           "threshold": 0.3,
-          "precision": 0.6841,
-          "recall": 0.7864,
-          "f1": 0.7317,
-          "f2": 0.7636
+          "precision": 0.6922,
+          "recall": 0.7835,
+          "f1": 0.735,
+          "f2": 0.7634
         },
         {
           "threshold": 0.35,
-          "precision": 0.6822,
-          "recall": 0.7893,
-          "f1": 0.7318,
-          "f2": 0.7652
+          "precision": 0.6903,
+          "recall": 0.7862,
+          "f1": 0.7352,
+          "f2": 0.765
         },
         {
           "threshold": 0.4,
-          "precision": 0.6798,
-          "recall": 0.7916,
-          "f1": 0.7314,
-          "f2": 0.7664
+          "precision": 0.688,
+          "recall": 0.7887,
+          "f1": 0.7349,
+          "f2": 0.7663
         },
         {
           "threshold": 0.45,
-          "precision": 0.6769,
-          "recall": 0.794,
-          "f1": 0.7308,
-          "f2": 0.7674
+          "precision": 0.6851,
+          "recall": 0.791,
+          "f1": 0.7343,
+          "f2": 0.7673
         },
         {
           "threshold": 0.5,
-          "precision": 0.6733,
-          "recall": 0.7962,
-          "f1": 0.7296,
-          "f2": 0.7682
+          "precision": 0.6816,
+          "recall": 0.7932,
+          "f1": 0.7332,
+          "f2": 0.7681
         },
         {
           "threshold": 0.55,
-          "precision": 0.6688,
-          "recall": 0.7984,
-          "f1": 0.7279,
-          "f2": 0.7686
+          "precision": 0.6771,
+          "recall": 0.7953,
+          "f1": 0.7315,
+          "f2": 0.7685
         },
         {
           "threshold": 0.6,
-          "precision": 0.6632,
-          "recall": 0.8005,
-          "f1": 0.7254,
-          "f2": 0.7687
+          "precision": 0.6717,
+          "recall": 0.7974,
+          "f1": 0.7292,
+          "f2": 0.7686
         },
         {
           "threshold": 0.65,
-          "precision": 0.6562,
-          "recall": 0.8026,
-          "f1": 0.7221,
-          "f2": 0.7683
+          "precision": 0.6647,
+          "recall": 0.7996,
+          "f1": 0.7259,
+          "f2": 0.7684
         },
         {
           "threshold": 0.7,
-          "precision": 0.647,
-          "recall": 0.8048,
-          "f1": 0.7173,
-          "f2": 0.7674
+          "precision": 0.6557,
+          "recall": 0.8018,
+          "f1": 0.7214,
+          "f2": 0.7676
         },
         {
           "threshold": 0.75,
-          "precision": 0.6349,
-          "recall": 0.8073,
-          "f1": 0.7108,
-          "f2": 0.7657
+          "precision": 0.6435,
+          "recall": 0.8042,
+          "f1": 0.715,
+          "f2": 0.766
         },
         {
           "threshold": 0.8,
-          "precision": 0.6178,
-          "recall": 0.8099,
-          "f1": 0.7009,
-          "f2": 0.7625
+          "precision": 0.6261,
+          "recall": 0.8069,
+          "f1": 0.7051,
+          "f2": 0.7628
         },
         {
           "threshold": 0.85,
-          "precision": 0.5924,
-          "recall": 0.8133,
-          "f1": 0.6855,
-          "f2": 0.7568
+          "precision": 0.6004,
+          "recall": 0.8104,
+          "f1": 0.6898,
+          "f2": 0.7574
         },
         {
           "threshold": 0.9,
-          "precision": 0.5495,
-          "recall": 0.8178,
-          "f1": 0.6574,
-          "f2": 0.7451
+          "precision": 0.5568,
+          "recall": 0.8149,
+          "f1": 0.6616,
+          "f2": 0.7457
         },
         {
           "threshold": 0.95,
-          "precision": 0.4599,
-          "recall": 0.8258,
-          "f1": 0.5908,
-          "f2": 0.7124
+          "precision": 0.4651,
+          "recall": 0.8229,
+          "f1": 0.5943,
+          "f2": 0.7132
         }
       ],
       "artifacts": {
-        "models/telecom_xgb_classifier_v2.pkl": "e141d1fac786c01e1967d4fc0300c6ceba28251aa998cfa6d0e78dde31458b33",
+        "models/telecom_xgb_classifier_v2.pkl": "1bff574549969b602293cde75627f3a16cf53ae47e6c3bf137f0cdf09cc8ad65",
         "models/telecom_xgb_label_encoder_v2.pkl": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
-        "models/telecom_xgb_v4_rolling.pkl": "181c8880ae8c3e75e346dcb89866a225f2df318e56bdea0326160325077cda8f",
+        "models/telecom_xgb_v4_rolling.pkl": "b86876e188547e906ef76137676eab1d5643f14392620c4058a5c23a70888813",
         "models/telecom_xgb_v4_rolling_encoder.pkl": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
-        "models/telecom_iso_v2.pkl": "570495a0f15ffe4d3c99e947202c36ee3f97e6696f0fbe245b3730a96d7b6ba2",
-        "models/telecom_baselines_v2.json": "616210d4c29ffeb6e5a91a2a61ea7984119b5d690495b9b13a41cd51478aa09d"
-      },
-      "attestation": {
-        "method": "sha256 of the promoted artifacts, recorded after re-running the selection",
-        "verified_at": "2026-10-01",
-        "result": "the chunked selection reproduced the recorded curve exactly (max difference 0.0)"
+        "models/telecom_iso_v2.pkl": "310a1afb81a877bf72cb1556a6e7a2c5d1c23efbb385b99347a80be975fd6de5",
+        "models/telecom_baselines_v2.json": "750902f7dc26ab0e37621dc044363d7e609cf44382ce8feb4389f93d0776aed3"
       }
     },
     "evaluation": {
       "test_set": {
-        "file": "data/telecom_fleet_v2_test.csv",
+        "file": "/var/jenkins_home/fleet-data/telecom_fleet_v2_test.csv",
         "sha256": "3b6b6e2144100d43522a79a9a685eecc49e2bcecc573b001584614f0a5a8894a",
         "rows": 17280000
       },
       "threshold": 0.6,
       "v3": {
-        "f1": 0.6496,
-        "precision": 0.5721,
-        "recall": 0.7513,
-        "classifier_only_f1": 0.6945,
+        "f1": 0.655,
+        "precision": 0.5822,
+        "recall": 0.7485,
+        "classifier_only_f1": 0.6946,
         "per_cause_recall": {
-          "cascade": 0.284,
+          "cascade": 0.2733,
           "cpu_spike": 0.9163,
-          "disk_saturation": 0.9839,
-          "memory_leak": 0.774,
-          "network_flood": 0.9579,
-          "silent_failure": 0.9275
+          "disk_saturation": 0.9841,
+          "memory_leak": 0.7754,
+          "network_flood": 0.9564,
+          "silent_failure": 0.9267
         },
-        "cause_accuracy": 0.9946
+        "cause_accuracy": 0.9947
       },
       "v4": {
-        "f1": 0.7246,
-        "precision": 0.6642,
-        "recall": 0.797,
-        "classifier_only_f1": 0.808,
+        "f1": 0.7278,
+        "precision": 0.6717,
+        "recall": 0.7941,
+        "classifier_only_f1": 0.8078,
         "per_cause_recall": {
-          "cascade": 0.2699,
+          "cascade": 0.2589,
           "cpu_spike": 0.9867,
-          "disk_saturation": 0.9961,
-          "memory_leak": 0.9286,
-          "network_flood": 0.9897,
-          "silent_failure": 0.9833
+          "disk_saturation": 0.996,
+          "memory_leak": 0.9291,
+          "network_flood": 0.9893,
+          "silent_failure": 0.983
         },
-        "cause_accuracy": 0.9988
+        "cause_accuracy": 0.9989
       },
       "v4_at_0.5": {
-        "f1": 0.7288,
-        "precision": 0.6744,
-        "recall": 0.7928,
-        "classifier_only_f1": 0.8153,
+        "f1": 0.7318,
+        "precision": 0.6816,
+        "recall": 0.79,
+        "classifier_only_f1": 0.815,
         "per_cause_recall": {
-          "cascade": 0.2676,
+          "cascade": 0.2566,
           "cpu_spike": 0.9843,
           "disk_saturation": 0.9952,
-          "memory_leak": 0.9142,
-          "network_flood": 0.9865,
-          "silent_failure": 0.9805
+          "memory_leak": 0.915,
+          "network_flood": 0.9859,
+          "silent_failure": 0.9802
         },
         "cause_accuracy": 0.9989
       }
+    },
+    "artifacts": {
+      "models/telecom_xgb_classifier_v2.pkl": "1bff574549969b602293cde75627f3a16cf53ae47e6c3bf137f0cdf09cc8ad65",
+      "models/telecom_xgb_label_encoder_v2.pkl": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
+      "models/telecom_xgb_v4_rolling.pkl": "b86876e188547e906ef76137676eab1d5643f14392620c4058a5c23a70888813",
+      "models/telecom_xgb_v4_rolling_encoder.pkl": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
+      "models/telecom_iso_v2.pkl": "310a1afb81a877bf72cb1556a6e7a2c5d1c23efbb385b99347a80be975fd6de5",
+      "models/telecom_baselines_v2.json": "750902f7dc26ab0e37621dc044363d7e609cf44382ce8feb4389f93d0776aed3"
     }
   },
   "history": [
@@ -311,6 +322,42 @@
         "v3": 0.6551,
         "v4": 0.7278
       }
+    },
+    {
+      "finished_at": "2026-10-13T20:52:54.178423+00:00",
+      "git_commit": "53b6573f26bf9ce116cd726bc2cd8a593f0e4ebd",
+      "datasets": {
+        "train": {
+          "file": "/var/jenkins_home/fleet-data/telecom_fleet_v2_labeled.csv",
+          "sha256": "b4a8080965f4f0bc12b2727916969c6fe728a4dcb78bb169616155bba16e43cf",
+          "rows": 17280000
+        },
+        "test": {
+          "file": "/var/jenkins_home/fleet-data/telecom_fleet_v2_test.csv",
+          "sha256": "3b6b6e2144100d43522a79a9a685eecc49e2bcecc573b001584614f0a5a8894a",
+          "rows": 17280000
+        },
+        "feedback_0": {
+          "file": "build/feedback/feedback_20261013T203546Z.csv",
+          "sha256": "09257956de94251ee6a5fd75eb09cd26f659804d861ebbf835c25a504e25a18f"
+        }
+      },
+      "feedback": {
+        "rows_used_v3": 253,
+        "rows_used_v4": 214,
+        "rows_skipped_unknown_cause": 9
+      },
+      "guardrail_passed": true,
+      "guardrail_reasons": [],
+      "mlflow_run_id": "f622a7a9b1554c97ad421a92f51f081a",
+      "promoted_to_workspace": true,
+      "candidate_f1": {
+        "v3": 0.655,
+        "v4": 0.7278
+      },
+      "candidate_threshold": 0.6,
+      "production_threshold": 0.6,
+      "threshold_selected_on": "ea0a20c29f8d3e34a77c8db79abc43ccd0d051d5049003cda659e0194c1148a0"
     }
   ]
 }
