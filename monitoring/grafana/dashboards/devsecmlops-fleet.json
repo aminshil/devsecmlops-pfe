@@ -356,7 +356,7 @@
         "x": 12,
         "y": 32
       },
-      "description": "XGBoost's own P(anomaly) = 1 - P(normal) for each machine's most recent reading, 0-1, same scale whether v3 or v4 served it. The production decision threshold is 0.6 (chosen by ml-model/select_threshold.py on an independent validation set) -- values clustered just under 0.6 are 'nearly flagged' and worth watching. The served verdict also OR's in the IsolationForest safety net, so a machine can be anomalous here even with a low bar shown.",
+      "description": "XGBoost's own P(anomaly) = 1 - P(normal) for each machine's most recent reading, 0-1, same scale whether v3 or v4 served it. The production decision threshold is 0.6 (chosen by ml-model/select_threshold.py on an independent validation set) -- values clustered just under 0.6 are 'nearly flagged' and worth watching. The served verdict also OR's in the IsolationForest safety net, so a machine can be anomalous here even with a low bar shown. The word after each machine name is the model's likely cause for its current anomaly ('normal' = not flagged).",
       "targets": [
         {
           "datasource": {
@@ -364,8 +364,8 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
-          "expr": "sort_desc(topk(25, (api_classifier_p_anomaly{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"})))))",
-          "legendFormat": "{{machine}}",
+          "expr": "sort_desc(topk(25, max by (machine, cause) (api_anomaly_cause_p{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) or on(machine) label_replace(max by (machine) (api_classifier_p_anomaly{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))), \"cause\", \"normal\", \"\", \"\")))",
+          "legendFormat": "{{machine}} · {{cause}}",
           "instant": true
         }
       ]

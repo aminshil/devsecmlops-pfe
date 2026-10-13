@@ -355,6 +355,23 @@ ANOMALY_SEEN = Counter(
     "anomalous by this process",
     ["machine"],
 )
+import threading
+
+# Cause of each machine's CURRENT anomaly. Value = classifier P(anomaly) so
+# a dashboard can draw bars and name the cause with no PromQL join. The series
+# exists only while the machine's latest verdict is anomalous (the previous
+# series is removed when the verdict or the cause changes), so cardinality
+# stays <= machines x causes. Label `machine` is bounded by _KNOWN_MACHINES.
+ANOMALY_CAUSE_P = Gauge(
+    "api_anomaly_cause_p",
+    "Classifier P(anomaly) of this machine's most recent reading, labelled "
+    "with its likely_cause; present only while the machine is anomalous",
+    ["machine", "machine_type", "cause"],
+)
+_CAUSE_LAST: dict = {}          # machine -> (machine_type, cause) currently exported
+_CAUSE_LOCK = threading.Lock()
+
+
 MACHINE_LAST_SEEN = Gauge(
     "api_machine_last_seen_timestamp_seconds",
     "Unix time this process last served a prediction for the machine. Each "
@@ -851,6 +868,29 @@ def _predict_fallback(reading, X, z_scores, window, machine_type, baseline_used)
         "baseline_used":  baseline_used,   # machine+window | machine | type | global
     }
 
+def _set_cause_metric(machine: str, mtype: str, result: dict, p_anomaly) -> None:
+    """Keep exactly one api_anomaly_cause_p series per currently-anomalous machine."""
+    new = None
+    if result.get("is_anomaly"):
+        cause = result.get("likely_cause")
+        if not cause or cause == "normal":
+            cause = "unexplained"      # e.g. caught by the IsolationForest only
+        new = (mtype, str(cause))
+    with _CAUSE_LOCK:
+        prev = _CAUSE_LAST.get(machine)
+        if prev is not None and prev != new:
+            try:
+                ANOMALY_CAUSE_P.remove(machine, prev[0], prev[1])
+            except KeyError:
+                pass
+            _CAUSE_LAST.pop(machine, None)
+        if new is not None:
+            ANOMALY_CAUSE_P.labels(machine=machine, machine_type=new[0],
+                                   cause=new[1]).set(
+                float(p_anomaly) if p_anomaly is not None else 0.0)
+            _CAUSE_LAST[machine] = new
+
+
 def _record_prediction_metrics(reading: Reading, result: dict) -> None:
     """Publish this prediction on /metrics. Label values are bounded to the
     known fleet: an arbitrary client-supplied machine name would otherwise
@@ -873,6 +913,7 @@ def _record_prediction_metrics(reading: Reading, result: dict) -> None:
     p_anomaly = (result.get("xgb_vote") or {}).get("p_anomaly")
     if p_anomaly is not None:
         CLASSIFIER_P_ANOMALY.labels(machine=machine, machine_type=mtype).set(p_anomaly)
+    _set_cause_metric(machine, mtype, result, p_anomaly)
     iso_score = (result.get("iso_vote") or {}).get("score")
     if iso_score is not None:
         ISO_SCORE.labels(machine=machine, machine_type=mtype).set(iso_score)
