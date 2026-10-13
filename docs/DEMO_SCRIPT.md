@@ -1,6 +1,6 @@
 # Defense demo script
 
-Prepared against build `2.20.3-b99` (all 11 CI stages green, 99 tests, Quality Gate OK, Trivy 0), commit `09beb01f` plus the dashboard commits after it (`git log --oneline -5`). About 15 minutes.
+Prepared against build `2.20.3-b101` (all 11 CI stages green, 99 tests, Quality Gate OK; serves the model promoted on 13 October, v4 F1 0.7278), commit `18042f37` (`git log --oneline -5`). About 15 minutes.
 
 **How to read the "Proven" column.** *Log* means the exact command or output appeared in a real Jenkins or terminal log during this project. *Rehearse* means it is documented in the README but was not run today. Run every *Rehearse* step once before the defense, from a cold start.
 
@@ -40,7 +40,7 @@ Have `screenshots/` open as a last-resort fallback.
 
 | # | Min | Show | Command or action | What to say | Proven |
 |---|---|---|---|---|---|
-| 0 | 0:30 | Jenkins | open `devsecmlops-pipeline` → the last green build (#99). **Do not start a build**: #98 took 46 minutes on a base-image cache miss | "This is the last build: 11 stages, all green. I'll walk through it at step 12." | Log (b99) |
+| 0 | 0:30 | Jenkins | open `devsecmlops-pipeline` → the last green build (#101). **Do not start a build**: #98 took 46 minutes on a base-image cache miss | "This is the last build: 11 stages, all green. I'll walk through it at step 12." | Log (b101) |
 | 1 | 1 | Control panel → **Status** | open the tab | "Seven layers, each with a live check: API, registry, Jenkins, SonarQube, MLflow, Kubernetes, Prometheus, Grafana, exporters." Expect 11 of 11 up. The model card shows the selector name `telecom_v3`; the model that answers is chosen per request (step 4). | Log (rehearsal) |
 | 2 | 2 | Terminal | block D below (`/health` with the long machine list collapsed, so the lineage is visible) | "The deployed service reports its own lineage: version, the served model's F1 and the artifact hashes it verified before loading." | Log (rehearsal) |
 | 3 | 2 | Terminal | the in-pod smoke test (block A below) | "This is the exact check CI runs after every deploy: a request without history is answered by v3, one with a 10-reading history by v4." Expect 6 `PASS` lines. | Log (stage 9) |
@@ -61,11 +61,11 @@ Have `screenshots/` open as a last-resort fallback.
 **Precondition.** The cluster runs the latest image (history logging; `kubectl -n ml-serving get deploy -o jsonpath='{.items[*].spec.template.spec.containers[*].image}'` should show `2.20.3-b99` or later). The feedback table lives on a 2 Gi volume and survives reboots (verified across two reboots; the Continuous training tab shows the live counts). Only a deleted volume empties it.
 
 1. **Control panel → Demo → Send 20 → Review alerts only.** Say: "the readings come from a labelled fleet that is not part of training, validation or test; the cluster pods answer and log them; the verdicts come from the generator's ground truth, standing in for an operator."
-2. **Continuous training tab:** predictions logged, judged and not judged, the model the cluster serves, the retraining history. The history table lists only runs committed to the repo manifest: the 30 September full run (candidate F1 0.7278, guardrail pass, not promoted) and, with dashes, an early 22 July attempt the guardrail rejected (F1 0.718 to 0.709, 500 feedback rows). The latest full run (2 October) is in Jenkins and MLflow only.
+2. **Continuous training tab:** predictions logged, judged and not judged, the model the cluster serves, the retraining history. The history table lists runs recorded in the repo manifest: row 1 is the 13 October promotion (promoted true, MLflow `f622a7a9…`, threshold 0.6 / 0.6), then the 30 September full run (not promoted) and, if listed, an early 22 July attempt the guardrail rejected (F1 0.718 to 0.709, 500 feedback rows). The 2 October full run (MLflow `57e33ba0…`) is in Jenkins and MLflow only. The cluster's model card now shows the promotion time and the MLflow run.
 3. **Jenkins → `devsecmlops-model` → the last full run's console** (do not start a full run live: about 20 minutes and 9+ GB of free memory). Point at stage 2 (judged rows exported), stage 4 (rows used and skipped, candidate against production F1, the guardrail), and stage 6 (the MLflow run id and six model files read back from MinIO).
-4. **MLflow:** open run `57e33ba05b444d52aa1bbc0173881d0e` in experiment `telecom-production-model`. It is the 2 October full run: v4 F1 0.7280, v3 F1 0.6552. The 30 September run `1cc2b5a0fa75` (v4 F1 0.7278) is the other full run. The other 12 runs in the experiment are small smoke runs (v4 F1 about 0.65); do not open them.
+4. **MLflow:** open run `f622a7a9b1554c97ad421a92f51f081a` in experiment `telecom-production-model`: the 13 October run that was promoted and is now served (v4 F1 0.7278, P 0.6717, R 0.7941; v3 0.6550). The 2 October run `57e33ba05b44` (0.7280) and the 30 September run `1cc2b5a0fa75` (0.7278) are earlier full runs. The other 12 runs in the experiment are small smoke runs (v4 F1 about 0.65); do not open them.
 
-Say it plainly: the last full model run exported 29 judged rows; the live table has since grown (the Continuous training tab shows the current count, over 100). Either is negligible against 3.17M training rows, so it cannot move a model. The candidate passed the guardrail and was deliberately not promoted, and the verdicts are simulated. Proven: Log (smoke runs, the full run, live counts).
+Say it plainly: the 13 October run exported 262 judged rows and used 214 of them for v4, which is 0.007% of the 3.17M training rows, so feedback did not drive the result: the same 0.7278 appeared on 30 September with no feedback rows. I claim no improvement over the July model (0.7246). The guardrail passed, the threshold was re-selected on the validation fleet (0.6 again), the model was promoted and deployed, and the live cluster validation has not been redone for it. The verdicts are simulated. Proven: Log (smoke runs, the full run, live counts).
 
 ### Blocks
 
@@ -141,8 +141,8 @@ git status --short                                                       # must 
 
 ## 4. If asked about the numbers
 
-- **What the scores are measured on.** Precision 0.664, recall 0.797, F1 0.7246 are on an independent test fleet (seed 123) from the project's synthetic generator, with the generator's labels; the threshold was chosen on a separate validation fleet (seed 7). Operator verdicts in the feedback loop are simulated.
-- **Live agrees with offline.** Over 39,789 matched live predictions the cluster scored P 0.676, R 0.788, F1 0.728, against 0.664, 0.797 and 0.725 offline. The comparison script `live_vs_truth.py` is not in the repo unless you committed it; rehearse before using it.
+- **What the scores are measured on.** Precision 0.6717, recall 0.7941, F1 0.7278 (the model served since 13 October) are on an independent test fleet (seed 123) from the project's synthetic generator, with the generator's labels; the threshold was chosen on a separate validation fleet (seed 7). Operator verdicts in the feedback loop are simulated.
+- **Live agreed with offline (measured on the July model, before the 13 October promotion; not repeated for the new one).** Over 39,789 matched live predictions the cluster scored P 0.676, R 0.788, F1 0.728, against 0.664, 0.797 and 0.725 offline. The comparison script `live_vs_truth.py` is not in the repo unless you committed it; rehearse before using it.
 - **Real data.** The only real-data check is SMD: F1 0.269 per machine and window, on 37 features, outside the production path (`ml-model/load_smd.py`). Say so before being asked.
 - **Persistent anomalies in Grafana** are real episodes in the data (about 60 readings, up to 116), not stuck gauges; about 13 of 200 machines are in one at any time.
 
@@ -151,7 +151,7 @@ git status --short                                                       # must 
 ## 5. Do not do live
 
 - `train_production.py` of any kind. Training and evaluation use up to about 11 GB of memory, and this VM froze once under that load.
-- `--promote`, or running `Jenkinsfile.model`. No model has been promoted and the job has never run.
+- `PROMOTE=true` on `devsecmlops-model`. It changes the served model, pushes a commit to `main` and starts a deploy build that needs SonarQube running. It ran once (13 October, build 7); the next promotion belongs after the defense.
 - Starting a main-pipeline build. Build #98 took 46 minutes on a base-image cache miss (about 600 MB of wheels at under 400 kB/s).
 - The Kubernetes **Fix** button in Status (untested live).
 - The Ansible `production` profile. It overwrites the PostgreSQL Secret, and the running database keeps its old password.
