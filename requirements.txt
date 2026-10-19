@@ -10,6 +10,8 @@
 # Experiment tracking (ml-model/train_production.py logs runs here when
 # MLFLOW_TRACKING_URI is set)
 mlflow==3.16.1
+# S3 client: MLflow's MinIO artifact store and scripts/ensure_minio_bucket.py
+boto3>=1.34
 
 # Evaluation / demo scripts
 requests==2.33.1

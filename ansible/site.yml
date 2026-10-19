@@ -29,6 +29,16 @@
         profile: "{{ profile | default(_profile_default) }}"
     - name: Load the selected profile's variables
       ansible.builtin.include_vars: "group_vars/{{ profile }}.yml"
+    - name: Look for the Vault-encrypted production secrets file
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/group_vars/production_secrets.yml"
+      register: _prod_secrets
+      when: profile == 'production'
+    - name: Load the production secrets (vault_db_password)
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/group_vars/production_secrets.yml"
+      when: profile == 'production' and _prod_secrets.stat.exists
+      # Without that file db_password stays CHANGE_ME_VIA_VAULT and the secrets role stops with a clear message.
     - name: Announce the profile
       ansible.builtin.debug:
         msg: "Bringing up the platform with the '{{ profile }}' profile."

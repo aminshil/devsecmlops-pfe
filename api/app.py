@@ -45,7 +45,7 @@ import base64
 import hmac
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
 import math
@@ -543,6 +543,20 @@ def _init_feedback_db_on_startup():
 HISTORY_WINDOW = 10                      # must equal preprocess.ROLLING_WINDOW_SIZE
 HISTORY_KEYS = ("cpu", "ram", "load_avg")
 
+# Physical ranges. A reading outside them is a sensor or client error, not an
+# anomaly; scored anyway it would produce a meaningless (often "normal") verdict,
+# so it is rejected (422). The generator's data stays inside them: percentages are
+# clipped to 0-100 and network / load average never go negative.
+PERCENT_METRICS = ("cpu", "ram", "disk_io", "disk_usage")     # 0-100
+NON_NEGATIVE_METRICS = ("network", "load_avg")                # >= 0
+
+
+def _check_physical_range(name: str, value: float) -> None:
+    if name in PERCENT_METRICS and not 0.0 <= value <= 100.0:
+        raise ValueError(f"{name}={value} is outside 0-100 (a percentage)")
+    if name in NON_NEGATIVE_METRICS and value < 0.0:
+        raise ValueError(f"{name}={value} must not be negative")
+
 
 class Reading(BaseModel):
     # NaN/inf are rejected at parse time: a non-finite value would silently
@@ -574,6 +588,8 @@ class Reading(BaseModel):
     def _metrics_bounded(cls, v: dict) -> dict:
         if len(v) > 32:
             raise ValueError("too many metrics")
+        for name, value in v.items():
+            _check_physical_range(name, value)
         return v
 
     @field_validator("history")
@@ -592,6 +608,8 @@ class Reading(BaseModel):
                 raise ValueError(f"history[{key!r}] must contain exactly {HISTORY_WINDOW} values")
             if not all(math.isfinite(x) for x in vals):
                 raise ValueError(f"history[{key!r}] contains a non-finite value")
+            for x in vals:
+                _check_physical_range(key, x)
         return v
 
 
@@ -1030,12 +1048,20 @@ class FeedbackIn(BaseModel):
     responses={
         404: {"description": "prediction_id not found in the feedback DB"},
         400: {"description": "Invalid verdict value"},
+        401: {"description": "FEEDBACK_TOKEN is set and the X-Feedback-Token header is missing or wrong"},
         503: {"description": "Feedback DB unavailable"},
     },
 )
-def submit_feedback(prediction_id: str, feedback: FeedbackIn):
+def submit_feedback(prediction_id: str, feedback: FeedbackIn,
+                    x_feedback_token: str | None = Header(default=None)):
     """
     Submit an operator verdict for a prior prediction.
+
+    Access control is opt-in: when the environment variable FEEDBACK_TOKEN is
+    set on the API, this endpoint requires the same value in the
+    X-Feedback-Token header (401 otherwise). When it is unset (the default,
+    e.g. the demo) the endpoint is open, as before -- the verdicts feed the
+    retraining set, so anyone who can reach the API could otherwise poison it.
 
     verdict must be one of:
       - true_positive   (model correctly flagged an anomaly)
@@ -1046,6 +1072,9 @@ def submit_feedback(prediction_id: str, feedback: FeedbackIn):
     Idempotent: submitting a second verdict for the same prediction_id
     overwrites the first with the newer timestamp.
     """
+    expected = os.environ.get("FEEDBACK_TOKEN", "")
+    if expected and not hmac.compare_digest((x_feedback_token or "").encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="missing or wrong X-Feedback-Token")
     _require_db()
     try:
         row = update_verdict(prediction_id, feedback.verdict, feedback.notes)
@@ -1593,8 +1622,10 @@ class _ClusterError(RuntimeError):
 def _cluster_call(method: str, path: str, body: dict | None = None, timeout: int = 15) -> dict:
     """Call the cluster API. `path` is a constant or is built from a validated UUID."""
     data = json.dumps(body).encode() if body is not None else None
-    req = _ur.Request(_CLUSTER_API + path, method=method, data=data,
-                      headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if os.environ.get("FEEDBACK_TOKEN"):          # same opt-in token the cluster API checks
+        headers["X-Feedback-Token"] = os.environ["FEEDBACK_TOKEN"]
+    req = _ur.Request(_CLUSTER_API + path, method=method, data=data, headers=headers)
     try:
         with _ur.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode())

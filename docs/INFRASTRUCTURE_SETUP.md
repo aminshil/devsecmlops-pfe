@@ -72,7 +72,7 @@ If `120 passed` does not appear, stop here. Nothing else will work reliably.
 
 ## 3. The four datasets  (VERIFIED for three of the four, on a second machine)
 
-The datasets are not in git (`data/*.csv` is ignored). They come from the project's own generator, `ml-model/generate_telecom_fleet.py`. Each fleet has its own seed, so the training, validation and test data never overlap.
+The datasets are not in git (`data/*.csv` is ignored). They come from the project's own generator, `ml-model/generate_telecom_fleet.py`. Each fleet has its own seed, so the three files share no rows; they do describe the same simulated fleet (same machine names and calendar) with independent noise, which is why a held-out score here is optimistic compared with a genuinely new site.
 
 | File | Used for | Command |
 |---|---|---|
@@ -167,7 +167,7 @@ The cluster address is then `http://192.168.49.2:30080` (the NodePort used by th
 ansible-playbook -i inventory.ini site.yml 2>&1 | tail -40     # demo profile (default)
 ```
 
-This starts the registry, MinIO, MLflow, SonarQube, the custom Jenkins image, Grafana, node-exporter, the systemd units (Prometheus, k8s-exporter, production agent, control panel) and the Jenkins network unit.
+This starts the registry, MinIO (and creates its `mlflow-artifacts` bucket if missing, via `scripts/ensure_minio_bucket.py`), MLflow, SonarQube, the custom Jenkins image, Grafana, node-exporter, the systemd units (Prometheus, k8s-exporter, production agent, control panel) and the Jenkins network unit.
 
 The production profile (`-e profile=production --ask-vault-pass`) skips Jenkins, SonarQube, MinIO, MLflow and the control panel, runs 3 replicas, and uses a Vault-backed database secret.
 

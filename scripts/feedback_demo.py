@@ -50,10 +50,13 @@ STATE = {"rows": [], "retrain": {"status": "idle", "step": "", "log": [], "resul
 
 # ----------------------------------------------------------------------------- live API
 def api(method: str, path: str, body: dict | None = None):
+    headers = {"Content-Type": "application/json"}
+    if os.environ.get("FEEDBACK_TOKEN"):          # only needed when the API runs with FEEDBACK_TOKEN
+        headers["X-Feedback-Token"] = os.environ["FEEDBACK_TOKEN"]
     req = urllib.request.Request(
         API + path, method=method,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Content-Type": "application/json"})
+        headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.load(resp)

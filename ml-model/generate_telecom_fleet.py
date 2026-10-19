@@ -1,9 +1,9 @@
 """
-Tunisie Telecom synthetic fleet generator (6 features, equipment-faithful).
+Synthetic fleet generator for a Tunisie Telecom-style infrastructure (6 features). All data is simulated.
 
 Servers (web/app/db/cache/queue/batch/edge) expose all 6 metrics via Node Exporter.
 Network appliances (router/firewall/dns/voip) are SNMP-monitored and have NO disk,
-so disk_io / disk_usage / load_avg are near-zero for them — matching real hardware.
+so disk_io / disk_usage / load_avg are near-zero for them (modelled on how such devices are monitored).
 
   - 11 machine types, 200 machines, day/night patterns
   - 5 anomaly types: cpu_spike, memory_leak, network_flood, disk_saturation, silent_failure

@@ -5,6 +5,8 @@ PFE ESPRIT × Tunisie Telecom — 2025–2026 — Amine Shil
 
 A self-hosted, cloud-native platform that detects anomalies on IT infrastructure (CPU, RAM, network, disk, load) using machine learning, delivered through a fully automated, security-gated CI/CD pipeline. Includes dependency-graph-based root cause analysis to distinguish a true root cause from downstream cascading victims when multiple machines alert at once.
 
+> **About the data.** Every dataset in this repository is **simulated**, produced by `ml-model/generate_telecom_fleet.py` (200 machines, 11 equipment types, 30-second readings, labelled injected anomalies). It is not Tunisie Telecom data. All scores below are measured on that simulation, and the operator verdicts in the feedback loop are simulated too. The one check on real data (SMD) scores far lower, F1 0.269.
+
 This document is organized **layer by layer (L0–L6)**. Every layer section follows the same shape: what it does, what was tested (including what was tried and rejected, with real numbers), real bugs found and fixed, and the files that make it up. Nothing here is asserted without a command, a log, or a test result behind it — where a number or a fix is described, the evidence is named alongside it.
 
 ---
@@ -57,7 +59,7 @@ A production-oriented anomaly detection platform for a simulated 200-machine tel
 
 The current numbers, build and deployment state are summarized in [At a glance](#at-a-glance).
 
-**Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — two SonarQube Quality Gate blocks (proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, a SonarQube server-side failure caused by the VM's disk reaching 95%, a Quality Gate block on new code (a duplicated literal in the chunked evaluation), and an image-scan block on 6 HIGH OpenSSL CVEs that Debian had already fixed but a stale cached build layer never picked up. The most recent run (build `2.20.3-b97`) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
+**Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — two SonarQube Quality Gate blocks (proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, a SonarQube server-side failure caused by the VM's disk reaching 95%, a Quality Gate block on new code (a duplicated literal in the chunked evaluation), and an image-scan block on 6 HIGH OpenSSL CVEs that Debian had already fixed but a stale cached build layer never picked up. The most recent run (build `2.20.3-b103`) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
 
 **What makes this project genuinely defensible, beyond the final metrics:**
 
@@ -103,7 +105,7 @@ Git push -> Jenkins (SonarQube -> repo+model gate -> Docker build ->
                             Kubernetes API server -- not the NodePort)
                                                   |
                                                   v
-                     Grafana (30 panels, provisioned from the repo)
+                     Grafana (25 panels + 5 rows, provisioned)
 ```
 
 Everything runs on a single self-hosted VM (Minikube) for the PFE. The image is built once and scanned once; moving to a multi-node cluster is a configuration change, not a code change: point `image:` at the registry Jenkins already pushes to and switch `imagePullPolicy` from `Never` (locally loaded images, the Minikube pattern used here) to `IfNotPresent`. That multi-node deployment has not been done in this project. Ansible brings the whole platform up from a bare provisioned VM in either profile (demo or production) — see [L6](#l6--ansible-infrastructure-as-code).
@@ -430,7 +432,7 @@ that made this evaluation necessary has not changed.
 
 | Attempt | F1 | Why it failed |
 |---|---|---|
-| Blind ensemble (flag if either model fires) | 0.663 | Inherited Isolation Forest's false positives on top of RandomForest's correct calls |
+| Blind ensemble (flag if either model fires) | 0.663 | Inherited Isolation Forest's false positives on top of RandomForest's correct calls. Judged on F1 in the RandomForest era; the shipped rule is this same OR, kept for recall. Measured trade-off today: [Decision 10](#10-why-dual-model-architecture-primary--safety-net) |
 | Dependency-graph cascade rule (flag all downstream machines when router predicted anomalous) | 0.550 | Each router has ~22 downstream machines; one wrong router prediction produced ~22 wrong flags (precision on cascade-rule-fired rows: 2.9%) |
 
 Both are documented here rather than discarded silently — they are real,
@@ -487,13 +489,14 @@ used in Su et al. (KDD 2019, OmniAnomaly). Three variants tested:
 | **Per-machine + time window** | 37 (all) | **0.269** |
 | Top-3 variance features only | 3 | 0.159 |
 
-F1=0.269 is lower than the synthetic-data results, expected and consistent
-with the literature: published unsupervised sequence models on SMD
-(OmniAnomaly and similar GRU-VAE architectures) report F1 in the 0.40–0.55
-range, but those models read a *sliding window* of recent history rather
-than one timestamp in isolation — a fundamentally more powerful signal for
-gradual-onset anomalies, at the cost of a much heavier architecture
-(recurrent neural networks vs. IsolationForest/RandomForest here). This
+F1=0.269 is far lower than the synthetic-data results, and that gap is the
+finding. It is not directly comparable with published SMD numbers (for example
+OmniAnomaly, KDD 2019): those papers use recurrent models that read a *sliding
+window* of recent history, and they usually score with *point-adjusted* F1
+(one detected point credits the whole anomalous segment), which is far more
+lenient than the per-reading F1 used here. An earlier version of this text
+quoted a "0.40–0.55" literature range without a citation; it was removed
+rather than defended. This
 project prioritizes training speed, interpretability, and straightforward
 CI/CD-integrated deployment over the marginal accuracy gains of a
 recurrent sequence model — a deliberate, documented tradeoff, not an
@@ -621,7 +624,7 @@ v4 beat v3 on every live metric at the time, zero errors on 33,600 requests. mem
 > A proper F2-maximizing sweep on an independent validation fleet selected
 > **0.60** instead. A fresh live validation at the corrected threshold, against
 > the real deployed cluster, is in [Current production](#current-production-the-numbers-that-supersede-everything-above):
-> on the 19 October model (threshold 0.91) F1 = 0.7755 on 16,600 real requests, 0 errors, every one served by v4.
+> on the 19 October model (threshold 0.91) F1 = 0.7755 on 16,600 live HTTP requests (carrying simulated readings), 0 errors, every one served by v4.
 
 ##### Serving architecture: client supplies history (stateless API)
 
@@ -748,8 +751,8 @@ experiment found.
 
 A further, more recent live-serving validation — against the actual
 deployed Kubernetes cluster, at the corrected threshold, on the independent
-test set — is in [Current production](#current-production-the-numbers-that-supersede-everything-above): 16,600 real
-requests, 0 errors, F1 0.7755 (19 October model).
+test set — is in [Current production](#current-production-the-numbers-that-supersede-everything-above): 16,600 live
+HTTP requests (simulated readings), 0 errors, F1 0.7755 (19 October model).
 
 
 ### Current production (the numbers that supersede everything above)
@@ -850,9 +853,9 @@ deployment actually returns today.
 
 #### Live validation against the real, running cluster
 
-`scripts/live_k8s_validation.py` sends real requests through the NodePort to
-the real deployment, sampling every machine every 4 hours across the
-independent test set, each with its own real preceding 10 readings as
+`scripts/live_k8s_validation.py` sends live HTTP requests (carrying simulated readings) through the NodePort to
+the running deployment, sampling every machine every 4 hours across the
+independent test set, each with its own preceding 10 readings from the test file as
 history, reporting which model actually answered rather than assuming:
 
 ```json
@@ -1519,7 +1522,7 @@ kubectl get pods -n ml-serving
 
 ## L5 — Observability and MLOps
 
-Prometheus + Grafana (30 panels) + realistic traffic replayed from the independent test set + Kubernetes
+Prometheus + Grafana (25 panels in 5 rows) + realistic traffic replayed from the independent test set + Kubernetes
 object monitoring.
 
 ### Monitoring
@@ -1582,7 +1585,7 @@ not started by default in favor of `production_agent.py`.
 `monitoring/k8s_exporter.py` publishes pod readiness, restart counts,
 deployment replica counts, and HPA CPU utilization as Prometheus metrics.
 
-#### Grafana dashboard (30 panels)
+#### Grafana dashboard (25 panels in 5 rows)
 
 Provisioned from the repository (`monitoring/grafana/`) — a fixed
 datasource UID plus the dashboard JSON, mounted read-only — rather than
@@ -1922,10 +1925,25 @@ The generator by design labels cascade anomalies only 40% consistently (a downst
 
 RandomForest is blind to cascades by construction (see previous). IsolationForest, being unsupervised, has no such blind spot -- it reacts to any statistical deviation regardless of label noise (0.262 cascade recall). Running both means the primary gets high accuracy on the 5 clean cause types AND cascades still get detected via the safety net. Two rejected alternatives:
 
-- **Blind ensemble (flag if either fires)**: F1 = 0.663, worse than RandomForest alone. Inherits IsolationForest's false positives without helping recall.
+- **Blind ensemble (flag if either fires)**: F1 = 0.663 in the RandomForest era, worse than RandomForest alone on F1. The shipped rule is this same OR, kept on purpose for recall, not for F1; the measured trade-off at the served threshold is in the table below.
 - **Graph-rule cascade fix (flag all downstream when router flagged)**: F1 = 0.550. Blast radius: each router has ~22 downstream machines; one wrong router prediction = ~22 wrong flags. Cascade-rule precision on fired rows: 2.9%.
 
 Both rejections are documented with real numbers, not hand-waved. This remains the shipped architecture today: the served decision is still `classifier OR IsolationForest` (`ml-model/decision.py`), unchanged in principle since this decision was made, though the classifier and the specific safety-net numbers have moved on since (see [L0 — ML Model](#l0--ml-model) and the [unsupervised-model comparison](#why-isolation-forest-updated--corrected-methodology) in L0).
+
+**Measured today, at the served threshold (0.91), on the full 17,280,000-row test set** (`scripts/decision_components.py`, same model outputs for all three rows; the OR row reproduces the 0.7291 / 0.6713 / 0.7979 in the manifest):
+
+| Decision | Precision | Recall | F1 | Cascade recall |
+|---|---|---|---|---|
+| XGBoost classifier alone | 0.8972 | 0.7382 | **0.8100** | 0.041 |
+| IsolationForest alone | 0.6666 | 0.6610 | 0.6638 | 0.251 |
+| **Served: classifier OR IsolationForest** | 0.6713 | **0.7979** | 0.7291 | 0.268 |
+
+What this says, without softening it:
+
+- The OR rule is **not** an F1 win. The classifier alone has the better F1 (0.81 against 0.7291) and far better precision. The OR rule buys **+6 points of recall** (0.7382 -> 0.7979) and pays 22.6 points of precision: the IsolationForest adds 356,428 false-positive readings that the classifier would not have raised.
+- On the five learnable causes the safety net adds almost nothing (recall changes by less than half a point on every one, for example memory_leak 0.929 -> 0.933). Its real contribution is **cascade**, 0.041 -> 0.268, which the classifier is trained not to learn (label-noise decision above).
+- The shipped rule therefore follows the project's stated priority in `config/model_policy.json` (recall first: `min_recall` 0.80, F-beta with beta 3), not F1. If false alarms were the priority, the data says to serve the classifier alone. This is a deliberate trade-off, not a free improvement, and the recall target is still narrowly missed (0.7979 against 0.80).
+- All of it is measured on simulated data with generator labels; cascade labels are only 40% consistent by construction, so cascade recall is capped by the labels themselves.
 
 ### 11. Why XGBoost replaced RandomForest as primary (v3)
 
@@ -1966,7 +1984,7 @@ reversed on stronger full-scale evidence.
 
 ### 14. Why SMD real-world validation matters
 
-F1 = 0.269 on the Server Machine Dataset (28 real servers, public benchmark used by OmniAnomaly and other sequence-model papers). Much lower than synthetic F1, and this is the honest point: **published unsupervised sequence models on SMD report F1 in the 0.40-0.55 range** using recurrent architectures that read a sliding window of history. This project prioritizes training speed, interpretability, and simple CI/CD-integrated deployment over the marginal accuracy gains of a recurrent sequence model -- a documented tradeoff, not an oversight. The SMD result's purpose is not to win on the benchmark; it shows the per-machine, per-window z-score methodology transfers to real, independently-collected data at reduced accuracy (F1 0.269), so the synthetic-data scores must not be read as real-world accuracy. `ml-model/load_smd.py` is the adapter that makes this data loadable through the same pipeline; it remains in the repository and is not part of the production training path.
+F1 = 0.269 on the Server Machine Dataset (28 real servers, public benchmark used by OmniAnomaly and other sequence-model papers). Much lower than synthetic F1, and this is the honest point: **published SMD results (e.g. OmniAnomaly, KDD 2019) use recurrent models over a sliding window and usually point-adjusted F1, a more lenient metric, so they are not comparable with this per-reading score** (an earlier uncited "0.40-0.55" range was removed). This project prioritizes training speed, interpretability, and simple CI/CD-integrated deployment over the marginal accuracy gains of a recurrent sequence model -- a documented tradeoff, not an oversight. The SMD result's purpose is not to win on the benchmark; it shows the per-machine, per-window z-score methodology transfers to real, independently-collected data at reduced accuracy (F1 0.269), so the synthetic-data scores must not be read as real-world accuracy. `ml-model/load_smd.py` is the adapter that makes this data loadable through the same pipeline; it remains in the repository and is not part of the production training path.
 
 ### 15. Why MLflow + MinIO run outside the Kubernetes cluster
 
@@ -2220,6 +2238,10 @@ python monitoring/k8s_exporter.py &
   the threshold, re-evaluating), not attempted in this pass.
 - **`Jenkinsfile.model` has run in both scopes and has promoted twice.** `smoke` (tiny generated fleets and a scratch copy of the production artifacts, production proven untouched by hash) and `full` (the real datasets, logged to MLflow and MinIO; see L5). On 13 October build 7 ran `SCOPE=full` with `PROMOTE=true`: guardrail PASS, commit `18042f37` pushed to `main` (push access of the token is verified), and the application pipeline started; its build #100 failed and was re-run by hand as #101 (green, deployed). The automatic deploy-after-promote step was proven on 19 October: build 8 promoted, and the application pipeline it started (#103) went green and deployed `2.20.3-b103`. The promotion path is also covered by tests and the CI model gate.
 - **Headline scores are on synthetic data.** The F1, precision and recall quoted for the deployed model (0.7291 / 0.671 / 0.798) are measured on a generated fleet whose anomalies and labels come from the same generator, and the operator verdicts in the feedback loop are simulated from those labels. The only real-data check is SMD (F1 0.269), so these numbers must not be read as real-world detection accuracy.
+- **The "held-out" files are not a different site.** The training, validation and test fleets use different seeds, so they share no rows, but they describe the same simulated fleet (same 200 machine names, same calendar, same generator) with independent noise. Scores on a genuinely new infrastructure would be lower, as the SMD result suggests. The threshold is selected on the validation fleet, but the promotion guardrail compares models on the test set, which is also the set the headline numbers come from, so that set is not a fully untouched holdout.
+- **Recall is per reading, not per incident.** 0.7979 means 79.8% of anomalous 30-second readings are flagged. An incident lasts many readings, so an operator is told about most incidents sooner than this figure suggests, but the project does not yet measure time-to-detect or per-incident recall.
+- **Access control is minimal outside the Operations UI.** `/predict` rejects out-of-range readings (percentages outside 0-100, negative network or load average) with a 422. `POST /feedback/{id}` is open by default, because the demo needs it; setting `FEEDBACK_TOKEN` on the API (and the same value for the callers) makes it require an `X-Feedback-Token` header. Verdicts feed retraining, so on a shared network that token should be on.
+- **The Ansible setup has been validated on the existing VM, not on a blank machine.** `--syntax-check`, `--check` and idempotent re-runs pass there; a first run on a clean Ubuntu host has not been done (see `docs/INFRASTRUCTURE_SETUP.md` for the order that works). The Jenkins and SonarQube settings live in Docker volumes and are configured by hand.
 - **Recall-first has a ceiling, and the full-data retrain gained little.** With a recall target of 0.80 the served recall went from 0.7941 to 0.7979 and F1 from 0.7278 to 0.7291 (single seed, within noise): about one anomalous reading in five is still missed, mostly `cascade` (0.2679, label noise by design), and the IsolationForest carries most of the recall, so the threshold moves it little. Training on all rows gave no measurable v4 gain; the v3 gain (0.6550 to 0.6664) is confounded with the changed threshold. Recall is per reading, not per incident, and uses the generator's labels.
 - **Sequence-aware detection remains future work.** The current models
   evaluate the current reading plus a short rolling window, not a full

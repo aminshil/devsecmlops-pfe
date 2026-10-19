@@ -17,6 +17,7 @@
   register: docker_check
   changed_when: false
   failed_when: false
+  check_mode: false   # read-only probe: runs for real in --check so later 'when:' tests are correct
 
 - name: Install Docker via the official convenience script (only if missing)
   when: docker_check.rc != 0
@@ -29,17 +30,26 @@
     - name: Run the Docker install script
       ansible.builtin.command: sh /tmp/get-docker.sh
       changed_when: true
+      become: true
     - name: Ensure the Docker service is enabled and started
       ansible.builtin.systemd:
         name: docker
         enabled: true
         state: started
+      become: true
 
 - name: Add the invoking user to the docker group
   ansible.builtin.user:
     name: "{{ ansible_user_id }}"
     groups: docker
     append: true
+  when: docker_check.rc != 0
+  become: true
+
+# A new group membership only applies to NEW connections; reconnect so the
+# docker tasks later in this run (and in the other roles) can use the socket.
+- name: Reconnect so the docker group takes effect in this run
+  ansible.builtin.meta: reset_connection
   when: docker_check.rc != 0
 
 # ---------------------------------------------------------------------------
@@ -50,6 +60,7 @@
   register: kubectl_check
   changed_when: false
   failed_when: false
+  check_mode: false   # read-only probe: runs for real in --check so later 'when:' tests are correct
 
 - name: Install kubectl v1.36.2 (only if missing)
   when: kubectl_check.rc != 0
@@ -57,6 +68,7 @@
     url: "https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl"
     dest: /usr/local/bin/kubectl
     mode: "0755"
+  become: true
 
 # ---------------------------------------------------------------------------
 # Minikube (pinned)
@@ -66,6 +78,7 @@
   register: minikube_check
   changed_when: false
   failed_when: false
+  check_mode: false   # read-only probe: runs for real in --check so later 'when:' tests are correct
 
 - name: Install Minikube v1.38.1 (only if missing)
   when: minikube_check.rc != 0
@@ -73,6 +86,7 @@
     url: "https://github.com/kubernetes/minikube/releases/download/v1.38.1/minikube-linux-amd64"
     dest: /usr/local/bin/minikube
     mode: "0755"
+  become: true
 
 # ---------------------------------------------------------------------------
 # Prometheus binary (pinned)
@@ -82,6 +96,7 @@
   register: prom_check
   changed_when: false
   failed_when: false
+  check_mode: false   # read-only probe: runs for real in --check so later 'when:' tests are correct
 
 - name: Install Prometheus 2.53.0 (only if missing)
   when: prom_check.rc != 0
@@ -102,6 +117,7 @@
         dest: /usr/local/bin/prometheus
         mode: "0755"
         remote_src: true
+      become: true
 
 # ---------------------------------------------------------------------------
 # Base OS packages

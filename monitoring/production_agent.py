@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 production_agent.py -- the ONLY synthetic part of this pipeline is the data
-source (real historical readings from the held-out test set, standing in
+source (readings from the held-out simulated test set, standing in
 for a real monitoring agent on a real machine). Everything downstream is
 genuine, unmodified production behavior:
 
@@ -13,7 +13,7 @@ genuine, unmodified production behavior:
 
 One independent thread PER MACHINE, each on its own ~30s cycle with random
 jitter -- not one shared loop picking a random machine every few seconds.
-Each agent replays a CONSECUTIVE run of its own machine's real readings, in
+Each agent replays a CONSECUTIVE run of its own machine's simulated readings, in
 time order, keeping the last HISTORY_WINDOW cpu/ram/load_avg values. Once
 that window is full, every request carries `history` -- the machine's own
 genuine preceding readings -- so the API serves v4 (rolling features), not
@@ -160,7 +160,7 @@ def send_one(base_url, row, history=None):
 
 def machine_agent(machine, rows, base_url, interval, stop_event):
     """One independent monitoring agent for one machine: replays its own
-    real readings in time order on a jittered cycle, keeping the last
+    readings in time order on a jittered cycle, keeping the last
     HISTORY_WINDOW cpu/ram/load_avg values. Once that window is full, every
     request carries the machine's own genuine preceding readings."""
     rng = random.Random(machine)  # deterministic per-machine seed for jitter only
@@ -270,7 +270,7 @@ def main():
     print(f"Starting {len(by_machine)} independent machine agents against {base_url}")
     print(f"Each reports roughly every {args.interval}s (jittered, not synchronized)")
     print(f"History (last {HISTORY_WINDOW} cpu/ram/load_avg readings) sent once each "
-          f"agent has that many real readings -- v3 serves until then, v4 after")
+          f"agent has that many readings -- v3 serves until then, v4 after")
     if not args.no_root_cause:
         print(f"Relaying currently-anomalous machines to /root-cause every "
               f"~{ROOT_CAUSE_INTERVAL}s (freshest replica per machine, read FROM Prometheus)")

@@ -106,6 +106,7 @@ USECOLS = ["timestamp", "machine", "type", *FEATURES, "label", "anomaly_type"]
 # every reported metric is built from integer counts that sum exactly across
 # chunks. Memory then scales with the chunk, not with the 17.28M-row test set.
 EVAL_MACHINES_PER_CHUNK = 20
+FALLBACK_THRESHOLD = 0.6   # last resort when neither the manifest nor $PREDICT_THRESHOLD gives one; must equal api.app.FALLBACK_THRESHOLD (tested)
 V4_AT_05 = "v4_at_0.5"   # evaluation key: v4 at the classic 0.5 threshold, for reference
 DEFAULT_VAL = ROOT / "data" / "telecom_fleet_v2_val.csv"
 
@@ -233,8 +234,9 @@ def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
 
 def _finalize(c: dict) -> dict:
     p, r, f = _prf(c["tp"], c["fp"], c["fn"])
+    hp, hr, hf = _prf(c["tp_h"], c["fp_h"], c["fn_h"])
     out = {"f1": f, "precision": p, "recall": r,
-           "classifier_only_f1": _prf(c["tp_h"], c["fp_h"], c["fn_h"])[2],
+           "classifier_only_f1": hf, "classifier_only_precision": hp, "classifier_only_recall": hr,
            "per_cause_recall": {t: c["type_hits"][t] / c["type_rows"][t] for t in sorted(c["anomaly_types"])}}
     out["cause_accuracy"] = c["named_correct"] / c["named"] if c["named"] else None
     return {k: (round(v, 4) if isinstance(v, float) else v) for k, v in out.items()} | {
@@ -563,7 +565,7 @@ def parse_args(argv=None):
     ap.add_argument("--threshold", type=float, default=None,
                     help="decision threshold; default: production.decision_threshold from the "
                          "manifest (chosen by ml-model/select_threshold.py), else "
-                         "$PREDICT_THRESHOLD, else 0.85")
+                         "$PREDICT_THRESHOLD, else FALLBACK_THRESHOLD (0.6, same as api/app.py)")
     ap.add_argument("--max-f1-drop", type=float, default=None,
                     help="default: guardrail.max_f1_drop from config/model_policy.json")
     ap.add_argument("--max-recall-drop", type=float, default=None,
@@ -586,7 +588,7 @@ def parse_args(argv=None):
     if args.threshold is None:
         selected = (read_manifest(args.models_dir).get("production") or {}).get("decision_threshold")
         args.threshold = float(selected if selected is not None
-                               else os.environ.get("PREDICT_THRESHOLD", "0.85"))
+                               else os.environ.get("PREDICT_THRESHOLD", str(FALLBACK_THRESHOLD)))
     return args
 
 

@@ -55,3 +55,6 @@ models/results/
 models/baselines_*.json
 .prometheus-data/
 .kube/
+
+# patch files exchanged during development
+devsecmlops_*.patch

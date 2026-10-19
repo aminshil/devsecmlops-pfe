@@ -142,9 +142,10 @@ identical to the current one.
 
 **This is expected behavior, not a bug**, when the feedback set is small.
 With ~500 verdicts against millions of training rows, the feedback simply
-cannot move the model measurably. The guardrail (`--max-f1-drop 0.0`,
-`--max-recall-drop 0.02` by default -- zero aggregate F1 regression
-allowed, at most a 2-point recall drop on any cause) correctly refusing to
+cannot move the model measurably. The guardrail (defaults from `config/model_policy.json`:
+`max_f1_drop` 0.03, `max_recall_drop` 0.02 -- a candidate is refused if v3 or v4
+loses more than 3 points of F1, or more than 2 points of overall or per-cause
+recall, against the current model; the check runs on the test set) correctly refusing to
 promote a non-improving (or slightly-worse) model is exactly what it is
 for. Meaningful improvement needs thousands of real operator verdicts
 accumulated over weeks/months. See Engineering Decision #24 in the README.

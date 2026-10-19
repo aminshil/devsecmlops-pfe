@@ -63,6 +63,16 @@
       MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
   no_log: true
 
+- name: Ensure the MLflow artifact bucket exists on MinIO (created if missing, never touched if present)
+  ansible.builtin.command: "{{ repo_dir }}/venv/bin/python {{ repo_dir }}/scripts/ensure_minio_bucket.py --endpoint http://localhost:9001 --bucket mlflow-artifacts"
+  environment:
+    MINIO_ROOT_USER: "{{ minio_root_user }}"
+    MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
+  register: minio_bucket
+  changed_when: "'created' in minio_bucket.stdout"
+  when: not ansible_check_mode   # it can create the bucket, so a dry run skips it
+  no_log: true
+
 - name: Ensure /etc/devsecmlops exists (root-only)
   ansible.builtin.file:
     path: /etc/devsecmlops

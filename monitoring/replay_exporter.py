@@ -72,7 +72,7 @@ def load_dataset():
 
     n_steps = min(len(v) for v in per_machine.values())
     print(f"Loaded {len(per_machine)} machines, {n_steps:,} steps each "
-         f"({n_steps * TICK_SECONDS / 3600:.1f} hours of real data, replayed continuously)")
+         f"({n_steps * TICK_SECONDS / 3600:.1f} hours of simulated data, replayed continuously)")
 
     # Row indices grouped by the hour they were actually recorded at, so
     # realtime mode can pick a row that genuinely matches the current hour.

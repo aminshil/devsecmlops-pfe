@@ -289,3 +289,50 @@ def test_artifact_integrity_check_rejects_modified_file(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "MANIFEST_PATH", fake)
     with pytest.raises(RuntimeError, match="integrity"):
         app_module._verify_artifact_integrity()
+
+
+# ---------------------------------------------------------------------------
+# Physical-range validation: out-of-range readings are rejected, not scored
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("metric,value", [
+    ("cpu", 150), ("cpu", -1), ("ram", 100.5), ("disk_io", 250),
+    ("disk_usage", -0.1), ("network", -5), ("load_avg", -0.5),
+])
+def test_predict_rejects_out_of_range_metric(metric, value):
+    resp = client.post("/predict", json={"machine": "web-01", "hour": 14,
+                                         "metrics": {**NORMAL, metric: value}})
+    assert resp.status_code == 422
+
+
+def test_predict_accepts_range_boundaries():
+    edge = {"cpu": 0, "ram": 100, "disk_io": 100, "disk_usage": 0, "network": 0, "load_avg": 0}
+    resp = client.post("/predict", json={"machine": "web-01", "hour": 14, "metrics": edge})
+    assert resp.status_code == 200
+
+
+def test_predict_rejects_out_of_range_history_value():
+    hist = _history()
+    hist["cpu"][3] = 140.0
+    resp = client.post("/predict", json={"machine": "web-01", "hour": 14,
+                                         "metrics": NORMAL, "history": hist})
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Opt-in feedback token
+# ---------------------------------------------------------------------------
+def test_feedback_open_when_no_token_configured(monkeypatch):
+    monkeypatch.delenv("FEEDBACK_TOKEN", raising=False)
+    # past the auth step the unreachable test DB answers 503 (not 401)
+    assert client.post("/feedback/abc", json={"verdict": "true_positive"}).status_code == 503
+
+
+def test_feedback_requires_token_when_configured(monkeypatch):
+    monkeypatch.setenv("FEEDBACK_TOKEN", "s3cret-token")
+    body = {"verdict": "true_positive"}
+    assert client.post("/feedback/abc", json=body).status_code == 401
+    assert client.post("/feedback/abc", json=body,
+                       headers={"X-Feedback-Token": "wrong"}).status_code == 401
+    # right token passes the check and reaches the (unreachable) DB
+    assert client.post("/feedback/abc", json=body,
+                       headers={"X-Feedback-Token": "s3cret-token"}).status_code == 503

@@ -40,7 +40,7 @@ Have `screenshots/` open as a last-resort fallback.
 
 | # | Min | Show | Command or action | What to say | Proven |
 |---|---|---|---|---|---|
-| 0 | 0:30 | Jenkins | open `devsecmlops-pipeline` → the last green build (#101). **Do not start a build**: #98 took 46 minutes on a base-image cache miss | "This is the last build: 11 stages, all green. I'll walk through it at step 12." | Log (b101) |
+| 0 | 0:30 | Jenkins | open `devsecmlops-pipeline` → the last green build (#103). **Do not start a build**: #98 took 46 minutes on a base-image cache miss | "This is the last build: 11 stages, all green. I'll walk through it at step 12." | Log (b103) |
 | 1 | 1 | Control panel → **Status** | open the tab | "Seven layers, each with a live check: API, registry, Jenkins, SonarQube, MLflow, Kubernetes, Prometheus, Grafana, exporters." Expect 11 of 11 up. The model card shows the selector name `telecom_v3`; the model that answers is chosen per request (step 4). | Log (rehearsal) |
 | 2 | 2 | Terminal | block D below (`/health` with the long machine list collapsed, so the lineage is visible) | "The deployed service reports its own lineage: version, the served model's F1 and the artifact hashes it verified before loading." | Log (rehearsal) |
 | 3 | 2 | Terminal | the in-pod smoke test (block A below) | "This is the exact check CI runs after every deploy: a request without history is answered by v3, one with a 10-reading history by v4." Expect 6 `PASS` lines. | Log (stage 9) |
@@ -48,7 +48,7 @@ Have `screenshots/` open as a last-resort fallback.
 | 5 | 2 | Control panel → **Operator** | preset `memory-leak`, run | "A prediction with per-feature z-scores, the likely cause, and each model's vote. The z-scores say which metric drove the alert." | Rehearse |
 | 6 | 2 | Control panel → **Demo** | send a batch | "Real held-out readings, scored live, with true and false positives shown. About a third of alerts are false: precision is 0.66, and I show that rather than hide it." | Rehearse |
 | 7 | 1 | Control panel → **Root Cause** | inject a router cascade | "One router failing makes its machines alert too; the graph ranks the router as the root cause and the rest as downstream effects." | Rehearse |
-| 8 | 2 | Grafana | live predictions, model served per pod, top-25 anomaly probability | "30 panels provisioned from the repo, so the dashboard cannot drift from git. Prometheus scrapes each pod separately, because scraping the NodePort mixed replicas." In the top-25 table the red text is the model's likely cause for each current anomaly, the green bar is the classifier probability; `safety-net only` means the IsolationForest flagged it with a low classifier score. The traffic is a replay of the independent test set. | Log (rehearsal) |
+| 8 | 2 | Grafana | live predictions, model served per pod, top-25 anomaly probability | "25 panels in 5 rows, provisioned from the repo, so the dashboard cannot drift from git. Prometheus scrapes each pod separately, because scraping the NodePort mixed replicas." In the top-25 table the red text is the model's likely cause for each current anomaly, the green bar is the classifier probability; `safety-net only` means the IsolationForest flagged it with a low classifier score. The traffic is a replay of the independent test set. | Log (rehearsal) |
 | 9 | 1 | Terminal | block C below | "Pods run non-root, read-only filesystem, all capabilities dropped. The autoscaler is 2 to 5 replicas at 70% CPU." | Log (rehearsal) |
 | 10 | 2 | Terminal | `python3 scripts/verify_model_manifest.py --min-f1 0.60` | "The CI model gate: artifact hashes, recorded F1, and that no deployment file carries a threshold: it is read from the manifest, where it was selected on an independent validation fleet." | Log |
 | 11 | 1 | Terminal (optional) | block E below | "I change the model selector to the legacy value and the gate fails." Always restore with `git checkout`. | Log |
@@ -152,7 +152,7 @@ git status --short                                                       # must 
 ## 5. Do not do live
 
 - `train_production.py` of any kind. Training and evaluation use up to about 11 GB of memory, and this VM froze once under that load.
-- `PROMOTE=true` on `devsecmlops-model`. It changes the served model, pushes a commit to `main` and starts a deploy build that needs SonarQube running. It ran once (13 October, build 7); the next promotion belongs after the defense.
+- `PROMOTE=true` on `devsecmlops-model`. It changes the served model, pushes a commit to `main` and starts a deploy build that needs SonarQube running. It has run twice (13 October, build 7; 19 October, build 8, full data); the next promotion belongs after the defense.
 - Starting a main-pipeline build. Build #98 took 46 minutes on a base-image cache miss (about 600 MB of wheels at under 400 kB/s).
 - The Kubernetes **Fix** button in Status (untested live).
 - The Ansible `production` profile. It overwrites the PostgreSQL Secret, and the running database keeps its old password.
@@ -164,4 +164,4 @@ git status --short                                                       # must 
 ## 6. After the defense
 
 - Rotate every credential that appeared in chat or in terminal history (Grafana, ops UI, MinIO).
-- Then take up the deferred items in "Known limitations": promoting the pipeline-trained model, a dependency lockfile, a NetworkPolicy.
+- Then take up the deferred items in "Known limitations": a dependency lockfile, a NetworkPolicy.

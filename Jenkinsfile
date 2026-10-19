@@ -181,14 +181,26 @@ pipeline {
                 sh '''
                     export KUBECONFIG=/home/pfe/.kube/config
 
-                    # Through the Service, as a real client would, from
-                    # inside a pod that is already on the cluster network --
+                    # Runs inside one of the new pods and calls it on
+                    # http://localhost:8000 (the pod itself, not the Service):
                     # health, version, a v3 AND a v4 prediction, metrics, and
                     # confirms the ops UI is not exposed on this deployment.
                     kubectl exec -i -n ml-serving deploy/anomaly-api -c api -- \
                       python3 - --url http://localhost:8000 \
                       --expect-version "$(cat VERSION)" --wait 60 < scripts/smoke_test.py
                 '''
+            }
+            post {
+                failure {
+                    // The new version is already live when this stage runs. If it fails
+                    // its own smoke test, put the previous ReplicaSet back.
+                    echo "Smoke test FAILED -- rolling the deployment back to the previous revision"
+                    sh '''
+                        export KUBECONFIG=/home/pfe/.kube/config
+                        kubectl rollout undo deployment/anomaly-api -n ml-serving
+                        kubectl rollout status deployment/anomaly-api -n ml-serving --timeout=180s
+                    '''
+                }
             }
         }
     }
@@ -198,7 +210,7 @@ pipeline {
             echo "Pipeline SUCCESS — ${IMAGE_NAME}:${IMAGE_TAG} built, scanned, pushed, deployed, verified"
         }
         failure {
-            echo "Pipeline FAILED at stage: ${env.STAGE_NAME} -- nothing past this stage was pushed or deployed"
+            echo "Pipeline FAILED at stage: ${env.STAGE_NAME}. Stages 1-7 deploy nothing. If it failed at stage 8 the rollout did not finish (check the pods); if at stage 9 the new version was live and was rolled back automatically."
         }
         always {
             sh 'docker rm -f api-ci-test 2>/dev/null || true'

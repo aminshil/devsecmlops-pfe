@@ -49,6 +49,8 @@ spec:
               echo "postgres ready, exiting init container"
       containers:
         - name: api
+          # Jenkins owns the running image: stage 8 does `kubectl set image` to the build tag
+          # (…-bNNN) and never re-applies this file, so this static tag is only the first-install default.
           image: devsecmlops-api:2.20.3
           imagePullPolicy: Never
           ports:

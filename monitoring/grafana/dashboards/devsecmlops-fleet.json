@@ -349,7 +349,7 @@
         "x": 12,
         "y": 32
       },
-      "description": "Each machine's most recent classifier P(anomaly) (green bar) and the model's likely cause (red) when its latest verdict is an anomaly; 'normal' = not flagged. Production decision threshold 0.6; the IsolationForest safety net can flag a machine even with a low bar ('safety-net only').",
+      "description": "Each machine's most recent classifier P(anomaly) (green bar) and the model's likely cause (red) when its latest verdict is an anomaly; 'normal' = not flagged. The decision threshold is the one in the served model's manifest (see /health, model_lineage); the IsolationForest safety net can flag a machine even with a low bar ('safety-net only').",
       "targets": [
         {
           "datasource": {

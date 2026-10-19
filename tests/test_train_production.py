@@ -248,3 +248,10 @@ def test_select_threshold_record_is_only_for_the_production_artifacts(tiny_fleet
                   "--test", str(tiny_fleet["test"]), "--models-dir", str(candidate), "--record"])
     assert rc == 2
     assert (candidate / "manifest.json").read_bytes() == before
+
+
+def test_threshold_fallback_matches_the_api():
+    """The trainer and the API must fall back to the same last-resort threshold."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from api.app import FALLBACK_THRESHOLD
+    assert tp.FALLBACK_THRESHOLD == FALLBACK_THRESHOLD

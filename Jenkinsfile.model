@@ -29,7 +29,7 @@ pipeline {
 
     parameters {
         choice(name: 'SCOPE', choices: ['smoke', 'full'],
-               description: 'smoke: tiny generated fleets, scratch directories, never commits or deploys. full: the real datasets, logs to MLflow, needs about 9 GB free memory.')
+               description: 'smoke: tiny generated fleets, scratch directories, never commits or deploys. full: the full-size datasets, logs to MLflow, needs about 9 GB free memory.')
         booleanParam(name: 'INCLUDE_FEEDBACK', defaultValue: true,
                      description: 'Export operator verdicts from PostgreSQL (kubectl exec) and train on them too')
         booleanParam(name: 'PROMOTE', defaultValue: false,
