@@ -7,6 +7,7 @@
 - name: Verify required binaries are installed
   ansible.builtin.command: "which {{ item }}"
   changed_when: false
+  check_mode: false   # read-only probe: runs for real in --check so later 'when:' tests are right
   loop: [docker, minikube, kubectl, prometheus]
   register: bin_check
   failed_when: bin_check.rc != 0

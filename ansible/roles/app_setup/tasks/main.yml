@@ -30,6 +30,7 @@
   register: img_check
   changed_when: false
   failed_when: false
+  check_mode: false   # read-only probe: runs for real in --check so later 'when:' tests are right
 
 - name: Build the API Docker image (if missing)
   ansible.builtin.command: "docker build -t {{ api_image }} ."

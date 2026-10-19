@@ -23,6 +23,7 @@
   register: mk_status
   changed_when: false
   failed_when: false   # expected: non-zero whenever Minikube is stopped -- that is what this checks
+  check_mode: false   # read-only probe: runs for real in --check so later 'when:' tests are right
 
 - name: Start Minikube (Docker driver, forced)
   ansible.builtin.command: "{{ bin_minikube }} start --driver=docker --force"
@@ -44,6 +45,7 @@
   register: current_image
   changed_when: false
   failed_when: false   # expected: NotFound on the very first bring-up
+  check_mode: false   # read-only probe: runs for real in --check so later 'when:' tests are right
 
 - name: Choose the image to deploy (keep Jenkins's release if one exists)
   ansible.builtin.set_fact:
@@ -61,6 +63,7 @@
   register: mk_images
   changed_when: false
   failed_when: deploy_image not in mk_images.stdout
+  check_mode: false   # read-only probe: runs for real in --check so later 'when:' tests are right
 
 - name: Ensure the demo database Secret exists (random password, never committed; production uses the Vault-backed one)
   ansible.builtin.command: "{{ repo_dir }}/scripts/ensure_db_secret.sh"

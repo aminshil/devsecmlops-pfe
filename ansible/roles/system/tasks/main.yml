@@ -46,11 +46,9 @@
   when: docker_check.rc != 0
   become: true
 
-# A new group membership only applies to NEW connections; reconnect so the
-# docker tasks later in this run (and in the other roles) can use the socket.
-- name: Reconnect so the docker group takes effect in this run
-  ansible.builtin.meta: reset_connection
-  when: docker_check.rc != 0
+# NOTE: a new docker-group membership only applies to new logins. This play uses
+# a local connection, so it cannot refresh it; after a first-time Docker install
+# on a non-root account, log out and in (or run `newgrp docker`) and re-run.
 
 # ---------------------------------------------------------------------------
 # kubectl (pinned)
