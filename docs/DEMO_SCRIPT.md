@@ -1,6 +1,6 @@
 # Defense demo script
 
-Prepared against build `2.20.3-b103` (all 11 CI stages green, 132 tests, Quality Gate OK; serves the model promoted on 19 October, trained on all 17.28M rows, v4 F1 0.7291, threshold 0.91), commit `ac581064` (`git log --oneline -5`). About 15 minutes.
+Prepared against build `2.20.3-b106` (all 11 CI stages green, 132 tests, Quality Gate OK; serves the model promoted on 19 October, trained on all 17.28M rows, v4 F1 0.7291, threshold 0.91), commit `8adaf87e` (`git log --oneline -5`). About 15 minutes.
 
 **How to read the "Proven" column.** *Log* means the exact command or output appeared in a real Jenkins or terminal log during this project. *Rehearse* means it is documented in the README but was not run today. Run every *Rehearse* step once before the defense, from a cold start.
 
@@ -40,7 +40,7 @@ Have `screenshots/` open as a last-resort fallback.
 
 | # | Min | Show | Command or action | What to say | Proven |
 |---|---|---|---|---|---|
-| 0 | 0:30 | Jenkins | open `devsecmlops-pipeline` → the last green build (#103). **Do not start a build**: #98 took 46 minutes on a base-image cache miss | "This is the last build: 11 stages, all green. I'll walk through it at step 12." | Log (b103) |
+| 0 | 0:30 | Jenkins | open `devsecmlops-pipeline` → the last green build (#106). **Do not start a build**: #98 took 46 minutes on a base-image cache miss | "This is the last build: 11 stages, all green. I'll walk through it at step 12." | Log (b106) |
 | 1 | 1 | Control panel → **Status** | open the tab | "Seven layers, each with a live check: API, registry, Jenkins, SonarQube, MLflow, Kubernetes, Prometheus, Grafana, exporters." Expect 11 of 11 up. The model card shows the selector name `telecom_v3`; the model that answers is chosen per request (step 4). | Log (rehearsal) |
 | 2 | 2 | Terminal | block D below (`/health` with the long machine list collapsed, so the lineage is visible) | "The deployed service reports its own lineage: version, the served model's F1 and the artifact hashes it verified before loading." | Log (rehearsal) |
 | 3 | 2 | Terminal | the in-pod smoke test (block A below) | "This is the exact check CI runs after every deploy: a request without history is answered by v3, one with a 10-reading history by v4." Expect 6 `PASS` lines. | Log (stage 9) |
