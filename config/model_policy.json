@@ -10,7 +10,7 @@
     "_beta": "F-beta used to pick the threshold on the validation fleet. beta=1 balances precision and recall; larger beta means a missed anomaly costs more than a false alarm (beta=2: recall counts 2x, beta=3: 3x, beta=4: 4x).",
     "beta": 3.0,
     "_min_recall": "Optional hard target. null = use beta only. A number such as 0.85 = choose the HIGHEST-PRECISION threshold whose recall on the validation fleet is at least that; if none reaches it, choose the threshold with the highest recall.",
-    "min_recall": null,
+    "min_recall": 0.80,
     "_grid": "Thresholds tried: start, start+step, ... up to stop. A reading is flagged by XGBoost when P(normal) < threshold, so a HIGHER threshold flags more.",
     "grid": {"start": 0.05, "stop": 0.99, "step": 0.01}
   },
