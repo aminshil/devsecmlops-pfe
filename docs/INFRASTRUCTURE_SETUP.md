@@ -36,15 +36,22 @@ mkdir -p /home/pfe          # the Ansible variables and the Jenkins container ex
 ansible --version | head -1
 ```
 
-The Ansible Docker modules also need the Docker SDK for Python on the machine. Install both, and the collection, now (this is what `ansible/requirements.yml` and the `system` role do after the patch that came with this guide):
+The Ansible Docker modules also need the Docker SDK for Python on the machine. Install the **same version as the original VM (7.1.0)** with pip, then clone the repository and install the Ansible collection:
 
 ```bash
-apt-get install -y python3-docker
+# Ubuntu 22.04 (the original VM; Python 3.10)
+pip3 install docker==7.1.0
+# Ubuntu 24.04 refuses plain pip installs; use this line instead
+# pip3 install --break-system-packages docker==7.1.0
+python3 -c "import docker; print('docker SDK', docker.__version__)"     # must print 7.1.0
+
 git clone https://github.com/aminshil/devsecmlops-pfe.git /root/devsecmlops-pfe
 cd /root/devsecmlops-pfe
 ansible-galaxy collection install -r ansible/requirements.yml
 ansible-galaxy collection list community.docker | tail -2
 ```
+
+The `system` role also lists the apt package `python3-docker` as a safety net. When the pip version above is present it takes priority, so the two do not conflict.
 
 The original VM was set up at `~/devsecmlops-pfe` as root. If you use another path, nothing in the playbook is tied to `/root`; it derives the repository directory from its own location. `/home/pfe` is the only fixed path.
 
@@ -237,7 +244,7 @@ The README states the expected results.
 
 | Gap | State |
 |---|---|
-| Ansible collection `community.docker` and the Docker SDK for Python were not declared | Fixed alongside this guide (`ansible/requirements.yml`, `python3-docker` in the `system` role) |
+| Ansible collection `community.docker` and the Docker SDK for Python were not declared | Fixed alongside this guide: `ansible/requirements.yml` for the collection; the SDK is pinned to the original VM's version (`docker==7.1.0`, section 1), with `python3-docker` in the `system` role as a fallback |
 | First-run network order (section 5a) | Worked around by running the tags `system,app_setup,kubernetes` first; the playbook itself is unchanged |
 | Jenkins jobs, credentials, plugins and the SonarQube project are not codified | MANUAL (section 6). Jenkins Configuration as Code would remove this; not done |
 | Datasets are regenerated, not stored | Checked: the training, validation and test fleets regenerate to the original hashes on a second machine (section 3) |
