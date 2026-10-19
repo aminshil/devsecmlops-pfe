@@ -159,6 +159,13 @@ pipeline {
                     # own Docker daemon.
                     docker save ${IMAGE_NAME}:${IMAGE_TAG} | docker exec -i minikube docker load
 
+                    # The alert threshold comes from models/manifest.json inside the image.
+                    # An old Deployment object may still carry a PREDICT_THRESHOLD value from
+                    # before that (this stage only swaps the image, it never re-applies
+                    # kubernetes/deployment.yaml), and an environment variable overrides the
+                    # manifest. Removing it is a no-op when it is already gone.
+                    kubectl set env deployment/anomaly-api PREDICT_THRESHOLD- -n ml-serving
+
                     kubectl set image deployment/anomaly-api \
                         api=${IMAGE_NAME}:${IMAGE_TAG} -n ml-serving
 

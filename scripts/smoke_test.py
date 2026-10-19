@@ -5,7 +5,8 @@ it can run inside the serving pod as well as from Jenkins).
 
 Checks: /health is ok and reports the expected version; a prediction without
 history is served by v3 and one with a full history window by v4; /metrics
-exposes the prediction counter; the operations UI is NOT exposed.
+exposes the prediction counter; the alert threshold in use was read from
+the model manifest and not overridden by an environment variable; the operations UI is NOT exposed.
 Exit 0 = all checks pass, 1 = a check failed.
 """
 import argparse
@@ -60,6 +61,12 @@ def main():
     if a.expect_version:
         check(health.get("version") == a.expect_version,
               f"version {health.get('version')} == {a.expect_version}")
+
+    lineage = (health or {}).get("model_lineage") or {}
+    source = lineage.get("threshold_source", "")
+    check(source.startswith("models/manifest.json"),
+          f"alert threshold {lineage.get('threshold')} read from the manifest "
+          f"(source: {source or 'not reported'})")
 
     status, body = call(base + "/predict", READING)
     v3 = json.loads(body) if status == 200 else {}
