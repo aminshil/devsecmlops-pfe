@@ -34,9 +34,11 @@ def main(argv) -> int:
           f"v4 F1={v4.get('f1')} P={v4.get('precision')} R={v4.get('recall')}   v3 F1={_f(cand, 'v3').get('f1')}")
     if prod:
         print(f"production                : v4 F1={_f(prod, 'v4').get('f1')}   v3 F1={_f(prod, 'v3').get('f1')}")
-    sel = (r.get("threshold_selection") or {}).get("selected")
+    ts = r.get("threshold_selection") or {}
+    sel = ts.get("selected")
     if sel:
-        print(f"threshold selected on the validation fleet: {sel.get('threshold')} (F2 {sel.get('f2')})")
+        print(f"threshold selected on the validation fleet: {sel.get('threshold')} by rule '{ts.get('rule')}' "
+              f"(recall {sel.get('recall')}, precision {sel.get('precision')}, F1 {sel.get('f1')})")
     verdict = "PASS" if r.get("guardrail_passed") else "REJECT"
     print(f"guardrail: {verdict}  {'; '.join(r.get('guardrail_reasons') or [])}")
     print(f"promoted to workspace: {r.get('promoted')}   mlflow run: {r.get('mlflow_run_id')}")
