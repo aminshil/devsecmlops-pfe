@@ -58,7 +58,6 @@
       User=root
       WorkingDirectory={{ repo_dir }}
       Environment=MODEL_NAME={{ cp_model_name }}
-      Environment=PREDICT_THRESHOLD={{ cp_predict_threshold }}
       Environment=DATABASE_URL={{ cp_database_url }}
       Environment=KUBECONFIG={{ kubeconfig_path }}
       Environment=MINIKUBE_HOME={{ minikube_home }}

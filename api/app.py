@@ -60,14 +60,14 @@ APP_VERSION = (ROOT / "VERSION").read_text().strip() if (ROOT / "VERSION").exist
 MODEL_NAME = os.environ.get("MODEL_NAME", "telecom_v3").lower()
 
 # v3/v4 threshold: flag as anomaly if P(normal) < PREDICT_THRESHOLD.
-# 0.6 selected by ml-model/select_threshold.py: the threshold that maximises
-# F2 (recall weighted twice precision, since a missed incident costs more
-# than an unnecessary check) of the SERVED decision (classifier OR
-# IsolationForest), measured on an independent validation fleet the models
-# were never trained or tested on. See models/manifest.json ->
-# production.threshold_selection for the full precision/recall/F curve this
-# was chosen from, and README "Engineering decisions" for the write-up.
-PREDICT_THRESHOLD = float(os.environ.get("PREDICT_THRESHOLD", "0.6"))
+# The value is NOT configured here or in any deployment file: the training pipeline
+# selects it on an independent validation fleet by the rules in
+# config/model_policy.json (recall prioritised) and records it in
+# models/manifest.json -> production.decision_threshold, which ships inside the image.
+# _resolve_threshold() below reads it at startup, so a newly promoted model brings its own
+# threshold. models/manifest.json -> production.threshold_selection holds the full
+# precision/recall curve it was chosen from.
+FALLBACK_THRESHOLD = 0.6   # only when the manifest carries no decision_threshold
 
 # Per-class thresholds (v4, optional). When PER_CLASS_THRESHOLDS is set to a
 # JSON map like {"cpu_spike":0.65,"memory_leak":0.7,...}, the v4 path flags an
@@ -111,6 +111,26 @@ IS_V2 = MODEL_NAME == "telecom_v2"
 
 MANIFEST_PATH = MODELS_DIR / "manifest.json"
 MODEL_LINEAGE: dict = {}
+
+
+def _resolve_threshold() -> tuple[float, str]:
+    """(threshold, where it came from): the manifest's production.decision_threshold, unless
+    PREDICT_THRESHOLD is set in the environment (an explicit, visible override for an
+    emergency; nothing in the repository sets it)."""
+    env = os.environ.get("PREDICT_THRESHOLD", "").strip()
+    if env:
+        return float(env), "environment variable PREDICT_THRESHOLD (explicit override)"
+    try:
+        value = (json.loads(MANIFEST_PATH.read_text()).get("production") or {}).get("decision_threshold")
+    except (OSError, ValueError):
+        value = None
+    if value is None:
+        return FALLBACK_THRESHOLD, "built-in fallback (the manifest has no decision_threshold)"
+    return float(value), "models/manifest.json production.decision_threshold"
+
+
+PREDICT_THRESHOLD, PREDICT_THRESHOLD_SOURCE = _resolve_threshold()
+MODEL_LINEAGE.update({"threshold": PREDICT_THRESHOLD, "threshold_source": PREDICT_THRESHOLD_SOURCE})
 
 
 def _verify_artifact_integrity() -> None:

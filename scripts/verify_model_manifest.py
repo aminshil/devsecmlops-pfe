@@ -11,9 +11,10 @@ Refuses the build unless:
      at least --min-f1.
 
   3. the threshold the evaluation was recorded at is the selected one
-     (production.decision_threshold) and is exactly the value every
-     deployment file configures -- so the F1 the gate checks is the F1 of
-     what is actually deployed;
+     (production.decision_threshold), and no deployment file carries its own
+     copy: the API reads production.decision_threshold from this manifest
+     (shipped inside the image), so the F1 the gate checks is the F1 of what is
+     actually deployed and a new model's threshold needs no manual edit;
   4. that threshold was SELECTED for exactly these artifacts on an independent
      validation fleet: the manifest carries the selection record, its artifact
      SHA-256s equal the promoted artifacts', and the validation fleet is not the
@@ -40,13 +41,16 @@ def sha256(p: Path) -> str:
     return h.hexdigest()
 
 
-# every place the serving threshold is configured, and how to read it
-THRESHOLD_SOURCES = [
-    ("kubernetes/deployment.yaml", r'name:\s*PREDICT_THRESHOLD\s*\n\s*value:\s*"([^"]+)"'),
-    ("ansible/roles/kubernetes/templates/deployment.yaml.j2", r'name:\s*PREDICT_THRESHOLD\s*\n\s*value:\s*"([^"]+)"'),
-    ("ansible/group_vars/all.yml", r'cp_predict_threshold:\s*"([^"]+)"'),
-    ("ansible/group_vars/demo.yml", r'cp_predict_threshold:\s*"([^"]+)"'),
-    ("api/app.py", r'os\.environ\.get\("PREDICT_THRESHOLD",\s*"([^"]+)"\)'),
+# Places where a static serving threshold used to be configured, and how it looked. None may
+# carry one any more: the API reads the threshold the pipeline selected from the manifest.
+STATIC_THRESHOLD_PATTERNS = [
+    ("kubernetes/deployment.yaml", r'name:\s*PREDICT_THRESHOLD'),
+    ("ansible/roles/kubernetes/templates/deployment.yaml.j2", r'name:\s*PREDICT_THRESHOLD'),
+    ("ansible/group_vars/all.yml", r'cp_predict_threshold\s*:'),
+    ("ansible/group_vars/demo.yml", r'cp_predict_threshold\s*:'),
+    ("ansible/roles/control_panel/tasks/main.yml", r'Environment=PREDICT_THRESHOLD'),
+    ("start_control_panel.sh", r'PREDICT_THRESHOLD\s*='),
+    ("api/app.py", r'os\.environ\.get\("PREDICT_THRESHOLD",\s*"[^"]+"\)'),
 ]
 
 
@@ -78,13 +82,13 @@ def check_model_name(prod: dict, root: Path) -> tuple[str, list[str], list[str]]
     return expected, checked, problems
 
 
-def deployed_thresholds(root: Path) -> dict:
-    found = {}
-    for rel, pattern in THRESHOLD_SOURCES:
+def static_thresholds(root: Path) -> list[str]:
+    """Files under root that hard-code a serving threshold."""
+    found = []
+    for rel, pattern in STATIC_THRESHOLD_PATTERNS:
         path = root / rel
-        if path.exists():
-            m = re.search(pattern, path.read_text())
-            found[rel] = float(m.group(1)) if m else None
+        if path.exists() and re.search(pattern, path.read_text()):
+            found.append(rel)
     return found
 
 
@@ -115,13 +119,13 @@ def _selection_problems(prod: dict) -> list[str]:
 
 
 def check_threshold(prod: dict, root: Path) -> list[str]:
-    evaluated = (prod.get("evaluation") or {}).get("threshold")
     problems = _selection_problems(prod)
-    for rel, value in deployed_thresholds(root).items():
-        if value is None:
-            problems.append(f"{rel}: PREDICT_THRESHOLD not found")
-        elif value != evaluated:
-            problems.append(f"{rel}: deploys {value}, but the model was evaluated at {evaluated}")
+    for rel in static_thresholds(root):
+        problems.append(f"{rel}: hard-codes the serving threshold; remove it -- the API reads "
+                        f"production.decision_threshold from models/manifest.json")
+    app = root / "api" / "app.py"
+    if app.exists() and "decision_threshold" not in app.read_text():
+        problems.append("api/app.py does not read production.decision_threshold from the manifest")
     return problems
 
 
@@ -171,8 +175,8 @@ def main() -> int:
         if problems:
             print("FAIL: threshold drift:\n  " + "\n  ".join(problems))
             return 1
-        print(f"OK: deployed threshold {ev.get('threshold')} = evaluated threshold"
-              + (" = selected threshold" if prod.get("decision_threshold") is not None else ""))
+        print(f"OK: serving threshold {ev.get('threshold')} = evaluated = selected, read from the "
+              f"manifest (no deployment file carries a copy)")
         expected, checked, mproblems = check_model_name(prod, a.root)
         if mproblems:
             print("FAIL: model selector drift:\n  " + "\n  ".join(mproblems))

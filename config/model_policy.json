@@ -1,0 +1,23 @@
+{
+  "_readme": "The ONE place that says how the model is trained and how its alert threshold is chosen. Edit only this file. Nothing else needs changing: the pipeline selects the threshold on the validation fleet by these rules, records it in models/manifest.json, and the API reads it from there at startup.",
+
+  "training": {
+    "_normal_sample": "null = train XGBoost on EVERY normal row of the training file (all 17.28M rows). A number caps the normal rows (a random sample, seed 42) to save memory.",
+    "normal_sample": null
+  },
+
+  "threshold": {
+    "_beta": "F-beta used to pick the threshold on the validation fleet. beta=1 balances precision and recall; larger beta means a missed anomaly costs more than a false alarm (beta=2: recall counts 2x, beta=3: 3x, beta=4: 4x).",
+    "beta": 3.0,
+    "_min_recall": "Optional hard target. null = use beta only. A number such as 0.85 = choose the HIGHEST-PRECISION threshold whose recall on the validation fleet is at least that; if none reaches it, choose the threshold with the highest recall.",
+    "min_recall": null,
+    "_grid": "Thresholds tried: start, start+step, ... up to stop. A reading is flagged by XGBoost when P(normal) < threshold, so a HIGHER threshold flags more.",
+    "grid": {"start": 0.05, "stop": 0.99, "step": 0.01}
+  },
+
+  "guardrail": {
+    "_why": "A candidate is refused only if it is worse than production by more than these margins. Because recall is prioritised, the F1 margin is wider than the recall margin: F1 may fall a little when more anomalies are caught, recall may not.",
+    "max_f1_drop": 0.03,
+    "max_recall_drop": 0.02
+  }
+}

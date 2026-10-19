@@ -40,7 +40,7 @@ pgrep -f "prometheus --config" >/dev/null && ok "prometheus up (:9090)" || { noh
 
 echo ""; echo "[4/5] Control panel API"
 pkill -f "uvicorn.*app:app.*8000" 2>/dev/null; sleep 2
-MODEL_NAME=telecom_v3 PREDICT_THRESHOLD=0.85 DATABASE_URL="postgresql://x:x@localhost:9999/n" nohup uvicorn api.app:app --host 0.0.0.0 --port 8000 >/tmp/control_panel.log 2>&1 &
+MODEL_NAME=telecom_v3 DATABASE_URL="postgresql://x:x@localhost:9999/n" nohup uvicorn api.app:app --host 0.0.0.0 --port 8000 >/tmp/control_panel.log 2>&1 &
 sleep 8
 curl -s -m 5 http://localhost:8000/ui -o /dev/null 2>/dev/null && ok "control panel API up (:8000)" || bad "control panel failed — see /tmp/control_panel.log"
 

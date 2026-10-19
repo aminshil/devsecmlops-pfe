@@ -58,8 +58,8 @@ spec:
           env:
             - name: MODEL_NAME
               value: "telecom_v3"
-            - name: PREDICT_THRESHOLD
-              value: "0.6"
+            # The alert threshold is not set here: the API reads it from models/manifest.json
+            # (selected by the training pipeline per config/model_policy.json).
             # User, password and database all come from the Secret, so the
             # demo (generated) and production (Vault) credentials work
             # without editing this template. They must come BEFORE

@@ -14,9 +14,10 @@ own seed:
 Method: the production models' outputs are computed once on the validation
 fleet; the served decision (classifier vote OR IsolationForest vote,
 ml-model/decision.py) is applied at every threshold of the grid, and the
-threshold maximising F-beta is selected. beta = 2 by default: recall counts
-twice as much as precision, because in network operations a missed incident
-costs more than an unnecessary check.
+threshold chosen by the rules in config/model_policy.json (F-beta with a
+beta that weighs recall above precision, because in network operations a
+missed incident costs more than an unnecessary check; optionally the highest
+precision that still reaches a recall target).
 
 With --record, the choice and its evidence (validation-set fingerprint, beta,
 the full precision/recall/F curve, and the SHA-256 of the artifacts it was
@@ -32,9 +33,10 @@ The test-set evaluation must then be recorded at that threshold:
 
     python ml-model/train_production.py --evaluate-production
 
-(train_production.py uses production.decision_threshold by default), and the
-deployment files must carry the same value -- scripts/verify_model_manifest.py
-fails the CI build if they do not.
+(train_production.py uses production.decision_threshold by default). The serving
+API reads the same production.decision_threshold from the manifest, so no
+deployment file carries a copy -- scripts/verify_model_manifest.py fails the CI
+build if one reappears.
 """
 from __future__ import annotations
 
@@ -51,7 +53,11 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--val", type=Path, default=ROOT / "data/telecom_fleet_v2_val.csv")
     ap.add_argument("--models-dir", type=Path, default=tp.MODELS)
-    ap.add_argument("--beta", type=float, default=2.0)
+    ap.add_argument("--beta", type=float, default=None,
+                    help="F-beta to maximise; default: threshold.beta from config/model_policy.json")
+    ap.add_argument("--min-recall", type=float, default=None,
+                    help="highest precision whose recall is at least this; default: "
+                         "threshold.min_recall from config/model_policy.json")
     ap.add_argument("--train", type=Path, default=tp.ROOT / "data/telecom_fleet_v2_labeled.csv",
                     help="training fleet; --val must not be this file")
     ap.add_argument("--test", type=Path, default=tp.ROOT / "data/telecom_fleet_v2_test.csv",
@@ -75,15 +81,17 @@ def main(argv=None) -> int:
     fp["rows"] = int(len(fleet))
     tp.log(f"validation fleet {fp['file']}: {fp['rows']:,} rows, sha256 {fp['sha256'][:12]}")
 
-    key = f"f{a.beta:g}"
-    selection = tp.select_candidate_threshold(a.models_dir, fleet, fp, a.beta)
+    selection = tp.select_candidate_threshold(a.models_dir, fleet, fp, a.beta, a.min_recall)
+    key = f"f{selection['beta']:g}"
     curve, best = selection["curve"], selection["selected"]
     print(f"\n{'threshold':>9} {'precision':>9} {'recall':>7} {'F1':>7} {key.upper():>7}")
     for r in curve:
         mark = "  <- selected" if r is best else ""
         print(f"{r['threshold']:>9.2f} {r['precision']:>9.4f} {r['recall']:>7.4f} "
               f"{r['f1']:>7.4f} {r[key]:>7.4f}{mark}")
-    tp.log(f"selected threshold {best['threshold']} (max {key.upper()} = {best[key]}) on the validation fleet")
+    tp.log(f"selected threshold {best['threshold']} by rule '{selection['rule']}' "
+           f"(recall {best['recall']}, precision {best['precision']}, {key.upper()} {best[key]}) "
+           f"on the validation fleet")
 
     if a.record:
         manifest = tp.read_manifest(a.models_dir)

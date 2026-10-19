@@ -66,6 +66,7 @@ from xgboost import XGBClassifier
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ml-model"))
 import decision  # noqa: E402
+import model_policy  # noqa: E402
 from preprocess import (add_rolling_features, add_window_column,  # noqa: E402
                         apply_zscore, build_baselines,
                         rolling_feature_names, rolling_features_from_history,
@@ -106,7 +107,6 @@ USECOLS = ["timestamp", "machine", "type", *FEATURES, "label", "anomaly_type"]
 # chunks. Memory then scales with the chunk, not with the 17.28M-row test set.
 EVAL_MACHINES_PER_CHUNK = 20
 V4_AT_05 = "v4_at_0.5"   # evaluation key: v4 at the classic 0.5 threshold, for reference
-THRESHOLD_GRID = [round(float(t), 2) for t in np.arange(0.05, 0.951, 0.05)]
 DEFAULT_VAL = ROOT / "data" / "telecom_fleet_v2_val.csv"
 
 
@@ -283,18 +283,29 @@ def served_curve(art_dir: Path, fleet: pd.DataFrame, grid: list, beta: float) ->
     return curve
 
 
-def select_candidate_threshold(art_dir: Path, val: pd.DataFrame, val_fp: dict, beta: float = 2.0) -> dict:
+def select_candidate_threshold(art_dir: Path, val: pd.DataFrame, val_fp: dict,
+                               beta: float | None = None, min_recall: float | None = None,
+                               policy: dict | None = None) -> dict:
     """Choose the decision threshold for THESE artifacts on the independent validation
-    fleet, maximising F-beta of the served decision. The record names the exact
-    artifacts it was computed for; the CI gate refuses a model whose threshold was
-    selected for anything else."""
-    curve = served_curve(art_dir, val, THRESHOLD_GRID, beta)
-    key = f"f{beta:g}"
-    best = max(curve, key=lambda r: (r[key], r["recall"]))
+    fleet, by the rules in config/model_policy.json (F-beta, or the highest precision that
+    still reaches a recall target) applied to the served decision. beta / min_recall given
+    here override the policy. The record names the exact artifacts it was computed for and
+    the rule that decided; the CI gate refuses a model whose threshold was selected for
+    anything else."""
+    policy = policy or model_policy.load_policy()
+    pol = policy["threshold"]
+    beta = pol["beta"] if beta is None else beta
+    min_recall = pol["min_recall"] if min_recall is None else min_recall
+    curve = served_curve(art_dir, val, model_policy.threshold_grid(policy), beta)
+    best, rule = model_policy.choose_threshold(curve, beta, min_recall)
+    method = (f"highest precision whose recall >= {min_recall:g}" if min_recall is not None
+              else f"maximise F{beta:g}")
     return {
         "selected_at": datetime.now(timezone.utc).isoformat(),
-        "method": f"maximise F{beta:g} of the served decision (classifier OR "
-                  f"IsolationForest) on an independent validation fleet",
+        "method": f"{method} of the served decision (classifier OR IsolationForest) on an "
+                  f"independent validation fleet",
+        "rule": rule,
+        "policy": {"beta": beta, "min_recall": min_recall, "grid": pol["grid"]},
         "validation_set": val_fp,
         "beta": beta,
         "selected": best,
@@ -322,9 +333,11 @@ def _select_for_promotion(args, val_fp: dict) -> dict:
     val = load_fleet(args.val)
     val_fp["rows"] = int(len(val))
     log(f"selecting the candidate's threshold on the validation fleet ({val_fp['rows']:,} rows)")
-    selection = select_candidate_threshold(args.work_dir, val, val_fp)
-    log(f"selected threshold {selection['selected']['threshold']} "
-        f"(F2 {selection['selected']['f2']}), not inherited from production")
+    selection = select_candidate_threshold(args.work_dir, val, val_fp, policy=args.policy)
+    best, key = selection["selected"], f"f{selection['beta']:g}"
+    log(f"selected threshold {best['threshold']} by rule '{selection['rule']}' "
+        f"(recall {best['recall']}, precision {best['precision']}, F1 {best['f1']}, "
+        f"{key.upper()} {best[key]}), not inherited from production")
     return selection
 
 
@@ -334,6 +347,8 @@ def guardrail(cand: dict, prod: dict, max_f1_drop: float, max_recall_drop: float
         c, p = cand[path], prod[path]
         if c["f1"] < p["f1"] - max_f1_drop:
             reasons.append(f"{path} F1 {p['f1']:.4f} -> {c['f1']:.4f}")
+        if "recall" in c and "recall" in p and c["recall"] < p["recall"] - max_recall_drop:
+            reasons.append(f"{path} recall {p['recall']:.4f} -> {c['recall']:.4f}")
         for cause, pr in p["per_cause_recall"].items():
             cr = c["per_cause_recall"].get(cause, 0.0)
             if cr < pr - max_recall_drop:
@@ -416,16 +431,18 @@ def evaluate_production_only(args) -> int:
 # ---------------------------------------------------------------------------
 # Training steps
 # ---------------------------------------------------------------------------
-def training_matrices(train: pd.DataFrame, baselines: dict, normal_sample: int):
-    """Full-data z-scores (IsolationForest) + the classifier training subset:
-    every anomaly row and a seeded sample of normal rows."""
+def training_matrices(train: pd.DataFrame, baselines: dict, normal_sample: int | None):
+    """Full-data z-scores (IsolationForest) + the classifier training set: every anomaly
+    row and either every normal row (normal_sample None, the policy default) or a seeded
+    sample of them."""
     train, x6_all, x15_all = fleet_features(train, baselines)
     rng = np.random.default_rng(SEED)
     labels = train["label"].to_numpy()
     anom_idx = np.flatnonzero(labels == 1)
     norm_idx = np.flatnonzero(labels == 0)
-    n_norm = min(normal_sample, len(norm_idx))
-    sel = np.sort(np.concatenate([anom_idx, rng.choice(norm_idx, n_norm, replace=False)]))
+    n_norm = len(norm_idx) if normal_sample is None else min(normal_sample, len(norm_idx))
+    chosen = norm_idx if n_norm == len(norm_idx) else rng.choice(norm_idx, n_norm, replace=False)
+    sel = np.sort(np.concatenate([anom_idx, chosen]))
     log(f"classifier training rows: {len(sel):,} ({len(anom_idx):,} anomalies + {n_norm:,} normal)")
     return x6_all, x6_all[sel], x15_all[sel], train["cause"].to_numpy()[sel], n_norm
 
@@ -540,13 +557,17 @@ def parse_args(argv=None):
                     help="independent validation fleet (own seed); --promote selects the candidate's "
                          "threshold on it and refuses a file identical to --train or --test")
     ap.add_argument("--feedback", type=Path, nargs="*", default=[])
-    ap.add_argument("--normal-sample", type=int, default=2_000_000)
+    ap.add_argument("--normal-sample", type=int, default=None,
+                    help="cap on the normal rows XGBoost trains on; default: training.normal_sample "
+                         "from config/model_policy.json (null = every normal row)")
     ap.add_argument("--threshold", type=float, default=None,
                     help="decision threshold; default: production.decision_threshold from the "
                          "manifest (chosen by ml-model/select_threshold.py), else "
                          "$PREDICT_THRESHOLD, else 0.85")
-    ap.add_argument("--max-f1-drop", type=float, default=0.0)
-    ap.add_argument("--max-recall-drop", type=float, default=0.02)
+    ap.add_argument("--max-f1-drop", type=float, default=None,
+                    help="default: guardrail.max_f1_drop from config/model_policy.json")
+    ap.add_argument("--max-recall-drop", type=float, default=None,
+                    help="default: guardrail.max_recall_drop from config/model_policy.json")
     ap.add_argument("--models-dir", type=Path, default=MODELS)
     ap.add_argument("--work-dir", type=Path, default=ROOT / "build" / "candidate")
     ap.add_argument("--promote", action="store_true")
@@ -555,6 +576,13 @@ def parse_args(argv=None):
                     help="no training: evaluate the committed production artifacts on the "
                          "test set and record the result + artifact hashes in the manifest")
     args = ap.parse_args(argv)
+    args.policy = model_policy.load_policy()
+    if args.normal_sample is None:
+        args.normal_sample = args.policy["training"]["normal_sample"]
+    if args.max_f1_drop is None:
+        args.max_f1_drop = args.policy["guardrail"]["max_f1_drop"]
+    if args.max_recall_drop is None:
+        args.max_recall_drop = args.policy["guardrail"]["max_recall_drop"]
     if args.threshold is None:
         selected = (read_manifest(args.models_dir).get("production") or {}).get("decision_threshold")
         args.threshold = float(selected if selected is not None
@@ -612,7 +640,7 @@ def run_pipeline(args) -> int:
         "datasets": datasets,
         "feedback": fb_info,
         "params": {"xgb": XGB_PARAMS, "iso": {**ISO_PARAMS, "contamination": contamination},
-                   "normal_sample": n_norm, "rolling_window": ROLLING_WINDOW_SIZE,
+                   "normal_sample": n_norm, "policy": args.policy, "rolling_window": ROLLING_WINDOW_SIZE,
                    "rolling_base_cols": list(ROLLING_FEATURE_BASE_COLS), "threshold": cand_threshold,
                    "max_f1_drop": args.max_f1_drop, "max_recall_drop": args.max_recall_drop},
         "candidate_evaluation": cand_eval,
