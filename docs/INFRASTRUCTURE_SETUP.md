@@ -63,10 +63,10 @@ The original VM was set up at `~/devsecmlops-pfe` as root. If you use another pa
 cd /root/devsecmlops-pfe
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
-python3 -m pytest -q tests          # expect: 120 passed
+python3 -m pytest -q tests          # expect: 132 passed
 ```
 
-If `120 passed` does not appear, stop here. Nothing else will work reliably.
+If `132 passed` does not appear, stop here. Nothing else will work reliably.
 
 ---
 
@@ -115,16 +115,20 @@ If your hashes differ anyway (another numpy or pandas version changes the random
 
 ## 4. Credentials  (FROM CODE)
 
-Nothing secret is stored in the repository. The playbook reads passwords from the environment and refuses to run if they are missing or too short. Choose your own values and keep this file **outside the repository**:
+Nothing secret is stored in the repository. The playbook reads passwords from the environment and refuses to run if they are missing or shorter than 12 characters (MinIO, Grafana and the Operations UI). Choose your own values and keep this file **outside the repository**:
 
 ```bash
 install -m 600 /dev/null /root/.devsecmlops.env
 cat > /root/.devsecmlops.env <<'EOF'
 export MINIO_ROOT_USER='choose-a-user'
 export MINIO_ROOT_PASSWORD='choose-12-or-more-chars'
-export GRAFANA_ADMIN_PASSWORD='choose-a-password'
+export GRAFANA_ADMIN_PASSWORD='choose-12-or-more-chars'
 export OPS_UI_USER='operator'
-export OPS_UI_PASSWORD='choose-a-password'
+export OPS_UI_PASSWORD='choose-12-or-more-chars'
+# optional, NOT wired into Ansible, leave it out for the demo. To protect POST /feedback:
+#   kubectl set env deployment/anomaly-api FEEDBACK_TOKEN=<value> -n ml-serving
+# and give the same variable to the control panel and scripts/feedback_demo.py, otherwise their verdicts get a 401
+# export FEEDBACK_TOKEN='choose-a-long-random-value'
 EOF
 nano /root/.devsecmlops.env       # replace every placeholder
 source /root/.devsecmlops.env
@@ -141,6 +145,14 @@ Never paste the contents of this file into a chat, a ticket or git. The producti
 cd /root/devsecmlops-pfe/ansible
 ansible-playbook -i inventory.ini site.yml --syntax-check
 ```
+
+Optional dry run (changes nothing; the bucket task and all installs are skipped). Use throwaway values of 12+ characters, **never run the real playbook with them**: MinIO would be recreated with the wrong credentials.
+
+```bash
+MINIO_ROOT_USER=x MINIO_ROOT_PASSWORD=placeholder-12345 GRAFANA_ADMIN_PASSWORD=placeholder-12345 OPS_UI_USER=x OPS_UI_PASSWORD=placeholder-12345 ansible-playbook -i inventory.ini site.yml --check
+```
+
+Expect `failed=0`. Some `changed` lines are normal (apt, pip, and the MinIO and Grafana containers, which differ from your real values).
 
 ### 5a. First pass: tooling, image and Kubernetes only
 
@@ -214,7 +226,7 @@ These steps follow what the Jenkinsfiles require. They have not been replayed on
 
 ## 7. First builds and final check  (FROM CODE)
 
-1. Run **`devsecmlops-pipeline`** with Build Now. SonarQube must be running first. About 12 minutes; all 11 stages should pass, including the post-deploy smoke test, which fails unless the alert threshold is read from the manifest.
+1. Run **`devsecmlops-pipeline`** with Build Now. SonarQube must be running first. About 12 minutes; all 11 stages should pass, including the post-deploy smoke test, which fails unless the alert threshold is read from the manifest. If that smoke test fails, the pipeline rolls the deployment back to the previous revision on its own (`kubectl rollout undo`).
 2. Optional, to prove the retraining path: run **`devsecmlops-model`** with `SCOPE=smoke` (about 5 minutes, no memory risk, production untouched). Run `SCOPE=full` only with 12 GB free and SonarQube, Grafana and the exporters stopped.
 3. Checklist:
 
@@ -249,4 +261,8 @@ The README states the expected results.
 | Jenkins jobs, credentials, plugins and the SonarQube project are not codified | MANUAL (section 6). Jenkins Configuration as Code would remove this; not done |
 | Datasets are regenerated, not stored | Checked: the training, validation and test fleets regenerate to the original hashes on a second machine (section 3) |
 | `/home/pfe` is a fixed path | Create it, or change `kubeconfig_path`, `minikube_home` and the Jenkins volume mounts together |
+| The MLflow artifact bucket was never created, and `boto3` was not declared for the host | Fixed: `scripts/ensure_minio_bucket.py` (called by the `prerequisites` role; skipped in `--check`) and `boto3` in `requirements.txt` |
+| `ansible-playbook --check` skipped the read-only probes, so it guessed | Fixed: the probes run for real in `--check`. The dry run passes on the original VM (`failed=0`) |
+| `group_vars/production_secrets.yml` is not in the repository | By design (it holds a secret). The demo profile does not need it; the production profile stops with a clear message until you create it with `ansible-vault create` (section 4) |
+| A new `docker` group membership does not apply to a running play | The play uses a local connection and cannot refresh it. On a non-root account, log out and in (or `newgrp docker`) after the first Docker install and re-run |
 | Never run on a clean second machine | True. Treat this guide as a careful reading of the code, not a tested procedure |

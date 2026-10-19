@@ -1,6 +1,6 @@
 # Defense demo script
 
-Prepared against build `2.20.3-b103` (all 11 CI stages green, 120 tests, Quality Gate OK; serves the model promoted on 19 October, trained on all 17.28M rows, v4 F1 0.7291, threshold 0.91), commit `ac581064` (`git log --oneline -5`). About 15 minutes.
+Prepared against build `2.20.3-b103` (all 11 CI stages green, 132 tests, Quality Gate OK; serves the model promoted on 19 October, trained on all 17.28M rows, v4 F1 0.7291, threshold 0.91), commit `ac581064` (`git log --oneline -5`). About 15 minutes.
 
 **How to read the "Proven" column.** *Log* means the exact command or output appeared in a real Jenkins or terminal log during this project. *Rehearse* means it is documented in the README but was not run today. Run every *Rehearse* step once before the defense, from a cold start.
 
@@ -52,7 +52,7 @@ Have `screenshots/` open as a last-resort fallback.
 | 9 | 1 | Terminal | block C below | "Pods run non-root, read-only filesystem, all capabilities dropped. The autoscaler is 2 to 5 replicas at 70% CPU." | Log (rehearsal) |
 | 10 | 2 | Terminal | `python3 scripts/verify_model_manifest.py --min-f1 0.60` | "The CI model gate: artifact hashes, recorded F1, and that no deployment file carries a threshold: it is read from the manifest, where it was selected on an independent validation fleet." | Log |
 | 11 | 1 | Terminal (optional) | block E below | "I change the model selector to the legacy value and the gate fails." Always restore with `git checkout`. | Log |
-| 12 | 2 | Jenkins | back to the running build, or the last green one | Point at stage 1b (120 tests), stage 2b (Quality Gate), stage 3 (gate lines), stage 6 (`0` vulnerabilities), stage 9 (smoke test). Then the README run-history table: runs 1, 2, 9 and 10 are builds the gates stopped. | Log |
+| 12 | 2 | Jenkins | back to the running build, or the last green one | Point at stage 1b (132 tests), stage 2b (Quality Gate), stage 3 (gate lines), stage 6 (`0` vulnerabilities), stage 9 (smoke test). Then the README run-history table: runs 1, 2, 9 and 10 are builds the gates stopped. | Log |
 | 13 | 1 | MLflow, SonarQube | open each | "Every pipeline training run is logged here, with artifacts stored in MinIO. SonarQube shows the blocking quality gate." | Rehearse |
 | 14 | 1 | README | "At a glance" and "Known limitations" | "Every number here traces to the manifest or a log. These are the limits I know about." | n/a |
 
