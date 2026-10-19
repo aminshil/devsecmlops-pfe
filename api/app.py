@@ -36,6 +36,7 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import Annotated
 
 import time
 
@@ -1053,7 +1054,7 @@ class FeedbackIn(BaseModel):
     },
 )
 def submit_feedback(prediction_id: str, feedback: FeedbackIn,
-                    x_feedback_token: str | None = Header(default=None)):
+                    x_feedback_token: Annotated[str | None, Header()] = None):
     """
     Submit an operator verdict for a prior prediction.
 
