@@ -112,6 +112,7 @@
       - python3-venv
       - python3-pip
       - build-essential
+      - python3-docker   # Docker SDK for Python, needed by the community.docker modules
     state: present
     update_cache: true
   become: true

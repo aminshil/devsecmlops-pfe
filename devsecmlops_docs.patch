@@ -1,0 +1,368 @@
+diff --git a/README.md b/README.md
+index e48072b..05de4f3 100644
+--- a/README.md
++++ b/README.md
+@@ -37,15 +37,16 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
+ |---|---|---|
+ | Version | `2.20.3` | `VERSION`, reported by `/health` |
+ | Serving | `MODEL_NAME=telecom_v3`: hybrid path, **v4 rolling-features XGBoost** when a request carries a 10-reading history, v3 XGBoost otherwise, IsolationForest safety net on both | Live pod metrics: every observed request served by v4 (444 of 444 across both replicas at check time) |
+-| Decision threshold | `0.60`, selected by maximizing F2 on the separate seed-7 validation fleet | `models/manifest.json` (`threshold_selection`), enforced by the CI model gate |
+-| Served v4 (independent test set, 17.28M rows) | F1 **0.7278** · precision 0.6717 · recall 0.7941 | `models/manifest.json`, re-checked by CI on every build. The L0 analysis tables below were measured on the July model (v4 F1 0.7246) |
+-| Served v3 fallback | F1 0.6496 · precision 0.5721 · recall 0.7513 | `models/manifest.json` |
+-| Weakest cause | `cascade`, recall 0.2699 (label noise by design) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
+-| Live cluster validation | 2,200 requests, 0 errors, F1 0.7267, 100% served by v4 | `scripts/live_k8s_validation.py` |
+-| Latest green pipeline | Build `2.20.3-b97`: all 11 stages, 0 image vulnerabilities, smoke-tested in the live pod | [L3 run history](#l3--cicd) |
+-| Tests | 96 passing | `pytest tests/` (stage 1b) |
++| Decision threshold | `0.91`, **chosen by the pipeline** for each trained model on the separate seed-7 validation fleet: the highest precision whose recall is at least 0.80. It is read from the manifest at start-up; no deployment file carries a copy | `models/manifest.json` (`threshold_selection`), enforced by the CI model gate; `/health` → `model_lineage.threshold_source` |
++| Where to change training and threshold behaviour | One file: `config/model_policy.json` (training size, recall target, threshold grid, guardrail limits) | [Current method](#current-method-one-policy-file-a-threshold-chosen-per-model) |
++| Served v4 (independent test set, 17.28M rows) | F1 **0.7291** · precision 0.6713 · recall 0.7979 | `models/manifest.json`, re-checked by CI on every build. Several L0 analysis tables below were measured on earlier models (July: v4 F1 0.7246; 13 October: 0.7278) |
++| Served v3 fallback | F1 0.6664 · precision 0.5967 · recall 0.7546 | `models/manifest.json` |
++| Weakest cause | `cascade`, recall 0.2679 (label noise by design) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
++| Live cluster validation | 2,200 requests, 0 errors, F1 0.7267, 100% served by v4. Measured on the 13 October model at threshold 0.60; **not repeated for the 19 October model** | `scripts/live_k8s_validation.py` |
++| Latest green pipeline | Build `2.20.3-b103` (started by the model promotion on 19 October): all 11 stages green, smoke-tested in the live pod, which now also fails unless the alert threshold was read from the manifest | [L3 run history](#l3--cicd) |
++| Tests | 120 passing | `pytest tests/` (stage 1b) |
+ | Dashboard | 30 Grafana panels, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
+-| Model provenance | Served since 2026-10-13: the pipeline-trained model promoted by Jenkins `devsecmlops-model` build 7 (MLflow `f622a7a9…`, v4 F1 0.7278, threshold 0.60 re-selected on the validation fleet, guardrail PASS, model files read back from MinIO, deployed as image `2.20.3-b101`). Before that: the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
++| Model provenance | Served since 2026-10-19: the model promoted by Jenkins `devsecmlops-model` build 8 (MLflow `241447d0…`), trained on all 17,280,000 rows of the labelled fleet, v4 F1 0.7291, threshold 0.91 selected by the pipeline, guardrail PASS, model files read back from MinIO, deployed as image `2.20.3-b103`. Before that: the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
+ | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
+ 
+ ---
+@@ -406,8 +407,8 @@ cascade 0.029.
+ > **These are the real numbers from this stage of the project.** They predate
+ > the v3/v4 switch, the threshold correction, and the served-decision-rule
+ > discipline this document now enforces throughout. Do not read `0.731` as a
+-> current production number — the current one is 0.7278 served (v4,
+-> threshold 0.60), stated in [Executive summary](#executive-summary) and
++> current production number — the current one is 0.7291 served (v4,
++> threshold 0.91), stated in [Executive summary](#executive-summary) and
+ > [Current production](#current-production-the-numbers-that-supersede-everything-above) below.
+ 
+ **Why both models are kept, not just the better one:** `cascade` labels
+@@ -579,7 +580,7 @@ real advantage over the already-deployed XGBoost.
+ > **v3, today:** the numbers above are what justified the v2→v3 switch at
+ > the time. v3 is still shipped, as the fallback path whenever a request
+ > has no rolling history — its current, corrected served F1 (independent
+-> seed-123 test set, threshold 0.60) is **0.6496**, stated in
++> seed-123 test set, threshold 0.91) is **0.6664**, stated in
+ > [Executive summary](#executive-summary). See "v4" immediately below for what replaced it as
+ > the primary path.
+ 
+@@ -604,7 +605,7 @@ Applied only to metrics where change-over-time is diagnostic. disk_usage (accumu
+ 
+ +0.098 F1, +0.156 precision, +0.056 recall at the time -- a large, real improvement. Per-cause recall improved on every category except cascade (which stays limited by the 40%-consistent label noise documented above): cpu_spike 0.894 -> 0.982, memory_leak 0.736 -> 0.909 (the +17-point gradual-onset win), network_flood 0.915 -> 0.976, disk_saturation 0.977 -> 0.994, silent_failure 0.906 -> 0.978.
+ 
+-> **This F1=0.816 figure is the classifier alone, at threshold 0.5 — not the served decision, and not at the threshold now deployed.** It is real and it is kept here because it is genuinely informative about the classifier's own strength. The number this project now reports as "production" is the *served* decision (classifier OR IsolationForest) at the *measured* threshold (0.60): **F1 = 0.7246**. See [Executive summary](#executive-summary) and [Current production](#current-production-the-numbers-that-supersede-everything-above) for the full, current, corrected numbers and the reasoning behind every difference from this section.
++> **This F1=0.816 figure is the classifier alone, at threshold 0.5 — not the served decision, and not at the threshold now deployed.** It is real and it is kept here because it is genuinely informative about the classifier's own strength. The number this project now reports as "production" is the *served* decision (classifier OR IsolationForest) at the threshold the pipeline selected (0.91): **F1 = 0.7291**. See [Executive summary](#executive-summary) and [Current production](#current-production-the-numbers-that-supersede-everything-above) for the full, current, corrected numbers and the reasoning behind every difference from this section.
+ 
+ ##### Live K8s results at the time (33,600-request two-week demo, threshold 0.85)
+ 
+@@ -616,7 +617,7 @@ Applied only to metrics where change-over-time is diagnostic. disk_usage (accumu
+ v4 beat v3 on every live metric at the time, zero errors on 33,600 requests. memory_leak recall live: 77.9% -> 95.4%.
+ 
+ > **The 0.85 threshold used here came from a sweep of the classifier alone and
+-> was never re-validated on the served decision** — see [Engineering decision 20](#20-why-the-decision-threshold-is-060-selected-by-method-revised).
++> was never re-validated on the served decision** — see [Engineering decision 20](#20-why-the-decision-threshold-is-selected-by-the-pipeline-not-fixed-revised-twice).
+ > A proper F2-maximizing sweep on an independent validation fleet selected
+ > **0.60** instead. A fresh live validation at the corrected threshold, against
+ > the real deployed cluster, is in [Current production](#current-production-the-numbers-that-supersede-everything-above):
+@@ -658,7 +659,7 @@ cause. But causes differ: `cascade` is rare and weak (needs a low bar),
+ thresholds** flag an anomaly if ANY non-normal class probability exceeds that
+ class's own threshold. These are opt-in via the `PER_CLASS_THRESHOLDS` env var
+ (a JSON map); absent, the single-threshold behavior — now selected by the F2
+-sweep described in [Engineering decision 20](#20-why-the-decision-threshold-is-060-selected-by-method-revised) —
++sweep described in [Engineering decision 20](#20-why-the-decision-threshold-is-selected-by-the-pipeline-not-fixed-revised-twice) —
+ applies.
+ 
+ To find the best configuration available under the model as it stood at the
+@@ -696,7 +697,7 @@ IsolationForest safety net is unsupervised and unaffected by feedback):
+    honestly measured on the held-out half. Per-class thresholding was not
+    the direction the later, corrected threshold-selection work took (that
+    work selects one number by F2 on a genuinely separate validation fleet
+-   — see [Engineering decision 20](#20-why-the-decision-threshold-is-060-selected-by-method-revised)),
++   — see [Engineering decision 20](#20-why-the-decision-threshold-is-selected-by-the-pipeline-not-fixed-revised-twice)),
+    but the finding that per-class thresholds *can* beat a single threshold
+    on this data is real and kept here as a documented, viable alternative
+    design not currently shipped.
+@@ -772,12 +773,14 @@ deployment actually returns), applies the guardrail described in
+ and — only with `--promote` and only if the guardrail passes — writes
+ artifacts and records full lineage in `models/manifest.json`.
+ 
+-With `--promote`, the candidate first gets **its own** decision threshold: it is selected on the independent validation fleet (seed 7), maximizing F2 of the served decision, for exactly the candidate's artifacts (the selection record carries their SHA-256). The candidate is then evaluated at that threshold and production at its own recorded one, so the guardrail compares each model at its own operating point. This is deliberate: a threshold is a setting of one particular model, so judging a new model at the old model's number would measure the wrong thing, and each history entry records both thresholds and the validation file the candidate's was selected on. In `models/manifest.json` history, `promoted_to_workspace` means the guardrail approved the candidate and its artifacts were written to the working tree; the `production` entry that CI deploys changes only after the CI model gate passes and `Jenkinsfile.model` commits it. `--promote` refuses to run without a validation fleet, and refuses one that is byte-identical to the train or test file; so does `select_threshold.py`, so evidence can never be written from the test set. `train_production.py --promote` is the only path that creates a new production model and its threshold. `select_threshold.py --record` only re-selects the threshold for the artifacts already in production (the record binds their SHA-256) and clears the recorded evaluation, so the CI gate fails until `train_production.py --evaluate-production` has redone it. This is enforced: `--record` refuses any `--models-dir` other than `models/`.
++With `--promote`, the candidate first gets **its own** decision threshold: it is selected on the independent validation fleet (seed 7), by the rule in `config/model_policy.json` (currently: the highest precision whose served recall is at least 0.80; F-beta when no recall target is set), for exactly the candidate's artifacts (the selection record carries their SHA-256). The candidate is then evaluated at that threshold and production at its own recorded one, so the guardrail compares each model at its own operating point. This is deliberate: a threshold is a setting of one particular model, so judging a new model at the old model's number would measure the wrong thing, and each history entry records both thresholds and the validation file the candidate's was selected on. In `models/manifest.json` history, `promoted_to_workspace` means the guardrail approved the candidate and its artifacts were written to the working tree; the `production` entry that CI deploys changes only after the CI model gate passes and `Jenkinsfile.model` commits it. `--promote` refuses to run without a validation fleet, and refuses one that is byte-identical to the train or test file; so does `select_threshold.py`, so evidence can never be written from the test set. `train_production.py --promote` is the only path that creates a new production model and its threshold. `select_threshold.py --record` only re-selects the threshold for the artifacts already in production (the record binds their SHA-256) and clears the recorded evaluation, so the CI gate fails until `train_production.py --evaluate-production` has redone it. This is enforced: `--record` refuses any `--models-dir` other than `models/`.
+ 
+ #### Choosing the decision threshold
+ 
++> **History.** The sweep below was measured on the 13 October model and selected 0.60 by maximizing F2. Since 19 October the pipeline chooses the threshold itself, per trained model, by the rule in `config/model_policy.json`; see [Current method](#current-method-one-policy-file-a-threshold-chosen-per-model) after the table. The table is kept as the record of the earlier method.
++
+ v3/v4 flag an anomaly when `P(normal)` falls below a threshold. As explained
+-in [Engineering decision 20](#20-why-the-decision-threshold-is-060-selected-by-method-revised),
++in [Engineering decision 20](#20-why-the-decision-threshold-is-selected-by-the-pipeline-not-fixed-revised-twice),
+ this project's threshold was, until this pass, **0.85 — chosen from a sweep
+ of the classifier alone, never re-validated on the served decision**. It has been
+ reselected by method: `ml-model/select_threshold.py` sweeps 0.05–0.95 on a
+@@ -798,28 +801,51 @@ The evidence, and the full curve, is recorded in `models/manifest.json`
+ under `production.threshold_selection`. A CI gate
+ (`scripts/verify_model_manifest.py`) enforces that the threshold actually
+ deployed in every Kubernetes manifest, every Ansible template, and the API's
+-own default all agree with the one the evaluation was measured at.
++own default all agree with the one the evaluation was measured at. (Since 19 October the gate instead requires that no deployment file carries a copy at all.)
++
++#### Current method: one policy file, a threshold chosen per model
++
++Everything a person may want to change about training and thresholds lives in **`config/model_policy.json`**; no other file is edited.
+ 
+-#### Production numbers (independent test set, 17,280,000 rows, threshold 0.60)
++| Key | Value now | Meaning |
++|---|---|---|
++| `training.normal_sample` | `null` | Train on every normal row (17,280,000 rows: 1,165,947 anomalies + 16,114,053 normal); a number would sample that many normal rows |
++| `threshold.min_recall` | `0.80` | Choose the highest-precision threshold whose served recall on the validation fleet is at least this; `null` falls back to F-beta |
++| `threshold.beta` | `3.0` | F-beta weight, used only when `min_recall` is `null` or unreachable |
++| `threshold.grid` | 0.05 to 0.99, step 0.01 | Thresholds tried |
++| `guardrail` | max F1 drop 0.03, max recall drop 0.02 | A candidate that is worse than production by more than this is not promoted |
++
++How it flows: the training job reads the policy, trains, evaluates the served decision (classifier OR IsolationForest) on the validation fleet over the grid, picks the threshold by the rule, evaluates the candidate at that threshold and production at its own, and records the choice, the rule and the policy in `models/manifest.json`. The API reads `production.decision_threshold` from that manifest when it starts; the environment variable `PREDICT_THRESHOLD` remains only as an explicit override, and `/health` → `model_lineage` reports the value and its source. The CI model gate fails if any deployment file hard-codes a threshold. Deployment stage 8 removes a stale `PREDICT_THRESHOLD` from the live Deployment before each rollout, and the smoke test fails unless the live threshold comes from the manifest (both added after an old environment variable was found overriding the manifest on 19 October).
++
++| | 13 October (3.17M rows, fixed rule F2) | 19 October (all 17.28M rows, recall target) |
++|---|---|---|
++| Threshold | 0.60 | 0.91 |
++| v4 precision / recall / F1 (test) | 0.6717 / 0.7941 / 0.7278 | 0.6713 / 0.7979 / 0.7291 |
++| v3 F1 (test) | 0.6550 | 0.6664 |
++| Validation fleet at the chosen threshold | – | recall 0.8008, precision 0.6712, F1 0.7303 |
++
++Reading it honestly: training on all rows raised the share of normal rows from about 63% to 93%, which shifts the classifier's probabilities, so the best threshold moved from 0.60 to 0.91. The result is about the same operating point as before: recall +0.004, F1 +0.001 (one seed, within noise), so no improvement is claimed. The recall target was met on the validation fleet (0.8008) and is 0.7979 on the test fleet. Recall cannot reach "never miss one": about one anomalous reading in five is still missed, `cascade` in particular, and the IsolationForest carries most of the recall, so moving the threshold changes it little. Recall here is per reading, not per incident.
++
++#### Production numbers (independent test set, 17,280,000 rows, threshold 0.91)
+ 
+ | Served path | Precision | Recall | F1 | Classifier-only F1 |
+ |---|---|---|---|---|
+-| **v4 (production)** | 0.6642 | 0.7970 | **0.7246** | 0.8080 |
+-| v3 (fallback, no history) | 0.5721 | 0.7513 | 0.6496 | 0.6945 |
+-| v4 @ threshold 0.5, for reference | 0.6744 | 0.7928 | 0.7288 | 0.8153 |
++| **v4 (production)** | 0.6713 | 0.7979 | **0.7291** | 0.8100 |
++| v3 (fallback, no history) | 0.5967 | 0.7546 | 0.6664 | 0.7119 |
++| v4 @ threshold 0.5, for reference | 0.6956 | 0.7743 | 0.7329 | 0.8192 |
+ 
+-Per-cause recall (v4, served decision, threshold 0.60, read from `models/manifest.json`): `cpu_spike` 0.9867, `disk_saturation` 0.9961, `memory_leak` 0.9286, `network_flood` 0.9897, `silent_failure` 0.9833, `cascade` 0.2699. The v3 fallback catches cascades slightly better (0.2840). Both classifiers are trained with cascade labelled `normal`, so cascade detection comes almost entirely from the IsolationForest safety net (see
++Per-cause recall (v4, served decision, threshold 0.91, read from `models/manifest.json`): `cpu_spike` 0.9879, `disk_saturation` 0.9967, `memory_leak` 0.9333, `network_flood` 0.9945, `silent_failure` 0.9810, `cascade` 0.2679. The v3 fallback catches cascades slightly better (0.2993). Both classifiers are trained with cascade labelled `normal`, so cascade detection comes almost entirely from the IsolationForest safety net (see
+ [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training)
+ for why cascade remains the one weak point — the generator's own cascade
+ labeling is inconsistent between rows, unchanged since that decision was
+-first made). Cause accuracy on detected, correctly-named anomalies: 0.9988.
++first made). Cause accuracy on detected, correctly-named anomalies: 0.9983.
+ 
+ **On the number `0.816`, and on `0.85`, which circulated in earlier versions
+ of this document:** `0.816` is the classifier's own F1 at threshold 0.5, in
+ isolation — real, but never the served decision at any threshold. `0.85` was
+ never the product of the search above; it came from an earlier sweep of the
+ classifier alone, before the served decision (classifier OR IsolationForest)
+-was measured. `0.7246` at threshold `0.60` is what a request to this
++was measured. `0.7291` at threshold `0.91` is what a request to this
+ deployment actually returns today.
+ 
+ #### Live validation against the real, running cluster
+@@ -838,7 +864,7 @@ history, reporting which model actually answered rather than assuming:
+ }
+ ```
+ 
+-Every one of 2,200 real requests was answered correctly by v4, with 0
++(This run was made against the 13 October model at threshold 0.60 and has not been repeated for the 19 October model.) Every one of 2,200 real requests was answered correctly by v4, with 0
+ errors. This supersedes the earlier 33,600-request live validation reported
+ in the "Rolling features (v4)" section above, which used the unmeasured 0.85
+ threshold and, in an even earlier iteration of this project, was measured
+@@ -1045,7 +1071,7 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
+ | `models/history/` | Every promoted model, timestamped — a real evidence trail. |
+ | `data/telecom_fleet_v2_labeled.csv` (seed 42), `_val.csv` (seed 7), `_test.csv` (seed 123) | Training, threshold-selection, and evaluation data — three separate files, never mixed. |
+ | `data/telecom_fleet_v2_operator.csv` (seed 2026, 200 machines, 3 days) | The operator-stream fleet the control panel samples from. Judged readings become feedback rows used for retraining, so it is deliberately not the training, validation or test file. |
+-| smoke-scope fleets (generated in the Jenkins workspace: 30 machines, 3 days, seeds 42 and 123) | A plumbing check for `Jenkinsfile.model` with `SCOPE=smoke`: 5 minutes, no memory risk, production untouched. They are not subsets of the real files, and their scores must never be quoted as performance (production scores 0.7708 on the tiny test fleet and 0.7246 on the real one). `SCOPE=full` uses the real files above. |
++| smoke-scope fleets (generated in the Jenkins workspace: 30 machines, 3 days, seeds 42 and 123) | A plumbing check for `Jenkinsfile.model` with `SCOPE=smoke`: 5 minutes, no memory risk, production untouched. They are not subsets of the real files, and their scores must never be quoted as performance (production scores 0.7291 on the real test file; a smoke-scope fleet gives a different number that means nothing). `SCOPE=full` uses the real files above. |
+ 
+ ---
+ 
+@@ -1305,10 +1331,10 @@ Jenkins, `Jenkinsfile`, 11 stages, every one a real gate — a failure stops the
+ Stage labels below match the Jenkins console exactly.
+ 
+ - **1. Checkout**
+-- **1b. Unit tests** — pytest, 96 tests, coverage report. Fail-fast: a broken commit stops here.
++- **1b. Unit tests** — pytest, 120 tests, coverage report. Fail-fast: a broken commit stops here.
+ - **2. SAST** — SonarQube.
+ - **2b. Quality Gate** — `abortPipeline: true`.
+-- **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that every deployment file uses the evaluated threshold, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
++- **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that no deployment file carries a copy of the threshold (it is read from the manifest) and that the manifest's threshold is the evaluated one, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
+ - **4. Build Docker image** — `docker build --pull --build-arg APT_REFRESH=<build tag>`: refreshes the base image and re-runs the OS security upgrade on every build, while the Python dependency layer stays cached.
+ - **5. Container smoke test** — the image runs with the **same runtime restrictions the real pod uses** (`--read-only`, `--tmpfs /tmp`, `--cap-drop ALL`, `--security-opt no-new-privileges`, `--user 10001:10001`) on `devsecmlops-net`, checked by `scripts/smoke_test.py` (health, version, a v3 prediction, a v4 prediction, metrics, ops UI absent).
+ - **6. Image scan + SBOM** — `trivy image --exit-code 1`, plus a CycloneDX SBOM archived as a build artifact.
+@@ -1370,8 +1396,9 @@ Runs 1 and 2 are the evidence that the gate genuinely blocks: every later stage
+ Minikube, single-node, Docker driver. Namespace `ml-serving`.
+ 
+ - **`anomaly-api` Deployment** — hardened as in
+-  [Security posture](#security-posture); `PREDICT_THRESHOLD` and the DB
+-  credentials come from the environment/Secret, never hardcoded.
++  [Security posture](#security-posture); the DB
++  credentials come from the Secret, never hardcoded, and the alert threshold is not set here at
++  all: the API reads it from `models/manifest.json`.
+ - **`postgres` StatefulSet** — hardened the same way, running as `uid 70`
+   (PostgreSQL's own official convention). Its Secret is generated with a
+   random password rather than the committed literal this project shipped
+@@ -1608,6 +1635,8 @@ read back through MLflow from MinIO, byte-for-byte correct.
+ 
+ **Promotion by Jenkins (verified, 13 October 2026).** `devsecmlops-model` build 7, `SCOPE=full`, feedback on, `PROMOTE` on. Stage 2 exported 262 judged rows from PostgreSQL; stage 4 used 253 for v3 and 214 for v4 and skipped 9 whose cause is unknown. Candidate v4 F1 0.7278 (precision 0.6717, recall 0.7941) against production 0.7246, v3 0.6550 against 0.6496. The threshold was selected on the 8,064,000-row validation fleet and came out at 0.6 (F2 0.7686), not inherited from production. Guardrail `PASS`; MLflow run `f622a7a9b1554c97ad421a92f51f081a`; stage 6 read the six model files back through MLflow from MinIO; stage 7 ran the CI model gate on the promoted manifest (all OK) and pushed commit `18042f37` to `main` with the `github-pat-devsecmlops` token. Stage 8 started the application pipeline: build #100 failed and was re-run by hand as #101, which went green (99 tests, Quality Gate OK, deployed as `devsecmlops-api:2.20.3-b101`). The same 0.7278 appeared on 30 September with no feedback rows, so the gain over the July model is not attributed to feedback (214 rows are 0.007% of the training set), and no improvement is claimed.
+ 
++**Promotion by Jenkins at full data (verified, 19 October 2026).** `devsecmlops-model` build 8, `SCOPE=full`, feedback on, `PROMOTE` on, with the policy in `config/model_policy.json` (all normal rows, recall target 0.80). The classifier trained on all 17,280,000 rows (1,165,947 anomalies + 16,114,053 normal) in 1,080 s; stage 2 exported 262 judged rows, 253 used for v3 and 214 for v4, 9 skipped. The threshold was selected on the 8,064,000-row validation fleet at 0.91 by the rule `min_recall` (recall 0.8008, precision 0.6712, F1 0.7303), not inherited from production. On the test fleet the candidate scored v4 F1 0.7291 (precision 0.6713, recall 0.7979) against production 0.7278, and v3 0.6664 against 0.6550. Guardrail `PASS`; MLflow run `241447d01be24253a92874716dbfdf18`; stage 6 read the six model files back from MinIO; stage 7 ran the CI model gate (all OK, including "threshold 0.91 read from the manifest, no deployment file carries a copy") and pushed commit `ac581064`; stage 8 started the application pipeline, whose build #103 went green on its own and deployed `devsecmlops-api:2.20.3-b103`. Before that run, the live Deployment still carried an old `PREDICT_THRESHOLD=0.6` that overrode the manifest, because stage 8 only swaps the image; it was removed by hand and the pipeline now removes it on every deploy. After the deploy, `/health` reported `threshold 0.91`, source `models/manifest.json production.decision_threshold`. The F1 gain (+0.0013) is within noise and is not claimed.
++
+ ```bash
+ # Now provisioned by Ansible (roles/prerequisites, roles/monitoring) --
+ # manual commands kept here for reference / running outside Ansible:
+@@ -1916,8 +1945,8 @@ cpu/ram/load_avg) were first tested on a 5-day pilot (F1 0.708 -> 0.729) and
+ initially left out of production because they seemed to require a stateful
+ serving path. That concern was resolved and the features were fully
+ integrated as the v4 model. At full scale the gain was substantial: served
+-F1 (independent seed-123 test set, 17,280,000 rows, current threshold 0.60)
+-went from 0.6496 (v3) to 0.7246 (v4) -- see [L0 — ML Model](#l0--ml-model) for
++F1 (independent seed-123 test set, 17,280,000 rows, current threshold 0.91)
++went from 0.6664 (v3) to 0.7291 (v4) -- see [L0 — ML Model](#l0--ml-model) for
+ the current, corrected numbers, which supersede the offline figures this
+ subsection originally quoted.
+ 
+@@ -1955,7 +1984,7 @@ Image tag = exact model version. Immutable, reproducible, no runtime dependency
+ 
+ Setting `MODEL_NAME=telecom_v2` in the K8s deployment env still fully works. The v2 loading block, MinIO fetch entrypoint, and RandomForest artifact all remain functional. Reason: **additive changes are safer than destructive ones**, and defense-day A/B comparison ("here's v2 running with RandomForest, here's v3/v4 running with XGBoost, watch them differ on the same input") is a real, tangible demonstration that would be lost if v2 were deleted.
+ 
+-### 20. Why the decision threshold is 0.60, selected by method (revised)
++### 20. Why the decision threshold is selected by the pipeline, not fixed (revised twice)
+ 
+ v3/v4 flag an anomaly when P(normal) falls below a threshold. This decision
+ was originally written to justify **0.85**, and that original choice did
+@@ -1975,10 +2004,11 @@ which is exactly the "a miss costs more than a false alarm" priority this
+ decision always argued for, now backed by a real sweep instead of a single
+ chosen number. The result, 0.60, is recorded with its full evidence curve in
+ `models/manifest.json`, and a CI gate (`scripts/verify_model_manifest.py`)
+-enforces that every deployment file agrees with it. See
++enforced that every deployment file agreed with it. See
+ [Choosing the decision threshold](#choosing-the-decision-threshold) in L0
+-for the full table. Configurable via the `PREDICT_THRESHOLD` env var without
+-code changes, as before.
++for the full table.
++
++**Revised again on 19 October 2026.** A fixed number is the wrong shape for a model that is retrained: the best threshold is a property of one trained model and of its training data (training on all rows instead of a sample moved it from 0.60 to 0.91). The pipeline now selects it per model on the validation fleet by a rule kept in `config/model_policy.json`, and the project's stated priority, catching anomalies over avoiding false alarms, is written there as a recall target (0.80), not buried in code. The result is stored in `models/manifest.json` and read by the API at start-up, so no deployment file holds a copy and nobody edits several files. `PREDICT_THRESHOLD` remains only as an explicit override, and `/health` says where the value came from. A target of 0.80 is what the data supports: a higher target is not reachable by any threshold, because the IsolationForest and the classifier together top out at about 0.81 to 0.82 recall.
+ 
+ ### 21. Why the client supplies rolling history (stateless v4 serving)
+ 
+@@ -2055,7 +2085,7 @@ this project.)
+ 
+ ## Testing
+ 
+-**96 tests** (up from 15), `pytest`, in `tests/`:
++**120 tests** (up from 15), `pytest`, in `tests/`:
+ 
+ - `test_api.py` (27 tests) — every endpoint, input validation (NaN/inf
+   rejection, machine length, metrics count, history shape), v3/v4
+@@ -2076,6 +2106,7 @@ this project.)
+   a selection made for other artifacts, an evaluation at another threshold, and a validation
+   fleet that is the test set; promotion refuses a missing, test, or train file as the validation
+   fleet; and a promoted threshold is selected for the candidate that carries it. The standalone selection tool refuses a non-independent validation fleet, and refuses `--record` for any directory other than `models/`.
++- `test_threshold_policy.py` (21 tests) — the policy file is validated; the threshold rules (F-beta, minimum recall, recall target unreachable); training uses every normal row when asked; command-line defaults come from the policy; the guardrail also checks recall; the API takes its threshold from the manifest, an environment override, or a fallback, in that order, and says which; no file in the repository hard-codes a threshold; and the model gate flags one that does.
+ - `test_training_console.py` — the dataset whitelist (rejects path
+   traversal in every form tried), that sampling genuinely spreads across
+   the whole file, and that a candidate is compared against production on
+@@ -2167,7 +2198,7 @@ python monitoring/k8s_exporter.py &
+ 
+ ## Known limitations and future work
+ 
+-- **The July models were replaced on 13 October; the live validation was not redone.** Until then the served models were trained in July by earlier scripts and adopted with hashes (manifest `git_commit: null`). Since 13 October the served model is the pipeline-trained candidate (MLflow run `f622a7a9…`, v4 F1 0.7278), promoted by `Jenkinsfile.model`. Still open: `scripts/live_k8s_validation.py` has not been rerun against the promoted model, and the live-versus-offline comparison made in this project (precision 0.676, recall 0.788, F1 0.728 over 39,789 matched live predictions) was measured on the July model. The F1 difference (+0.003) is not claimed as an improvement. The threshold stayed 0.60, so no deployment file needed syncing; `Jenkinsfile.model` stops with a clear message instead of committing an inconsistent state when it changes.
++- **The served model changed on 13 and on 19 October; the live validation was not redone.** On 19 October build 8 trained on all 17.28M rows and re-selected the threshold (0.91), v4 F1 0.7291. Until 13 October the served models were trained in July by earlier scripts and adopted with hashes (manifest `git_commit: null`). Since 13 October the served model is the pipeline-trained candidate (MLflow run `f622a7a9…`, v4 F1 0.7278), promoted by `Jenkinsfile.model`. Still open: `scripts/live_k8s_validation.py` has not been rerun against the promoted model, and the live-versus-offline comparison made in this project (precision 0.676, recall 0.788, F1 0.728 over 39,789 matched live predictions) was measured on the July model. The F1 difference (+0.003) is not claimed as an improvement. No deployment file carries the threshold any more: the API reads it from the manifest, so a changed threshold needs no file sync.
+ 
+ - **Disk headroom is a CI dependency.** Every Jenkins build leaves a ~2 GB image on the host (the registry keeps its own copy, so local images are safe to prune), and SonarQube's Elasticsearch switches every index to read-only when the disk passes 95% (observed live, and again at 97% before a cleanup). Unpruned, a day of builds is enough to reach it. Routine: `docker image prune -a -f --filter "until=24h"` after heavy CI days and a `df -h /` before a demo. The registry volume (about 6 GB, every tag since `2.3.0`) is the one store that only grows; trimming it needs registry garbage collection, which means recreating its container with deletes enabled and its network preserved.
+ - **Dependencies are pinned at the top level, not locked.** `requirements-api.txt`, `boto3` and `msgpack` are pinned exactly, but their transitive dependencies are only bounded (`>=`), so two builds hours apart can install different versions (observed: `python-dotenv` 1.2.3 → 1.2.4 and `uvloop` 0.22.1 → 0.23.0 between builds `b93` and `b94`; the image scan reports 0 vulnerabilities in both). A lockfile generated from the image's Python environment would close it; it needs its own verification cycle, so it is deliberately left for after the defense.
+@@ -2183,8 +2214,9 @@ python monitoring/k8s_exporter.py &
+   — the ones where a *trend* carries more signal than a snapshot. Extending
+   to all six is real, larger work (retraining v4 from scratch, re-selecting
+   the threshold, re-evaluating), not attempted in this pass.
+-- **`Jenkinsfile.model` has run in both scopes and has promoted once.** `smoke` (tiny generated fleets and a scratch copy of the production artifacts, production proven untouched by hash) and `full` (the real datasets, logged to MLflow and MinIO; see L5). On 13 October build 7 ran `SCOPE=full` with `PROMOTE=true`: guardrail PASS, commit `18042f37` pushed to `main` (push access of the token is verified), and the application pipeline started; its build #100 failed and was re-run by hand as #101 (green, deployed). The automatic deploy-after-promote step has therefore not been proven end to end. The promotion path is also covered by tests and the CI model gate.
+-- **Headline scores are on synthetic data.** The F1, precision and recall quoted for the deployed model (0.7278 / 0.672 / 0.794) are measured on a generated fleet whose anomalies and labels come from the same generator, and the operator verdicts in the feedback loop are simulated from those labels. The only real-data check is SMD (F1 0.269), so these numbers must not be read as real-world detection accuracy.
++- **`Jenkinsfile.model` has run in both scopes and has promoted twice.** `smoke` (tiny generated fleets and a scratch copy of the production artifacts, production proven untouched by hash) and `full` (the real datasets, logged to MLflow and MinIO; see L5). On 13 October build 7 ran `SCOPE=full` with `PROMOTE=true`: guardrail PASS, commit `18042f37` pushed to `main` (push access of the token is verified), and the application pipeline started; its build #100 failed and was re-run by hand as #101 (green, deployed). The automatic deploy-after-promote step was proven on 19 October: build 8 promoted, and the application pipeline it started (#103) went green and deployed `2.20.3-b103`. The promotion path is also covered by tests and the CI model gate.
++- **Headline scores are on synthetic data.** The F1, precision and recall quoted for the deployed model (0.7291 / 0.671 / 0.798) are measured on a generated fleet whose anomalies and labels come from the same generator, and the operator verdicts in the feedback loop are simulated from those labels. The only real-data check is SMD (F1 0.269), so these numbers must not be read as real-world detection accuracy.
++- **Recall-first has a ceiling, and the full-data retrain gained little.** With a recall target of 0.80 the served recall went from 0.7941 to 0.7979 and F1 from 0.7278 to 0.7291 (single seed, within noise): about one anomalous reading in five is still missed, mostly `cascade` (0.2679, label noise by design), and the IsolationForest carries most of the recall, so the threshold moves it little. Training on all rows gave no measurable v4 gain; the v3 gain (0.6550 to 0.6664) is confounded with the changed threshold. Recall is per reading, not per incident, and uses the generator's labels.
+ - **Sequence-aware detection remains future work.** The current models
+   evaluate the current reading plus a short rolling window, not a full
+   learned sequence model. State-of-the-art results on SMD (OmniAnomaly,
+diff --git a/docs/DEMO_SCRIPT.md b/docs/DEMO_SCRIPT.md
+index 2df5c94..5c8ae7b 100644
+--- a/docs/DEMO_SCRIPT.md
++++ b/docs/DEMO_SCRIPT.md
+@@ -1,6 +1,6 @@
+ # Defense demo script
+ 
+-Prepared against build `2.20.3-b101` (all 11 CI stages green, 99 tests, Quality Gate OK; serves the model promoted on 13 October, v4 F1 0.7278), commit `18042f37` (`git log --oneline -5`). About 15 minutes.
++Prepared against build `2.20.3-b103` (all 11 CI stages green, 120 tests, Quality Gate OK; serves the model promoted on 19 October, trained on all 17.28M rows, v4 F1 0.7291, threshold 0.91), commit `ac581064` (`git log --oneline -5`). About 15 minutes.
+ 
+ **How to read the "Proven" column.** *Log* means the exact command or output appeared in a real Jenkins or terminal log during this project. *Rehearse* means it is documented in the README but was not run today. Run every *Rehearse* step once before the defense, from a cold start.
+ 
+@@ -50,9 +50,9 @@ Have `screenshots/` open as a last-resort fallback.
+ | 7 | 1 | Control panel → **Root Cause** | inject a router cascade | "One router failing makes its machines alert too; the graph ranks the router as the root cause and the rest as downstream effects." | Rehearse |
+ | 8 | 2 | Grafana | live predictions, model served per pod, top-25 anomaly probability | "30 panels provisioned from the repo, so the dashboard cannot drift from git. Prometheus scrapes each pod separately, because scraping the NodePort mixed replicas." In the top-25 table the red text is the model's likely cause for each current anomaly, the green bar is the classifier probability; `safety-net only` means the IsolationForest flagged it with a low classifier score. The traffic is a replay of the independent test set. | Log (rehearsal) |
+ | 9 | 1 | Terminal | block C below | "Pods run non-root, read-only filesystem, all capabilities dropped. The autoscaler is 2 to 5 replicas at 70% CPU." | Log (rehearsal) |
+-| 10 | 2 | Terminal | `python3 scripts/verify_model_manifest.py --min-f1 0.60` | "The CI model gate: artifact hashes, recorded F1, and the threshold in every deployment file, which must equal the one selected on an independent validation fleet." | Log |
++| 10 | 2 | Terminal | `python3 scripts/verify_model_manifest.py --min-f1 0.60` | "The CI model gate: artifact hashes, recorded F1, and that no deployment file carries a threshold: it is read from the manifest, where it was selected on an independent validation fleet." | Log |
+ | 11 | 1 | Terminal (optional) | block E below | "I change the model selector to the legacy value and the gate fails." Always restore with `git checkout`. | Log |
+-| 12 | 2 | Jenkins | back to the running build, or the last green one | Point at stage 1b (99 tests), stage 2b (Quality Gate), stage 3 (gate lines), stage 6 (`0` vulnerabilities), stage 9 (smoke test). Then the README run-history table: runs 1, 2, 9 and 10 are builds the gates stopped. | Log |
++| 12 | 2 | Jenkins | back to the running build, or the last green one | Point at stage 1b (120 tests), stage 2b (Quality Gate), stage 3 (gate lines), stage 6 (`0` vulnerabilities), stage 9 (smoke test). Then the README run-history table: runs 1, 2, 9 and 10 are builds the gates stopped. | Log |
+ | 13 | 1 | MLflow, SonarQube | open each | "Every pipeline training run is logged here, with artifacts stored in MinIO. SonarQube shows the blocking quality gate." | Rehearse |
+ | 14 | 1 | README | "At a glance" and "Known limitations" | "Every number here traces to the manifest or a log. These are the limits I know about." | n/a |
+ 
+@@ -61,11 +61,11 @@ Have `screenshots/` open as a last-resort fallback.
+ **Precondition.** The cluster runs the latest image (history logging; `kubectl -n ml-serving get deploy -o jsonpath='{.items[*].spec.template.spec.containers[*].image}'` should show `2.20.3-b99` or later). The feedback table lives on a 2 Gi volume and survives reboots (verified across two reboots; the Continuous training tab shows the live counts). Only a deleted volume empties it.
+ 
+ 1. **Control panel → Demo → Send 20 → Review alerts only.** Say: "the readings come from a labelled fleet that is not part of training, validation or test; the cluster pods answer and log them; the verdicts come from the generator's ground truth, standing in for an operator."
+-2. **Continuous training tab:** predictions logged, judged and not judged, the model the cluster serves, the retraining history. The history table lists runs recorded in the repo manifest: row 1 is the 13 October promotion (promoted true, MLflow `f622a7a9…`, threshold 0.6 / 0.6), then the 30 September full run (not promoted) and, if listed, an early 22 July attempt the guardrail rejected (F1 0.718 to 0.709, 500 feedback rows). The 2 October full run (MLflow `57e33ba0…`) is in Jenkins and MLflow only. The cluster's model card now shows the promotion time and the MLflow run.
++2. **Continuous training tab:** predictions logged, judged and not judged, the model the cluster serves, the retraining history. The history table lists runs recorded in the repo manifest: row 1 is the 19 October promotion (promoted true, MLflow `241447d0…`, all 17.28M rows, threshold 0.91), then the 13 October promotion (MLflow `f622a7a9…`, threshold 0.6), then the 30 September full run (not promoted) and, if listed, an early 22 July attempt the guardrail rejected (F1 0.718 to 0.709, 500 feedback rows). The 2 October full run (MLflow `57e33ba0…`) is in Jenkins and MLflow only. The cluster's model card now shows the promotion time and the MLflow run.
+ 3. **Jenkins → `devsecmlops-model` → the last full run's console** (do not start a full run live: about 20 minutes and 9+ GB of free memory). Point at stage 2 (judged rows exported), stage 4 (rows used and skipped, candidate against production F1, the guardrail), and stage 6 (the MLflow run id and six model files read back from MinIO).
+-4. **MLflow:** open run `f622a7a9b1554c97ad421a92f51f081a` in experiment `telecom-production-model`: the 13 October run that was promoted and is now served (v4 F1 0.7278, P 0.6717, R 0.7941; v3 0.6550). The 2 October run `57e33ba05b44` (0.7280) and the 30 September run `1cc2b5a0fa75` (0.7278) are earlier full runs. The other 12 runs in the experiment are small smoke runs (v4 F1 about 0.65); do not open them.
++4. **MLflow:** open run `241447d01be24253a92874716dbfdf18` in experiment `telecom-production-model`: the 19 October run that was promoted and is now served (v4 F1 0.7291, P 0.6713, R 0.7979; v3 0.6664; threshold 0.91). The 13 October run `f622a7a9…` (0.7278) is the previous production model. The 2 October run `57e33ba05b44` (0.7280) and the 30 September run `1cc2b5a0fa75` (0.7278) are earlier full runs. The other 12 runs in the experiment are small smoke runs (v4 F1 about 0.65); do not open them.
+ 
+-Say it plainly: the 13 October run exported 262 judged rows and used 214 of them for v4, which is 0.007% of the 3.17M training rows, so feedback did not drive the result: the same 0.7278 appeared on 30 September with no feedback rows. I claim no improvement over the July model (0.7246). The guardrail passed, the threshold was re-selected on the validation fleet (0.6 again), the model was promoted and deployed, and the live cluster validation has not been redone for it. The verdicts are simulated. Proven: Log (smoke runs, the full run, live counts).
++Say it plainly: the 19 October run trained on all 17.28M rows and exported 262 judged rows, 214 used for v4, so feedback did not drive the result. F1 went from 0.7278 to 0.7291 and recall from 0.7941 to 0.7979: within noise, so I claim no improvement. What changed is the method: the pipeline selected the threshold itself (0.91, the highest precision with recall of at least 0.80), the API reads it from the manifest, and no file is edited by hand. The guardrail passed, the model was promoted and deployed by the pipeline, and the live cluster validation has not been redone for it. The verdicts are simulated. Proven: Log (smoke runs, the full run, live counts).
+ 
+ ### Blocks
+ 
+@@ -141,7 +141,7 @@ git status --short                                                       # must
+ 
+ ## 4. If asked about the numbers
+ 
+-- **What the scores are measured on.** Precision 0.6717, recall 0.7941, F1 0.7278 (the model served since 13 October) are on an independent test fleet (seed 123) from the project's synthetic generator, with the generator's labels; the threshold was chosen on a separate validation fleet (seed 7). Operator verdicts in the feedback loop are simulated.
++- **What the scores are measured on.** Precision 0.6713, recall 0.7979, F1 0.7291 (the model served since 19 October) are on an independent test fleet (seed 123) from the project's synthetic generator, with the generator's labels; the threshold was chosen on a separate validation fleet (seed 7). Operator verdicts in the feedback loop are simulated.
+ - **Live agreed with offline (measured on the July model, before the 13 October promotion; not repeated for the new one).** Over 39,789 matched live predictions the cluster scored P 0.676, R 0.788, F1 0.728, against 0.664, 0.797 and 0.725 offline. The comparison script `live_vs_truth.py` is not in the repo unless you committed it; rehearse before using it.
+ - **Real data.** The only real-data check is SMD: F1 0.269 per machine and window, on 37 features, outside the production path (`ml-model/load_smd.py`). Say so before being asked.
+ - **Persistent anomalies in Grafana** are real episodes in the data (about 60 readings, up to 116), not stuck gauges; about 13 of 200 machines are in one at any time.
+diff --git a/docs/TROUBLESHOOTING.md b/docs/TROUBLESHOOTING.md
+index e716e25..cd76ebe 100644
+--- a/docs/TROUBLESHOOTING.md
++++ b/docs/TROUBLESHOOTING.md
+@@ -154,8 +154,8 @@ use the real functions in `ml-model/preprocess.py` (baseline construction,
+ z-scoring, and for v4, the rolling-feature computation) rather than a
+ simplified inline reimplementation -- skipping the per-machine per-window
+ baseline mis-scores the test set and produces wrong absolute F1 numbers.
+-The canonical, current served baseline is v4 F1=0.7278 (v3 fallback
+-F1=0.6550) at threshold 0.60, on the independent seed-123 test set -- if a
++The canonical, current served baseline is v4 F1=0.7291 (v3 fallback
++F1=0.6664) at threshold 0.91 (read from the manifest), on the independent seed-123 test set -- if a
+ script reports something materially different for the current production
+ model, the preprocessing path is probably wrong, not the model.
+ 
+diff --git a/scripts/model_report_summary.py b/scripts/model_report_summary.py
+index 1a74d27..5151937 100644
+--- a/scripts/model_report_summary.py
++++ b/scripts/model_report_summary.py
+@@ -34,9 +34,11 @@ def main(argv) -> int:
+           f"v4 F1={v4.get('f1')} P={v4.get('precision')} R={v4.get('recall')}   v3 F1={_f(cand, 'v3').get('f1')}")
+     if prod:
+         print(f"production                : v4 F1={_f(prod, 'v4').get('f1')}   v3 F1={_f(prod, 'v3').get('f1')}")
+-    sel = (r.get("threshold_selection") or {}).get("selected")
++    ts = r.get("threshold_selection") or {}
++    sel = ts.get("selected")
+     if sel:
+-        print(f"threshold selected on the validation fleet: {sel.get('threshold')} (F2 {sel.get('f2')})")
++        print(f"threshold selected on the validation fleet: {sel.get('threshold')} by rule '{ts.get('rule')}' "
++              f"(recall {sel.get('recall')}, precision {sel.get('precision')}, F1 {sel.get('f1')})")
+     verdict = "PASS" if r.get("guardrail_passed") else "REJECT"
+     print(f"guardrail: {verdict}  {'; '.join(r.get('guardrail_reasons') or [])}")
+     print(f"promoted to workspace: {r.get('promoted')}   mlflow run: {r.get('mlflow_run_id')}")

@@ -1781,9 +1781,14 @@ separate hardcoded values that had drifted out of sync with each other.
   (`minikube image load`, `imagePullPolicy: Never`) rather than pulled from
   the local registry, for the same single-node reasons documented in
   [L4 — Kubernetes](#l4--kubernetes).
-- **Scope**: Ansible automates the *platform bring-up*, not base-OS package
-  installation — the VM is expected to already have Docker, Minikube,
-  kubectl, and the Prometheus binary, with the repo cloned.
+- **Scope**: Ansible automates the *platform bring-up*. The `system` role
+  installs Docker, kubectl, Minikube and Prometheus when they are missing
+  (pinned versions, skipped when present). It does not codify Jenkins and
+  SonarQube settings (jobs, credentials, plugins, project, token), which live
+  in Docker volumes and were set up by hand. The step-by-step procedure for a
+  new machine, with what is verified and what is not, is in
+  [docs/INFRASTRUCTURE_SETUP.md](docs/INFRASTRUCTURE_SETUP.md); it has not been
+  run on a clean second machine.
 
 ### What we tested
 

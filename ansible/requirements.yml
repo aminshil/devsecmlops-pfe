@@ -1,0 +1,8 @@
+---
+# Ansible collections the playbook needs beyond ansible-core.
+#   ansible-galaxy collection install -r ansible/requirements.yml
+# community.docker provides docker_container, docker_network and docker_image
+# (roles prerequisites and monitoring). It also needs the Docker SDK for
+# Python on the machine, installed by the `system` role (python3-docker).
+collections:
+  - name: community.docker

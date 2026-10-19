@@ -1,0 +1,84 @@
+diff --git a/README.md b/README.md
+index 05de4f3..4de5254 100644
+--- a/README.md
++++ b/README.md
+@@ -42,7 +42,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
+ | Served v4 (independent test set, 17.28M rows) | F1 **0.7291** · precision 0.6713 · recall 0.7979 | `models/manifest.json`, re-checked by CI on every build. Several L0 analysis tables below were measured on earlier models (July: v4 F1 0.7246; 13 October: 0.7278) |
+ | Served v3 fallback | F1 0.6664 · precision 0.5967 · recall 0.7546 | `models/manifest.json` |
+ | Weakest cause | `cascade`, recall 0.2679 (label noise by design) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
+-| Live cluster validation | 2,200 requests, 0 errors, F1 0.7267, 100% served by v4. Measured on the 13 October model at threshold 0.60; **not repeated for the 19 October model** | `scripts/live_k8s_validation.py` |
++| Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7755** · precision 0.7202 · recall 0.84. A different sample from the full test file, so it is not comparable with 0.7291 | `scripts/live_k8s_validation.py`, run on 19 October |
+ | Latest green pipeline | Build `2.20.3-b103` (started by the model promotion on 19 October): all 11 stages green, smoke-tested in the live pod, which now also fails unless the alert threshold was read from the manifest | [L3 run history](#l3--cicd) |
+ | Tests | 120 passing | `pytest tests/` (stage 1b) |
+ | Dashboard | 30 Grafana panels, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
+@@ -621,7 +621,7 @@ v4 beat v3 on every live metric at the time, zero errors on 33,600 requests. mem
+ > A proper F2-maximizing sweep on an independent validation fleet selected
+ > **0.60** instead. A fresh live validation at the corrected threshold, against
+ > the real deployed cluster, is in [Current production](#current-production-the-numbers-that-supersede-everything-above):
+-> F1 = 0.7267 on 2,200 real requests, 0 errors, every one served by v4.
++> on the 19 October model (threshold 0.91) F1 = 0.7755 on 16,600 real requests, 0 errors, every one served by v4.
+ 
+ ##### Serving architecture: client supplies history (stateless API)
+ 
+@@ -748,8 +748,8 @@ experiment found.
+ 
+ A further, more recent live-serving validation — against the actual
+ deployed Kubernetes cluster, at the corrected threshold, on the independent
+-test set — is in [Current production](#current-production-the-numbers-that-supersede-everything-above): 2,200 real
+-requests, 0 errors, F1 0.7267.
++test set — is in [Current production](#current-production-the-numbers-that-supersede-everything-above): 16,600 real
++requests, 0 errors, F1 0.7755 (19 October model).
+ 
+ 
+ ### Current production (the numbers that supersede everything above)
+@@ -857,15 +857,14 @@ history, reporting which model actually answered rather than assuming:
+ 
+ ```json
+ {
+-  "requests": 2200, "errors": 0,
+-  "served_by_model": {"telecom_v4_rolling": 2200},
+-  "f1": 0.7267, "precision": 0.6229, "recall": 0.872,
+-  "cause_accuracy_on_detected": 1.0
++  "requests": 16600, "errors": 0,
++  "served_by_model": {"telecom_v4_rolling": 16600},
++  "f1": 0.7755, "precision": 0.7202, "recall": 0.84,
++  "cause_accuracy_on_detected": 0.9977
+ }
+ ```
+ 
+-(This run was made against the 13 October model at threshold 0.60 and has not been repeated for the 19 October model.) Every one of 2,200 real requests was answered correctly by v4, with 0
+-errors. This supersedes the earlier 33,600-request live validation reported
++This is the run of 19 October 2026 against the model promoted that day (cluster threshold 0.91, read from the manifest and confirmed on `/health` right after the run): the first 14 days of the independent test file, every machine every 4 hours, 16,600 requests, all answered by v4, 0 errors. Per-cause recall: `cpu_spike` 0.9676, `disk_saturation` 0.9867, `memory_leak` 0.949, `network_flood` 0.9944, `silent_failure` 0.9721, `cascade` 0.2598. Latency through the NodePort with 20 concurrent workers: p50 308 ms, p95 699 ms, maximum 1,413 ms (a load-test figure, not single-request latency). **The F1 of 0.7755 is higher than the 0.7291 measured on the whole test file because it is a different sample (14 days, one reading in 480 per machine (every 4 hours at 30-second resolution)), not because the served model is better; the offline figure on all 17.28M rows is the one to quote.** The earlier live run (13 October model, threshold 0.60, 2,200 requests: F1 0.7267, precision 0.6229, recall 0.872) used a smaller sample and is likewise not comparable. This supersedes the earlier 33,600-request live validation reported
+ in the "Rolling features (v4)" section above, which used the unmeasured 0.85
+ threshold and, in an even earlier iteration of this project, was measured
+ against data that overlapped the training set — that overlap has since been
+@@ -2198,7 +2197,7 @@ python monitoring/k8s_exporter.py &
+ 
+ ## Known limitations and future work
+ 
+-- **The served model changed on 13 and on 19 October; the live validation was not redone.** On 19 October build 8 trained on all 17.28M rows and re-selected the threshold (0.91), v4 F1 0.7291. Until 13 October the served models were trained in July by earlier scripts and adopted with hashes (manifest `git_commit: null`). Since 13 October the served model is the pipeline-trained candidate (MLflow run `f622a7a9…`, v4 F1 0.7278), promoted by `Jenkinsfile.model`. Still open: `scripts/live_k8s_validation.py` has not been rerun against the promoted model, and the live-versus-offline comparison made in this project (precision 0.676, recall 0.788, F1 0.728 over 39,789 matched live predictions) was measured on the July model. The F1 difference (+0.003) is not claimed as an improvement. No deployment file carries the threshold any more: the API reads it from the manifest, so a changed threshold needs no file sync.
++- **The served model changed on 13 and on 19 October; the live validation was rerun only for the latest.** On 19 October build 8 trained on all 17.28M rows and re-selected the threshold (0.91), v4 F1 0.7291. Until 13 October the served models were trained in July by earlier scripts and adopted with hashes (manifest `git_commit: null`). Since 13 October the served model is the pipeline-trained candidate (MLflow run `f622a7a9…`, v4 F1 0.7278), promoted by `Jenkinsfile.model`. `scripts/live_k8s_validation.py` was rerun on 19 October against the promoted model (16,600 requests, 0 errors, see Current production). Still open: the live-versus-offline comparison made earlier in this project (precision 0.676, recall 0.788, F1 0.728 over 39,789 matched live predictions) was measured on the July model and was not repeated. The F1 difference (+0.003) is not claimed as an improvement. No deployment file carries the threshold any more: the API reads it from the manifest, so a changed threshold needs no file sync.
+ 
+ - **Disk headroom is a CI dependency.** Every Jenkins build leaves a ~2 GB image on the host (the registry keeps its own copy, so local images are safe to prune), and SonarQube's Elasticsearch switches every index to read-only when the disk passes 95% (observed live, and again at 97% before a cleanup). Unpruned, a day of builds is enough to reach it. Routine: `docker image prune -a -f --filter "until=24h"` after heavy CI days and a `df -h /` before a demo. The registry volume (about 6 GB, every tag since `2.3.0`) is the one store that only grows; trimming it needs registry garbage collection, which means recreating its container with deletes enabled and its network preserved.
+ - **Dependencies are pinned at the top level, not locked.** `requirements-api.txt`, `boto3` and `msgpack` are pinned exactly, but their transitive dependencies are only bounded (`>=`), so two builds hours apart can install different versions (observed: `python-dotenv` 1.2.3 → 1.2.4 and `uvloop` 0.22.1 → 0.23.0 between builds `b93` and `b94`; the image scan reports 0 vulnerabilities in both). A lockfile generated from the image's Python environment would close it; it needs its own verification cycle, so it is deliberately left for after the defense.
+diff --git a/docs/DEMO_SCRIPT.md b/docs/DEMO_SCRIPT.md
+index 5c8ae7b..3b282b3 100644
+--- a/docs/DEMO_SCRIPT.md
++++ b/docs/DEMO_SCRIPT.md
+@@ -65,7 +65,7 @@ Have `screenshots/` open as a last-resort fallback.
+ 3. **Jenkins → `devsecmlops-model` → the last full run's console** (do not start a full run live: about 20 minutes and 9+ GB of free memory). Point at stage 2 (judged rows exported), stage 4 (rows used and skipped, candidate against production F1, the guardrail), and stage 6 (the MLflow run id and six model files read back from MinIO).
+ 4. **MLflow:** open run `241447d01be24253a92874716dbfdf18` in experiment `telecom-production-model`: the 19 October run that was promoted and is now served (v4 F1 0.7291, P 0.6713, R 0.7979; v3 0.6664; threshold 0.91). The 13 October run `f622a7a9…` (0.7278) is the previous production model. The 2 October run `57e33ba05b44` (0.7280) and the 30 September run `1cc2b5a0fa75` (0.7278) are earlier full runs. The other 12 runs in the experiment are small smoke runs (v4 F1 about 0.65); do not open them.
+ 
+-Say it plainly: the 19 October run trained on all 17.28M rows and exported 262 judged rows, 214 used for v4, so feedback did not drive the result. F1 went from 0.7278 to 0.7291 and recall from 0.7941 to 0.7979: within noise, so I claim no improvement. What changed is the method: the pipeline selected the threshold itself (0.91, the highest precision with recall of at least 0.80), the API reads it from the manifest, and no file is edited by hand. The guardrail passed, the model was promoted and deployed by the pipeline, and the live cluster validation has not been redone for it. The verdicts are simulated. Proven: Log (smoke runs, the full run, live counts).
++Say it plainly: the 19 October run trained on all 17.28M rows and exported 262 judged rows, 214 used for v4, so feedback did not drive the result. F1 went from 0.7278 to 0.7291 and recall from 0.7941 to 0.7979: within noise, so I claim no improvement. What changed is the method: the pipeline selected the threshold itself (0.91, the highest precision with recall of at least 0.80), the API reads it from the manifest, and no file is edited by hand. The guardrail passed, the model was promoted and deployed by the pipeline, and the live cluster validation was rerun on it (16,600 requests, 0 errors, F1 0.7755 on a 14-day sample, which is not comparable with the full-file 0.7291). The verdicts are simulated. Proven: Log (smoke runs, the full run, live counts).
+ 
+ ### Blocks
+ 
+@@ -142,6 +142,7 @@ git status --short                                                       # must
+ ## 4. If asked about the numbers
+ 
+ - **What the scores are measured on.** Precision 0.6713, recall 0.7979, F1 0.7291 (the model served since 19 October) are on an independent test fleet (seed 123) from the project's synthetic generator, with the generator's labels; the threshold was chosen on a separate validation fleet (seed 7). Operator verdicts in the feedback loop are simulated.
++- **Live validation on the current model (19 October).** 16,600 requests through the NodePort, all answered by v4, 0 errors, threshold 0.91 read from the manifest: F1 0.7755, precision 0.7202, recall 0.84. This sample (first 14 days, one reading in 480 per machine (every 4 hours at 30-second resolution)) differs from the full test file, so do not present it as better than 0.7291.
+ - **Live agreed with offline (measured on the July model, before the 13 October promotion; not repeated for the new one).** Over 39,789 matched live predictions the cluster scored P 0.676, R 0.788, F1 0.728, against 0.664, 0.797 and 0.725 offline. The comparison script `live_vs_truth.py` is not in the repo unless you committed it; rehearse before using it.
+ - **Real data.** The only real-data check is SMD: F1 0.269 per machine and window, on 37 features, outside the production path (`ml-model/load_smd.py`). Say so before being asked.
+ - **Persistent anomalies in Grafana** are real episodes in the data (about 60 readings, up to 116), not stuck gauges; about 13 of 200 machines are in one at any time.
