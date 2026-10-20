@@ -1421,6 +1421,33 @@ def ui_infra():
     }
 
 
+@app.get("/ui/fleet")
+def ui_fleet():
+    """Every machine with the verdict the SERVING PODS currently report for it, plus the
+    dependency graph, for the Fleet tab. The state is the model's own output
+    (api_currently_anomalous = 1 if that machine's most recent prediction was anomalous),
+    read from the freshest replica per machine -- not a dataset label."""
+    machines, reachable, error = {}, False, ""
+    try:
+        url = "http://localhost:9090/api/v1/query?query=" + _ur.quote(_freshest("api_currently_anomalous"))
+        with _ur.urlopen(url, timeout=6) as r:
+            for s in json.loads(r.read())["data"]["result"]:
+                name = s["metric"].get("machine")
+                if name:
+                    machines[name] = {"type": s["metric"].get("machine_type", ""),
+                                      "anomalous": int(float(s["value"][1]))}
+        reachable = True
+    except Exception as e:                      # Prometheus down: say so, still draw the topology
+        error = str(e)
+    try:
+        g = load_graph()
+    except Exception:
+        g = {}
+    return {"reachable": reachable, "error": error, "machines": machines,
+            "routers": g.get("routers", []), "depends_on": g.get("depends_on", {}),
+            "downstream_of": g.get("downstream_of", {})}
+
+
 # ---------------------------------------------------------------------------
 # Real-data sampler for the demo (independent test set, true labels + causes)
 # ---------------------------------------------------------------------------

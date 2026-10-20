@@ -88,6 +88,17 @@
   .tag.norm{background:rgba(54,224,172,.12);color:var(--teal)}
   .spin{display:inline-block;width:13px;height:13px;border:2px solid var(--line);border-top-color:var(--teal);border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
   @keyframes sp{to{transform:rotate(360deg)}}
+  .flgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px;margin-top:14px}
+  .flcard{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:13px 14px}
+  .flhead{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .flhead .nm{font-family:var(--mono);font-size:13.5px;font-weight:700}
+  .flhead .ct{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .flchips{display:grid;grid-template-columns:repeat(auto-fill,minmax(66px,1fr));gap:7px}
+  .flchip{display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 2px;border-radius:7px;background:var(--panel2)}
+  .flchip .nm{font-family:var(--mono);font-size:9.5px;color:var(--dim);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .flsvg{display:block}
+  .fl-anom{color:var(--red)}.fl-ok{color:var(--teal)}.fl-none{color:var(--faint);opacity:.55}
+  .fldot{width:9px;height:9px;border-radius:50%;display:inline-block}
 
   .rvmodal{position:fixed;inset:0;z-index:1000;background:rgba(5,8,14,.8);display:flex;align-items:center;justify-content:center;padding:24px}
   .rvwin{background:var(--bg);border:1px solid var(--line);border-radius:14px;width:min(1100px,100%);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,.65)}
@@ -144,6 +155,7 @@
     <button type="button" data-tab="rootcause">Root Cause</button>
     <button type="button" data-tab="demo">Demo</button>
     <button type="button" data-tab="infra">Infrastructure</button>
+    <button type="button" data-tab="fleet">Fleet</button>
     <button type="button" data-tab="training">Training</button>
     <button type="button" data-tab="ct">Continuous training</button>
     <button type="button" data-tab="review">Review</button>
@@ -259,6 +271,15 @@
       <div id="pipeline_body"><div class="hint">loading…</div></div>
     </div>
   </div>
+  <div class="tabpage" id="fleet">
+    <div class="card">
+      <h3>Fleet <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshFleet">↻ Refresh</button></h3>
+      <div class="sub">Every machine grouped under the router it depends on, coloured by <b>what the models currently say</b> &mdash; the serving pods' own <span class="mono">api_currently_anomalous</span> gauge, which is 1 when that machine's most recent prediction was flagged. This is the live model verdict, not a dataset label. Machines the pods have not scored recently are greyed out.</div>
+      <label style="display:block;margin-top:10px;font-size:13px"><input type="checkbox" id="fl_auto" style="width:auto;display:inline;margin-right:6px">auto-refresh every 10s</label>
+      <div id="fleet_body"><div class="hint">Open this tab to load.</div></div>
+    </div>
+  </div>
+
   <div class="tabpage" id="training">
     <div class="card" style="margin-bottom:16px">
       <h3>Safety-net experiments (IsolationForest)</h3>
@@ -539,6 +560,60 @@
     h+='<div class="hint"><a href="'+base+':8080/job/devsecmlops-model/" target="_blank" rel="noopener noreferrer">Jenkins job devsecmlops-model</a> · <a href="'+base+':5001/" target="_blank" rel="noopener noreferrer">MLflow</a></div>';
     body.innerHTML=h;
   }
+  // ---- Fleet tab: live topology coloured by the models' own verdicts ----
+  const FLEET_ICONS={"web":"<circle cx=\"12\" cy=\"12\" r=\"10\" /> <path d=\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\" /> <path d=\"M2 12h20\" />","app":"<rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\" /> <path d=\"M10 4v4\" /> <path d=\"M2 8h20\" /> <path d=\"M6 4v4\" />","db":"<ellipse cx=\"12\" cy=\"5\" rx=\"9\" ry=\"3\" /> <path d=\"M3 5V19A9 3 0 0 0 21 19V5\" /> <path d=\"M3 12A9 3 0 0 0 21 12\" />","cache":"<path d=\"M6 19v-3\" /> <path d=\"M10 19v-3\" /> <path d=\"M14 19v-3\" /> <path d=\"M18 19v-3\" /> <path d=\"M8 11V9\" /> <path d=\"M16 11V9\" /> <path d=\"M12 11V9\" /> <path d=\"M2 15h20\" /> <path d=\"M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1.1a2 2 0 0 0 0 3.837V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-5.1a2 2 0 0 0 0-3.837Z\" />","queue":"<path d=\"M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z\" /> <path d=\"M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12\" /> <path d=\"M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17\" />","batch":"<path d=\"M12 6v6l4 2\" /> <circle cx=\"12\" cy=\"12\" r=\"10\" />","edge":"<rect x=\"16\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\" /> <rect x=\"2\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\" /> <rect x=\"9\" y=\"2\" width=\"6\" height=\"6\" rx=\"1\" /> <path d=\"M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3\" /> <path d=\"M12 12V8\" />","voip":"<path d=\"M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384\" />","router":"<rect width=\"20\" height=\"8\" x=\"2\" y=\"14\" rx=\"2\" /> <path d=\"M6.01 18H6\" /> <path d=\"M10.01 18H10\" /> <path d=\"M15 10v4\" /> <path d=\"M17.84 7.17a4 4 0 0 0-5.66 0\" /> <path d=\"M20.66 4.34a8 8 0 0 0-11.31 0\" />","firewall":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" /> <path d=\"M12 9v6\" /> <path d=\"M16 15v6\" /> <path d=\"M16 3v6\" /> <path d=\"M3 15h18\" /> <path d=\"M3 9h18\" /> <path d=\"M8 15v6\" /> <path d=\"M8 3v6\" />","dns":"<path d=\"M12 13v8\" /> <path d=\"M12 3v3\" /> <path d=\"M18 6a2 2 0 0 1 1.387.56l2.307 2.22a1 1 0 0 1 0 1.44l-2.307 2.22A2 2 0 0 1 18 13H6a2 2 0 0 1-1.387-.56l-2.306-2.22a1 1 0 0 1 0-1.44l2.306-2.22A2 2 0 0 1 6 6z\" />"};
+  let FL_TIMER=null;
+  function flIcon(t,cls,size){
+    const p=FLEET_ICONS[t]||FLEET_ICONS.app;
+    return '<svg class="flsvg '+cls+'" width="'+size+'" height="'+size+'" viewBox="0 0 24 24" fill="none" '
+      +'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>';
+  }
+  function flCls(st){ return st===1?"fl-anom":(st===0?"fl-ok":"fl-none"); }
+  function flChip(m,st,type){
+    return '<div class="flchip" title="'+ctEsc(m)+' — '+(st===1?"anomalous":(st===0?"normal":"no recent prediction"))+'">'
+      +flIcon(type||m.split("-")[0],flCls(st),19)+'<span class="nm">'+ctEsc(m)+'</span></div>';
+  }
+  function flCard(title,members,state,hub){
+    const known=members.filter(function(m){ return state[m]!==undefined; });
+    const bad=known.filter(function(m){ return state[m].anomalous===1; }).length;
+    const hubSt=hub?(state[hub]?state[hub].anomalous:undefined):undefined;
+    let h='<div class="flcard"><div class="flhead">';
+    h+=hub?flIcon("router",flCls(hubSt),20):'';
+    h+='<span class="nm">'+ctEsc(title)+'</span><span class="ct">'+bad+'/'+(known.length||members.length)+' anomalous</span></div>';
+    h+='<div class="flchips">';
+    members.forEach(function(m){ const s=state[m]; h+=flChip(m,s?s.anomalous:undefined,s?s.type:""); });
+    return h+'</div></div>';
+  }
+  function renderFleet(d){
+    const state=d.machines||{}, routers=d.routers||[], down=d.downstream_of||{}, dep=d.depends_on||{};
+    if(!routers.length){ return '<div class="hint" style="color:var(--red)">dependency graph unavailable</div>'; }
+    const inGraph={}; routers.forEach(function(r){ inGraph[r]=1; });
+    Object.keys(dep).forEach(function(m){ inGraph[m]=1; });
+    const extra=Object.keys(state).filter(function(m){ return !inGraph[m]; }).sort();
+    const total=Object.keys(state).length;
+    const bad=Object.keys(state).filter(function(m){ return state[m].anomalous===1; }).length;
+    let h='';
+    if(!d.reachable){ h+='<div class="hint" style="color:var(--red)">Prometheus unreachable, so no live verdicts: '+ctEsc(d.error)+'</div>'; }
+    h+='<div class="hint">'+bad+' anomalous · '+(total-bad)+' normal · '+total+' machines scored by the pods right now</div>';
+    h+='<div class="flgrid">';
+    routers.forEach(function(r){
+      h+=flCard(r,(down[r]||[]).slice().sort(function(a,b){ return a.split("-")[0].localeCompare(b.split("-")[0])||a.localeCompare(b); }),state,r);
+    });
+    if(extra.length){ h+=flCard("independent (no router)",extra,state,null); }
+    return h+'</div>';
+  }
+  async function loadFleet(){
+    const body=document.getElementById("fleet_body");
+    if(!body.dataset.loaded){ body.innerHTML='<div class="hint"><span class="spin"></span> loading…</div>'; }
+    try{ const d=await getJSON(API+"/ui/fleet"); body.innerHTML=renderFleet(d); body.dataset.loaded="1"; }
+    catch(e){ body.innerHTML='<div class="hint" style="color:var(--red)">Failed to load: '+ctEsc(e.message)+'</div>'; }
+  }
+  function flAuto(){
+    if(FL_TIMER){ clearInterval(FL_TIMER); FL_TIMER=null; }
+    if(document.getElementById("fl_auto").checked){
+      FL_TIMER=setInterval(function(){ if(document.getElementById("fleet").classList.contains("on")){ loadFleet(); } },10000);
+    }
+  }
   function activateTab(id){
     document.querySelectorAll(".tabpage").forEach(function(p){ p.classList.remove("on"); });
     document.querySelectorAll(".tabs button").forEach(function(b){ b.classList.toggle("on", b.dataset.tab===id); });
@@ -546,6 +621,7 @@
     if(id==="status"){ refreshStatus(); loadFixLog(); }
     if(id==="ct"){ loadCt(); }
     if(id==="review"){ loadReview(); }
+    if(id==="fleet"){ loadFleet(); }
     if(id==="infra"){ loadInfra(); loadPipeline(); }
     if(id==="training"){ loadDatasets(); loadRuns(); }
     if(id==="summary"){ loadSummary(); }
@@ -1027,6 +1103,8 @@
   document.getElementById("btnJudgeFlagged").addEventListener("click", function(){ judgeBatch(true); });
   document.getElementById("btnRefreshCt").addEventListener("click", loadCt);
   document.getElementById("btnRefreshReview").addEventListener("click", loadReview);
+  document.getElementById("btnRefreshFleet").addEventListener("click", loadFleet);
+  document.getElementById("fl_auto").addEventListener("change", flAuto);
   document.getElementById("rv_show_judged").addEventListener("change", loadReview);
   document.getElementById("review_body").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.rvjudge!==undefined){ reviewJudge(t); } if(t.dataset.rvdetail!==undefined){ rvOpen(t); } });
   document.addEventListener("click", function(ev){ const t=ev.target; if(t.id==="rvmodal"||(t.dataset&&t.dataset.rvclose!==undefined)){ rvClose(); } });
