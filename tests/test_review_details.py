@@ -134,6 +134,12 @@ def test_review_page_converts_the_logged_time_to_local_time(client):
     assert "function rvLocal(" in page and "Logged (your time)" in page and "Logged (UTC)" not in page
 
 
+def test_review_details_open_in_a_popup_window(client):
+    page = client.get("/ui", auth=CREDS).text
+    assert "function rvOpen(" in page and 'id="rvmodal"' in page.replace("m.id=\"rvmodal\"", 'id="rvmodal"')
+    assert "rvToggle" not in page and "Escape" in page
+
+
 def test_sample_rows_carry_the_dataset_timestamp(client, monkeypatch):
     cur = {"machine": "web-01", "type": "web", "timestamp": "2026-01-01 03:00:30", "label": "1", "anomaly_type": "cpu_spike",
            **{c: "1.0" for c in ("cpu", "ram", "network", "disk_io", "disk_usage", "load_avg")}}

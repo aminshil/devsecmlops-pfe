@@ -88,6 +88,37 @@
   .tag.norm{background:rgba(54,224,172,.12);color:var(--teal)}
   .spin{display:inline-block;width:13px;height:13px;border:2px solid var(--line);border-top-color:var(--teal);border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
   @keyframes sp{to{transform:rotate(360deg)}}
+
+  .rvmodal{position:fixed;inset:0;z-index:1000;background:rgba(5,8,14,.8);display:flex;align-items:center;justify-content:center;padding:24px}
+  .rvwin{background:var(--bg);border:1px solid var(--line);border-radius:14px;width:min(1100px,100%);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,.65)}
+  .rvhead{display:flex;align-items:center;gap:14px;padding:16px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .rvhead .rvtags{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+  .rvtitle{font-size:20px;font-weight:700;font-family:var(--mono)}
+  .rvsub{color:var(--dim);font-size:12.5px;font-family:var(--mono)}
+  .rvbody{overflow:auto;padding:18px 20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:14px}
+  .rvbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;min-width:0}
+  .rvbox.wide{grid-column:1/-1}
+  .rvbox h4{margin:0 0 10px;font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--teal);letter-spacing:.6px}
+  .rvtiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
+  .rvtile{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px}
+  .rvk{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+  .rvv{font-family:var(--mono);font-size:20px;font-weight:700}
+  .rvgauge{position:relative;height:14px;background:var(--panel2);border:1px solid var(--line);border-radius:7px;margin:6px 0 4px}
+  .rvfill{position:absolute;left:0;top:0;bottom:0;background:var(--blue);border-radius:6px 0 0 6px}
+  .rvmark{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--amber)}
+  .rvscale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-bottom:8px}
+  .rvzrow{display:flex;align-items:center;gap:8px;margin:5px 0;font-family:var(--mono);font-size:12px}
+  .rvzk{width:96px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rvzbar{position:relative;flex:1;height:10px;background:var(--panel2);border-radius:5px}
+  .rvzmid{position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--faint)}
+  .rvzfill{position:absolute;top:0;bottom:0;background:var(--blue);border-radius:5px}
+  .rvzfill.far{background:var(--red)}
+  .rvzv{width:64px;text-align:right;font-weight:700}
+  .rvzv.far{color:var(--red)}
+  .rvspark polyline{fill:none;stroke:var(--teal);stroke-width:2;stroke-linejoin:round}
+  .rvhist{margin:8px 0}
+  .rvhist .rvk{display:flex;justify-content:space-between}
+  .rvbig{font-size:18px;font-weight:700;margin-bottom:4px}
   .hint{color:var(--faint);font-size:11.5px;font-family:var(--mono);margin-top:6px}
   .summary{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
   .sumcard{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:14px}
@@ -279,7 +310,7 @@
   <div class="tabpage" id="review">
     <div class="card" style="margin-bottom:16px">
       <h3>Review flagged anomalies <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshReview">↻ Refresh</button></h3>
-      <div class="sub">Anomalies the pods in the cluster flagged that nobody has judged yet (newest first, from the latest 1000 logged predictions). <b>Logged</b> is when the pod stored the prediction, shown in your local time (the database keeps it in UTC); <b>Reading time</b> is the time of the reading itself; the request to the pod carries only its hour, which picks the time-window baseline. Press <b>Details</b> to see why a reading was flagged (the reading, the scores, the history). <b>Real label (demo)</b> is the truth for readings sent by the Demo tab or the production agent, which replay labelled data (blank for anything else, and for readings the agent sent before it was restarted). Press <b>Real</b> if the alert was a true anomaly, <b>False alarm</b> if the machine was fine. Verdicts are stored in the cluster database and become training data the next time the <span class="mono">devsecmlops-model</span> job runs with feedback.</div>
+      <div class="sub">Anomalies the pods in the cluster flagged that nobody has judged yet (newest first, from the latest 1000 logged predictions). <b>Logged</b> is when the pod stored the prediction, shown in your local time (the database keeps it in UTC); <b>Reading time</b> is the time of the reading itself; the request to the pod carries only its hour, which picks the time-window baseline. Press <b>Details</b> to open a window with the full picture of a reading (the decision, the metrics, the scores, the history); Esc, the Close button or a click outside closes it. <b>Real label (demo)</b> is the truth for readings sent by the Demo tab or the production agent, which replay labelled data (blank for anything else, and for readings the agent sent before it was restarted). Press <b>Real</b> if the alert was a true anomaly, <b>False alarm</b> if the machine was fine. Verdicts are stored in the cluster database and become training data the next time the <span class="mono">devsecmlops-model</span> job runs with feedback.</div>
       <label style="display:block;margin-top:10px;font-size:13px"><input type="checkbox" id="rv_show_judged" style="width:auto;display:inline;margin-right:6px"> also show the ones already judged</label>
       <div id="review_body"><div class="hint">Open this tab to load.</div></div>
     </div>
@@ -380,7 +411,6 @@
       const cell=x.verdict?'<span class="tag norm">'+ctEsc(String(x.verdict).replace("_"," "))+'</span>'
         :'<button type="button" class="btn small" data-rvjudge="true_positive" data-pid="'+ctEsc(x.id)+'">Real</button> <button type="button" class="btn sec small" data-rvjudge="false_positive" data-pid="'+ctEsc(x.id)+'">False alarm</button>';
       h+='<tr><td class="mono">'+ctEsc(rvLocal(x.timestamp))+'</td><td class="mono">'+ctEsc(x.real&&x.real.time?x.real.time:"—")+'</td><td class="mono">'+ctEsc(x.machine)+'</td><td class="mono">'+ctEsc(x.model_version)+'</td><td>'+ctEsc(x.cause)+'</td><td class="mono">'+p+'</td><td>'+rvReal(x)+'</td><td>'+cell+'</td><td><button type="button" class="btn sec small" data-rvdetail="'+i+'">Details</button></td></tr>';
-      h+='<tr style="display:none"><td colspan="9"></td></tr>';
     });
     body.innerHTML=h+'</tbody></table>';
   }
@@ -397,50 +427,80 @@
     if(x.real.label===1){ return '<span class="tag anom">anomaly'+(x.real.cause?' · '+ctEsc(x.real.cause):'')+'</span><div class="hint">✓ the alert was right</div>'; }
     return '<span class="tag norm">normal</span><div class="hint">✗ false alarm</div>';
   }
-  function rvPairs(obj,digits){
-    if(!obj){ return '<div class="hint">not stored for this reading</div>'; }
-    return Object.keys(obj).map(function(k){ return kv(ctEsc(k),ctEsc(typeof obj[k]==="number"?rvNum(obj[k],digits):obj[k])); }).join("");
+  function rvBox(title,inner,wide){ return '<section class="rvbox'+(wide?' wide':'')+'"><h4>'+title+'</h4>'+inner+'</section>'; }
+  function rvTile(k,v){ return '<div class="rvtile"><div class="rvk">'+ctEsc(k)+'</div><div class="rvv">'+ctEsc(v)+'</div></div>'; }
+  function rvGauge(p,t){
+    if(typeof p!=="number"){ return ""; }
+    const pc=Math.max(0,Math.min(1,p))*100, hasT=(typeof t==="number"), tc=hasT?Math.max(0,Math.min(1,t))*100:0;
+    return '<div class="rvgauge"><div class="rvfill" style="width:'+pc.toFixed(1)+'%"></div>'+(hasT?'<div class="rvmark" style="left:'+tc.toFixed(1)+'%"></div>':'')+'</div>'
+      +'<div class="rvscale"><span>0 = anomaly</span><span>1 = normal</span></div><div class="hint" style="margin:0 0 8px">blue = P(normal) · orange line = threshold</div>';
   }
-  function rvZ(obj){
-    if(!obj){ return '<div class="hint">not stored for this reading</div>'; }
-    return Object.keys(obj).map(function(k){
-      const z=obj[k], far=(typeof z==="number"&&Math.abs(z)>=3);
-      return kv(ctEsc(k),ctEsc(rvNum(z,2))+(far?' <span class="tag anom">far</span>':''));
+  function rvSpark(vals){
+    const n=(vals||[]).map(Number).filter(function(v){ return Number.isFinite(v); });
+    if(n.length<2){ return ""; }
+    const lo=Math.min.apply(null,n), hi=Math.max.apply(null,n), span=(hi-lo)||1, w=240, h=46;
+    const pts=n.map(function(v,i){ return (i*(w/(n.length-1))).toFixed(1)+","+(h-5-((v-lo)/span)*(h-10)).toFixed(1); }).join(" ");
+    return '<svg class="rvspark" viewBox="0 0 '+w+' '+h+'" width="100%" height="'+h+'" preserveAspectRatio="none" aria-hidden="true"><polyline points="'+pts+'"/></svg>';
+  }
+  function rvZbars(f){
+    if(!f){ return '<div class="hint">not stored for this reading</div>'; }
+    return Object.keys(f).map(function(k){
+      const z=Number(f[k]), ok=Number.isFinite(z), far=ok&&Math.abs(z)>=3, w=ok?Math.min(Math.abs(z)/6,1)*50:0;
+      return '<div class="rvzrow"><span class="rvzk" title="'+ctEsc(k)+'">'+ctEsc(k)+'</span><div class="rvzbar"><div class="rvzmid"></div><div class="rvzfill'+(far?' far':'')+'" style="'+(z<0?'right':'left')+':50%;width:'+w.toFixed(1)+'%"></div></div><span class="rvzv'+(far?' far':'')+'">'+ctEsc(ok?rvNum(z,2):"—")+'</span></div>';
     }).join("");
   }
-  function rvHistory(h){
+  function rvHistoryBoxes(h){
     if(!h){ return '<div class="hint">no history was sent: the 6-feature fallback model scored this reading</div>'; }
-    return Object.keys(h).map(function(k){ return kv(ctEsc(k),ctEsc((h[k]||[]).map(function(v){ return rvNum(v,1); }).join(" → "))); }).join("");
+    return Object.keys(h).map(function(k){
+      const v=h[k]||[], first=v.length?rvNum(Number(v[0]),1):"—", last=v.length?rvNum(Number(v[v.length-1]),1):"—";
+      return '<div class="rvhist"><div class="rvk"><span>'+ctEsc(k)+'</span><span>'+ctEsc(first)+' → '+ctEsc(last)+'</span></div>'+rvSpark(v)+'</div>';
+    }).join("");
   }
-  function rvDetails(x){
-    const p=x.p_normal, t=x.threshold, byClf=x.flagged_by==="classifier";
-    let why=kv("flagged by",byClf?"the classifier (XGBoost)":"the safety net (IsolationForest) only");
-    why+=kv("P(normal)",ctEsc(rvNum(p,4)));
-    why+=kv("decision threshold",ctEsc(rvNum(t,2)));
-    if(typeof p==="number"&&typeof t==="number"){ why+=kv("margin",ctEsc(rvNum(t-p,4))+(p<t?" under the threshold: flagged":" above the threshold: the classifier alone would not flag it")); }
-    why+=kv("classifier cause",ctEsc(x.xgb_cause))+kv("cause given",ctEsc(x.cause))+kv("IsolationForest score",ctEsc(rvNum(x.iso_score,4)));
-    why+=kv("logged at (your time)",ctEsc(rvLocal(x.timestamp)))+kv("logged at (UTC)",ctEsc(x.timestamp))+kv("reading time",ctEsc(x.real&&x.real.time?x.real.time:"not recorded"))+kv("hour in the request",ctEsc(x.real&&x.real.time?x.real.time.slice(11,13):"not recorded"));
-    why+=kv("model",ctEsc(x.model_version))+kv("machine type",ctEsc(x.machine_type))+kv("time window",ctEsc(x.window))+kv("prediction id",ctEsc(x.id));
-    let real="";
-    if(x.real){
-      const ok=(x.real.label===1);
-      real=sectionTitle("Real label ("+ctEsc(x.real.source||"demo")+")")+kv("truth",ok?"anomaly"+(x.real.cause?" · "+ctEsc(x.real.cause):""):"normal")+kv("the model was",ok?"right (true alert)":"wrong (false alarm)");
-    }
-    let h='<div style="padding:8px 4px">';
-    h+=sectionTitle("Why it was flagged")+why;
-    h+='<div class="hint">The classifier flags a reading when P(normal) is below the threshold. The IsolationForest safety net flags unusual readings on its own; either one is enough (OR rule).</div>';
-    h+=sectionTitle("The reading received")+rvPairs(x.metrics,1);
-    h+=sectionTitle("Distance from this machine\'s normal (z-scores)")+rvZ(x.features);
-    h+='<div class="hint">How many standard deviations each value is from this machine\'s usual value for this time of day; 3 or more is far.</div>';
-    h+=sectionTitle("Recent history (oldest → newest)")+rvHistory(x.history);
-    return h+real+'</div>';
+  function rvModalHtml(x){
+    const byClf=(x.flagged_by==="classifier"), p=x.p_normal, t=x.threshold, time=(x.real&&x.real.time)?x.real.time:"";
+    let head='<header class="rvhead"><div><div class="rvtitle">'+ctEsc(x.machine)+'</div><div class="rvsub">'+ctEsc(x.cause)+' · '+ctEsc(x.model_version)+'</div></div><div class="rvtags">'
+      +'<span class="tag '+(byClf?'anom':'iso')+'">'+(byClf?'flagged by the classifier':'flagged by the safety net only')+'</span>'
+      +(x.verdict?'<span class="tag norm">judged: '+ctEsc(String(x.verdict).replace("_"," "))+'</span>':'<span class="tag de">not judged yet</span>')
+      +'</div><button type="button" class="btn sec small" data-rvclose="1" aria-label="Close this window">✕ Close</button></header>';
+    let dec=rvGauge(p,t)+kv("P(normal)",ctEsc(rvNum(p,4)))+kv("decision threshold",ctEsc(rvNum(t,2)));
+    if(typeof p==="number"&&typeof t==="number"){ dec+=kv("margin",ctEsc(rvNum(t-p,4))+(p<t?" under the threshold":" above the threshold")); }
+    dec+=kv("classifier cause",ctEsc(x.xgb_cause))+kv("cause given",ctEsc(x.cause))+kv("IsolationForest score",ctEsc(rvNum(x.iso_score,4)));
+    const times=kv("logged at (your time)",ctEsc(rvLocal(x.timestamp)))+kv("logged at (UTC)",ctEsc(x.timestamp))
+      +kv("reading time",ctEsc(time||"not recorded"))+kv("hour in the request",ctEsc(time?time.slice(11,13):"not recorded"))+kv("time window",ctEsc(x.window));
+    const m=x.metrics;
+    const reading=m?'<div class="rvtiles">'+Object.keys(m).map(function(k){ return rvTile(k,typeof m[k]==="number"?rvNum(m[k],1):m[k]); }).join("")+'</div>':'<div class="hint">not stored for this reading</div>';
+    let truth;
+    if(x.real){ const ok=(x.real.label===1);
+      truth='<div class="rvbig"><span class="tag '+(ok?'anom':'norm')+'">'+(ok?'anomaly'+(x.real.cause?' · '+ctEsc(x.real.cause):''):'normal')+'</span></div>'
+        +'<div>'+(ok?'✓ The alert was right (a true anomaly).':'✗ The alert was wrong (the machine was normal: a false alarm).')+'</div>'+kv("recorded by",ctEsc(x.real.source||"—"));
+    }else{ truth='<div class="hint">not recorded: only readings from the Demo tab or the production agent carry a true label</div>'; }
+    const who=kv("machine",ctEsc(x.machine))+kv("machine type",ctEsc(x.machine_type))+kv("model",ctEsc(x.model_version))+kv("prediction id",ctEsc(x.id));
+    const how='<div class="hint" style="margin-top:0">The classifier flags a reading when P(normal) falls below the threshold. The IsolationForest safety net flags unusual readings on its own; either one is enough (OR rule). A z-score is how many standard deviations a value is from this machine\'s usual value for this time of day; 3 or more is far.</div>';
+    return '<div class="rvwin">'+head+'<div class="rvbody">'
+      +rvBox("Decision",dec)+rvBox("Real label (demo)",truth)+rvBox("Times",times)
+      +rvBox("The reading received",reading,true)
+      +rvBox("Distance from this machine's normal (z-scores)",rvZbars(x.features))+rvBox("Recent history (oldest → newest)",rvHistoryBoxes(x.history))+rvBox("Machine",who)
+      +rvBox("How to read this",how,true)+'</div></div>';
   }
-  function rvToggle(btn){
-    const row=btn.closest("tr").nextElementSibling;
-    if(!row.firstElementChild.innerHTML){ row.firstElementChild.innerHTML=rvDetails(RV_ROWS[Number(btn.dataset.rvdetail)]); }
-    const open=row.style.display==="none";
-    row.style.display=open?"":"none";
-    btn.textContent=open?"Hide":"Details";
+  let RV_OPENER=null;
+  function rvClose(){
+    const m=document.getElementById("rvmodal");
+    if(m){ m.remove(); }
+    document.body.style.overflow="";
+    if(RV_OPENER){ RV_OPENER.focus(); RV_OPENER=null; }
+  }
+  function rvOpen(btn){
+    const x=RV_ROWS[Number(btn.dataset.rvdetail)];
+    if(!x){ return; }
+    const old=document.getElementById("rvmodal");
+    if(old){ old.remove(); }
+    const m=document.createElement("div");
+    m.id="rvmodal"; m.className="rvmodal"; m.setAttribute("role","dialog"); m.setAttribute("aria-modal","true"); m.setAttribute("aria-label","Anomaly details");
+    m.innerHTML=rvModalHtml(x);
+    document.body.appendChild(m);
+    document.body.style.overflow="hidden";
+    RV_OPENER=btn;
+    m.querySelector("[data-rvclose]").focus();
   }
   async function reviewJudge(btn){
     const cell=btn.parentElement;
@@ -968,7 +1028,9 @@
   document.getElementById("btnRefreshCt").addEventListener("click", loadCt);
   document.getElementById("btnRefreshReview").addEventListener("click", loadReview);
   document.getElementById("rv_show_judged").addEventListener("change", loadReview);
-  document.getElementById("review_body").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.rvjudge!==undefined){ reviewJudge(t); } if(t.dataset.rvdetail!==undefined){ rvToggle(t); } });
+  document.getElementById("review_body").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.rvjudge!==undefined){ reviewJudge(t); } if(t.dataset.rvdetail!==undefined){ rvOpen(t); } });
+  document.addEventListener("click", function(ev){ const t=ev.target; if(t.id==="rvmodal"||(t.dataset&&t.dataset.rvclose!==undefined)){ rvClose(); } });
+  document.addEventListener("keydown", function(ev){ if(ev.key==="Escape"&&document.getElementById("rvmodal")){ rvClose(); } });
   document.getElementById("op_rbody").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.opjudge!==undefined){ opJudge(t); } });
   document.getElementById("resultsTable").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.detail!==undefined){ toggleDetail(Number(t.dataset.detail)); } if(t.dataset.page!==undefined){ gotoPage(Number(t.dataset.page)); } if(t.dataset.judge!==undefined){ const p=t.dataset.judge.split("|"); judgeRow(Number(p[0]),p[1]); } });
   await refreshStatus();
