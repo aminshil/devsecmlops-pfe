@@ -36,7 +36,7 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import time
 
@@ -1606,6 +1606,7 @@ def ui_verify(body: _RunRef):
 import urllib.error as _ue
 import uuid as _uuid
 from fastapi import HTTPException as _HTTPException
+from api import demo_labels as _demo_labels
 
 _CLUSTER_SCHEME = "http"   # the NodePort on the VM's private Minikube network has no TLS
 _CLUSTER_API = (os.environ.get("CLUSTER_API_URL") or f"{_CLUSTER_SCHEME}://192.168.49.2:30080").rstrip("/")
@@ -1642,6 +1643,9 @@ class _ClusterPredict(BaseModel):
     timestamp: str | None = None
     metrics: dict
     history: dict | None = None
+    # Demo sources only: the reading's true label. Never sent to the cluster; kept for the Review tab.
+    true_label: Literal[0, 1] | None = None
+    true_cause: str | None = None
 
 
 class _ClusterVerdict(BaseModel):
@@ -1653,9 +1657,12 @@ class _ClusterVerdict(BaseModel):
 def ui_cluster_predict(body: _ClusterPredict):
     """Score one reading on the cluster API (v4 when history is supplied); it logs the prediction."""
     try:
-        return _cluster_call("POST", "/predict", body.model_dump(exclude_none=True))
+        result = _cluster_call("POST", "/predict", body.model_dump(exclude_none=True, exclude={"true_label", "true_cause"}))
     except _ClusterError as e:
         raise _HTTPException(status_code=502, detail=str(e)) from e
+    if body.true_label is not None and result.get("is_anomaly") == 1:
+        _demo_labels.record(result.get("prediction_id"), body.true_label, body.true_cause, "demo tab")
+    return result
 
 
 @app.post("/ui/cluster/feedback/{prediction_id}", responses={400: _BAD_INPUT, 502: _CLUSTER_DOWN})
@@ -1686,14 +1693,40 @@ def ui_cluster_review(limit: int = 1000, include_judged: bool = False):
     except _ClusterError as e:
         raise _HTTPException(status_code=502, detail=str(e)) from e
     preds = data.get("predictions") or []
-    rows = [{
+    labels = _demo_labels.load()
+    rows = [_review_row(p, labels.get(p.get("id"))) for p in preds
+            if p.get("final_is_anomaly") == 1 and (include_judged or not p.get("operator_verdict"))]
+    return {"scanned": len(preds), "count": len(rows), "anomalies": rows}
+
+
+def _json_dict(raw) -> dict | None:
+    """A TEXT column that holds a JSON object -> dict; None when empty or malformed."""
+    if isinstance(raw, dict):
+        return raw
+    try:
+        value = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _review_row(p: dict, real: dict | None) -> dict:
+    """One flagged prediction for the Review tab, with what the Details view shows. `real` is the demo
+    label recorded for it (None when it did not come from a labelled demo source)."""
+    return {
         "id": p.get("id"), "timestamp": p.get("timestamp"), "machine": p.get("machine"),
         "model_version": p.get("model_version"), "cause": p.get("final_cause"),
         "p_normal": p.get("xgb_p_normal"), "threshold": p.get("predict_threshold"),
         "verdict": p.get("operator_verdict"),
-    } for p in preds
-        if p.get("final_is_anomaly") == 1 and (include_judged or not p.get("operator_verdict"))]
-    return {"scanned": len(preds), "count": len(rows), "anomalies": rows}
+        "machine_type": p.get("machine_type"), "window": p.get("time_window"),
+        "xgb_cause": p.get("xgb_cause"), "iso_score": p.get("iso_score"),
+        "flagged_by": "safety net" if p.get("final_cause") == SAFETY_NET_CAUSE else "classifier",
+        "metrics": _json_dict(p.get("raw_metrics_json")),
+        "features": _json_dict(p.get("features_json")),
+        "history": _json_dict(p.get("history_json")),
+        "real": ({"label": real.get("label"), "cause": real.get("cause") or "", "source": real.get("source") or ""}
+                 if real else None),
+    }
 
 
 def _ct_feedback() -> dict:

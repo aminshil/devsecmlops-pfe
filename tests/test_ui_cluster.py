@@ -149,8 +149,10 @@ def test_review_lists_only_unjudged_anomalies_by_default(client, cluster):
     body = r.json()
     assert body["scanned"] == 4 and body["count"] == 2
     assert [a["id"] for a in body["anomalies"]] == ["id-1", "id-4"]
-    assert set(body["anomalies"][0]) == {"id", "timestamp", "machine", "model_version", "cause", "p_normal", "threshold", "verdict"}
-    assert "features_json" not in body["anomalies"][0]                       # raw features are not sent to the browser
+    assert set(body["anomalies"][0]) == {"id", "timestamp", "machine", "model_version", "cause", "p_normal", "threshold", "verdict",
+                                         "machine_type", "window", "xgb_cause", "iso_score", "flagged_by",
+                                         "metrics", "features", "history", "real"}
+    assert "features_json" not in body["anomalies"][0]                       # parsed fields only, never the raw DB columns
     shown = client.get("/ui/cluster/review?include_judged=true", auth=CREDS).json()
     assert [a["id"] for a in shown["anomalies"]] == ["id-1", "id-3", "id-4"]
 

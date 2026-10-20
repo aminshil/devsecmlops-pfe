@@ -56,6 +56,7 @@ import argparse
 import json
 import os
 import random
+import sys
 import threading
 import time
 from collections import deque
@@ -63,6 +64,9 @@ from pathlib import Path
 import urllib.error
 import urllib.parse
 import urllib.request
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from api import demo_labels  # noqa: E402  (true labels of flagged readings, for the control panel's Review tab)
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "telecom_fleet_v2_test.csv"
 FEATURES = ["cpu", "ram", "network", "disk_io", "disk_usage", "load_avg"]
@@ -143,6 +147,18 @@ def row_to_request(row, history=None):
     return req
 
 
+def _remember_label(row, result):
+    """Keep the replayed row's true label beside the cluster's prediction id (flagged readings only)."""
+    if result.get("is_anomaly") != 1 or not result.get("prediction_id"):
+        return
+    try:
+        label = int(row["label"])
+    except (KeyError, TypeError, ValueError):
+        return
+    cause = row.get("anomaly_type") or ("normal" if label == 0 else "anomaly")
+    demo_labels.record(result["prediction_id"], label, cause, "production agent")
+
+
 def send_one(base_url, row, history=None):
     body = json.dumps(row_to_request(row, history)).encode()
     req = urllib.request.Request(
@@ -154,6 +170,7 @@ def send_one(base_url, row, history=None):
             result = json.loads(resp.read())
             print(f"  {result.get('machine','?'):11} {result.get('model','?'):19} "
                   f"is_anomaly={result.get('is_anomaly')} cause={result.get('likely_cause')}")
+            _remember_label(row, result)
     except urllib.error.URLError as e:
         print(f"  {row.get('machine','?'):11} request failed: {e}")
 

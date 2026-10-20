@@ -279,8 +279,8 @@
   <div class="tabpage" id="review">
     <div class="card" style="margin-bottom:16px">
       <h3>Review flagged anomalies <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshReview">↻ Refresh</button></h3>
-      <div class="sub">Anomalies the pods in the cluster flagged that nobody has judged yet (newest first, from the latest 1000 logged predictions). Press <b>Real</b> if the alert was a true anomaly, <b>False alarm</b> if the machine was fine. Verdicts are stored in the cluster database and become training data the next time the <span class="mono">devsecmlops-model</span> job runs with feedback.</div>
-      <label style="display:block;margin-top:10px;font-size:13px"><input type="checkbox" id="rv_show_judged"> also show the ones already judged</label>
+      <div class="sub">Anomalies the pods in the cluster flagged that nobody has judged yet (newest first, from the latest 1000 logged predictions). Press <b>Details</b> to see why a reading was flagged (the reading, the scores, the history). <b>Real label (demo)</b> is the truth for readings sent by the Demo tab or the production agent, which replay labelled data (blank for anything else, and for readings the agent sent before it was restarted). Press <b>Real</b> if the alert was a true anomaly, <b>False alarm</b> if the machine was fine. Verdicts are stored in the cluster database and become training data the next time the <span class="mono">devsecmlops-model</span> job runs with feedback.</div>
+      <label style="display:block;margin-top:10px;font-size:13px"><input type="checkbox" id="rv_show_judged" style="width:auto;display:inline;margin-right:6px"> also show the ones already judged</label>
       <div id="review_body"><div class="hint">Open this tab to load.</div></div>
     </div>
   </div>
@@ -317,8 +317,9 @@
   const CT_VERDICT={TP:"true_positive",TN:"true_negative",FP:"false_positive",FN:"false_negative"};
   const CT_JSON={"Content-Type":"application/json"};
   function ctEsc(s){ return String(s==null?"—":s).replace(/[&<>"]/g,function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
-  async function predictLogged(body){
-    try{ return await getJSON(API+"/ui/cluster/predict",{method:"POST",headers:CT_JSON,body:JSON.stringify(body)}); }
+  async function predictLogged(body,truth){
+    const logged=truth?Object.assign({},body,truth):body;
+    try{ return await getJSON(API+"/ui/cluster/predict",{method:"POST",headers:CT_JSON,body:JSON.stringify(logged)}); }
     catch(e){ console.debug("cluster API unavailable, using the local API (prediction not logged)", e); return await getJSON(API+"/predict",{method:"POST",headers:CT_JSON,body:JSON.stringify(body)}); }
   }
   async function sendVerdict(predictionId,verdict,notes){
@@ -372,14 +373,67 @@
     catch(e){ body.innerHTML='<div class="hint" style="color:var(--red)">Cluster API unreachable or database down: '+ctEsc(e.message)+'</div>'; return; }
     if(!d.count){ body.innerHTML='<div class="hint">Nothing to review: '+ctEsc(d.scanned)+' recent predictions scanned, no unjudged anomaly. Send traffic from the Demo tab or wait for the production agent, then refresh.</div>'; return; }
     let h='<div class="hint" style="margin-top:10px">'+ctEsc(d.count)+' anomaly(ies) shown, '+ctEsc(d.scanned)+' recent predictions scanned.</div>';
-    h+='<table><thead><tr><th>When</th><th>Machine</th><th>Model</th><th>Cause given</th><th>P(normal)</th><th>Judge</th></tr></thead><tbody>';
-    d.anomalies.forEach(function(x){
+    RV_ROWS=d.anomalies;
+    h+='<table><thead><tr><th>When</th><th>Machine</th><th>Model</th><th>Cause given</th><th>P(normal)</th><th>Real label (demo)</th><th>Judge</th><th></th></tr></thead><tbody>';
+    d.anomalies.forEach(function(x,i){
       const p=(typeof x.p_normal==="number")?x.p_normal.toFixed(3):"—";
       const cell=x.verdict?'<span class="tag norm">'+ctEsc(String(x.verdict).replace("_"," "))+'</span>'
         :'<button type="button" class="btn small" data-rvjudge="true_positive" data-pid="'+ctEsc(x.id)+'">Real</button> <button type="button" class="btn sec small" data-rvjudge="false_positive" data-pid="'+ctEsc(x.id)+'">False alarm</button>';
-      h+='<tr><td class="mono">'+ctEsc(x.timestamp)+'</td><td class="mono">'+ctEsc(x.machine)+'</td><td class="mono">'+ctEsc(x.model_version)+'</td><td>'+ctEsc(x.cause)+'</td><td class="mono">'+p+'</td><td>'+cell+'</td></tr>';
+      h+='<tr><td class="mono">'+ctEsc(x.timestamp)+'</td><td class="mono">'+ctEsc(x.machine)+'</td><td class="mono">'+ctEsc(x.model_version)+'</td><td>'+ctEsc(x.cause)+'</td><td class="mono">'+p+'</td><td>'+rvReal(x)+'</td><td>'+cell+'</td><td><button type="button" class="btn sec small" data-rvdetail="'+i+'">Details</button></td></tr>';
+      h+='<tr style="display:none"><td colspan="8"></td></tr>';
     });
     body.innerHTML=h+'</tbody></table>';
+  }
+  let RV_ROWS=[];
+  function rvNum(v,digits){ return (typeof v==="number")?v.toFixed(digits):"—"; }
+  function rvReal(x){
+    if(!x.real){ return '<span class="hint">not recorded</span>'; }
+    if(x.real.label===1){ return '<span class="tag anom">anomaly'+(x.real.cause?' · '+ctEsc(x.real.cause):'')+'</span><div class="hint">✓ the alert was right</div>'; }
+    return '<span class="tag norm">normal</span><div class="hint">✗ false alarm</div>';
+  }
+  function rvPairs(obj,digits){
+    if(!obj){ return '<div class="hint">not stored for this reading</div>'; }
+    return Object.keys(obj).map(function(k){ return kv(ctEsc(k),ctEsc(typeof obj[k]==="number"?rvNum(obj[k],digits):obj[k])); }).join("");
+  }
+  function rvZ(obj){
+    if(!obj){ return '<div class="hint">not stored for this reading</div>'; }
+    return Object.keys(obj).map(function(k){
+      const z=obj[k], far=(typeof z==="number"&&Math.abs(z)>=3);
+      return kv(ctEsc(k),ctEsc(rvNum(z,2))+(far?' <span class="tag anom">far</span>':''));
+    }).join("");
+  }
+  function rvHistory(h){
+    if(!h){ return '<div class="hint">no history was sent: the 6-feature fallback model scored this reading</div>'; }
+    return Object.keys(h).map(function(k){ return kv(ctEsc(k),ctEsc((h[k]||[]).map(function(v){ return rvNum(v,1); }).join(" → "))); }).join("");
+  }
+  function rvDetails(x){
+    const p=x.p_normal, t=x.threshold, byClf=x.flagged_by==="classifier";
+    let why=kv("flagged by",byClf?"the classifier (XGBoost)":"the safety net (IsolationForest) only");
+    why+=kv("P(normal)",ctEsc(rvNum(p,4)));
+    why+=kv("decision threshold",ctEsc(rvNum(t,2)));
+    if(typeof p==="number"&&typeof t==="number"){ why+=kv("margin",ctEsc(rvNum(t-p,4))+(p<t?" under the threshold: flagged":" above the threshold: the classifier alone would not flag it")); }
+    why+=kv("classifier cause",ctEsc(x.xgb_cause))+kv("cause given",ctEsc(x.cause))+kv("IsolationForest score",ctEsc(rvNum(x.iso_score,4)));
+    why+=kv("model",ctEsc(x.model_version))+kv("machine type",ctEsc(x.machine_type))+kv("time window",ctEsc(x.window))+kv("prediction id",ctEsc(x.id));
+    let real="";
+    if(x.real){
+      const ok=(x.real.label===1);
+      real=sectionTitle("Real label ("+ctEsc(x.real.source||"demo")+")")+kv("truth",ok?"anomaly"+(x.real.cause?" · "+ctEsc(x.real.cause):""):"normal")+kv("the model was",ok?"right (true alert)":"wrong (false alarm)");
+    }
+    let h='<div style="padding:8px 4px">';
+    h+=sectionTitle("Why it was flagged")+why;
+    h+='<div class="hint">The classifier flags a reading when P(normal) is below the threshold. The IsolationForest safety net flags unusual readings on its own; either one is enough (OR rule).</div>';
+    h+=sectionTitle("The reading received")+rvPairs(x.metrics,1);
+    h+=sectionTitle("Distance from this machine\'s normal (z-scores)")+rvZ(x.features);
+    h+='<div class="hint">How many standard deviations each value is from this machine\'s usual value for this time of day; 3 or more is far.</div>';
+    h+=sectionTitle("Recent history (oldest → newest)")+rvHistory(x.history);
+    return h+real+'</div>';
+  }
+  function rvToggle(btn){
+    const row=btn.closest("tr").nextElementSibling;
+    if(!row.firstElementChild.innerHTML){ row.firstElementChild.innerHTML=rvDetails(RV_ROWS[Number(btn.dataset.rvdetail)]); }
+    const open=row.style.display==="none";
+    row.style.display=open?"":"none";
+    btn.textContent=open?"Hide":"Details";
   }
   async function reviewJudge(btn){
     const cell=btn.parentElement;
@@ -817,7 +871,7 @@
       try{
         const body={machine:s.machine,hour:s.hour,metrics:s.metrics};
         if(s.history){ body.history=s.history; }
-        const d=await predictLogged(body);
+        const d=await predictLogged(body,{true_label:isAnom?1:0,true_cause:s.true_cause});
         const msTaken=Math.round(performance.now()-t0);
         const predicted=d.is_anomaly===1;
         RESULTS.unshift({time:new Date().toLocaleTimeString(),machine:s.machine,truth:isAnom?"anomaly":"normal",predicted:predicted?"anomaly":"normal",cause:d.likely_cause||"—",verdict:verdictOf(isAnom,predicted),ms:msTaken,detail:d});
@@ -907,7 +961,7 @@
   document.getElementById("btnRefreshCt").addEventListener("click", loadCt);
   document.getElementById("btnRefreshReview").addEventListener("click", loadReview);
   document.getElementById("rv_show_judged").addEventListener("change", loadReview);
-  document.getElementById("review_body").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.rvjudge!==undefined){ reviewJudge(t); } });
+  document.getElementById("review_body").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.rvjudge!==undefined){ reviewJudge(t); } if(t.dataset.rvdetail!==undefined){ rvToggle(t); } });
   document.getElementById("op_rbody").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.opjudge!==undefined){ opJudge(t); } });
   document.getElementById("resultsTable").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.detail!==undefined){ toggleDetail(Number(t.dataset.detail)); } if(t.dataset.page!==undefined){ gotoPage(Number(t.dataset.page)); } if(t.dataset.judge!==undefined){ const p=t.dataset.judge.split("|"); judgeRow(Number(p[0]),p[1]); } });
   await refreshStatus();
