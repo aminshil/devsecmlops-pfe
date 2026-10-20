@@ -41,6 +41,7 @@
       ENABLE_OPS_UI=1
       OPS_UI_USER={{ ops_ui_user }}
       OPS_UI_PASSWORD={{ ops_ui_password }}
+      {{ ('FEEDBACK_TOKEN=' ~ feedback_token) if (feedback_token | length > 0) else '' }}
   become: true
   no_log: true
 

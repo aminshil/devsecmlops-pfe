@@ -1,0 +1,10 @@
+---
+# ansible-lint (pip install ansible-lint; run from this folder:  ansible-lint site.yml)
+# Result at the time of writing: no correctness findings, only two style rules, skipped on purpose:
+#   var-naming[no-role-prefix]  26 role-local `register:` names; renaming them all buys nothing and
+#                               risks breaking references.
+#   yaml[line-length]           two long command lines.
+profile: basic
+skip_list:
+  - var-naming[no-role-prefix]
+  - yaml[line-length]

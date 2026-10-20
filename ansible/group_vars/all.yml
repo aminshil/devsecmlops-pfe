@@ -25,6 +25,8 @@ bin_kubectl: /usr/local/bin/kubectl
 grafana_admin_password: "{{ lookup('ansible.builtin.env', 'GRAFANA_ADMIN_PASSWORD') }}"
 ops_ui_user: "{{ lookup('ansible.builtin.env', 'OPS_UI_USER') | default('operator', true) }}"
 ops_ui_password: "{{ lookup('ansible.builtin.env', 'OPS_UI_PASSWORD') }}"
+# Optional: protects POST /feedback on the cluster API and the control panel (empty = open, as in the demo)
+feedback_token: "{{ lookup('ansible.builtin.env', 'FEEDBACK_TOKEN') }}"
 kubeconfig_path: /home/pfe/.kube/config
 minikube_home: /home/pfe/.minikube
 minio_root_user: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"

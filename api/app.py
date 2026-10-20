@@ -1676,6 +1676,26 @@ def ui_cluster_feedback(prediction_id: str, body: _ClusterVerdict):
         raise _HTTPException(status_code=502, detail=str(e)) from e
 
 
+@app.get("/ui/cluster/review", responses={502: _CLUSTER_DOWN})
+def ui_cluster_review(limit: int = 1000, include_judged: bool = False):
+    """Anomalies the cluster API flagged recently, newest first, for the Review tab. By default only
+    those no operator has judged yet. Scans the latest `limit` logged predictions (1-1000)."""
+    limit = min(max(int(limit), 1), 1000)
+    try:
+        data = _cluster_call("GET", f"/predictions/recent?limit={limit}", timeout=30)
+    except _ClusterError as e:
+        raise _HTTPException(status_code=502, detail=str(e)) from e
+    preds = data.get("predictions") or []
+    rows = [{
+        "id": p.get("id"), "timestamp": p.get("timestamp"), "machine": p.get("machine"),
+        "model_version": p.get("model_version"), "cause": p.get("final_cause"),
+        "p_normal": p.get("xgb_p_normal"), "threshold": p.get("predict_threshold"),
+        "verdict": p.get("operator_verdict"),
+    } for p in preds
+        if p.get("final_is_anomaly") == 1 and (include_judged or not p.get("operator_verdict"))]
+    return {"scanned": len(preds), "count": len(rows), "anomalies": rows}
+
+
 def _ct_feedback() -> dict:
     out = {"reachable": False, "error": "", "total_predictions": None, "by_verdict": {}, "judged": 0, "pending": 0}
     try:

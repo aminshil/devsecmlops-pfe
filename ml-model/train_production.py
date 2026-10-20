@@ -20,13 +20,15 @@ path by which a model reaches production:
      scripts/export_feedback_dataset.py) is appended with features recomputed
      from the stored raw metrics and history using the CANDIDATE's baselines.
   3. Evaluate the candidate AND the current production artifacts with the
-     same code, on the same independent test set, using the serving decision
+     same code, on the same independent test set (reported), using the serving decision
      rule (ml-model/decision.py), each at its OWN serving threshold: with --promote the
      candidate is evaluated at the threshold selected for it on the independent
      validation fleet (step 2b), production at its currently deployed one. The guardrail
      therefore compares what each model would actually serve, not two models at one
      number chosen for only one of them.
-  4. Guardrail: the candidate is promotable only if, for both the v4 (primary)
+  4. Guardrail, decided on the independent VALIDATION fleet when --promote is given (on the
+     test set only as a preview when it is not), so the set that supplies the headline score
+     does not also decide promotion: the candidate is promotable only if, for both the v4 (primary)
      and v3 (fallback) serving paths, F1 does not drop by more than
      --max-f1-drop and no cause's recall drops by more than --max-recall-drop.
   5. --promote (only if the guardrail passes): write the artifacts to models/,
@@ -343,6 +345,20 @@ def _select_for_promotion(args, val_fp: dict) -> dict:
     return selection
 
 
+def guardrail_on_validation(args, cand_threshold: float, has_prod: bool) -> tuple[dict, dict | None]:
+    """Evaluate the candidate and production on the independent VALIDATION fleet, for the
+    promotion guardrail. The test set is then only reported, never used to decide: a
+    gate that reads the same rows as the headline score is partly grading itself.
+    Both models sit at their own serving threshold; both thresholds were chosen on this
+    fleet, so any optimism it carries is the same on both sides of the comparison."""
+    val = load_fleet(args.val)
+    log(f"guardrail data: validation fleet ({len(val):,} rows)")
+    cand = evaluate_set(args.work_dir, val, cand_threshold)
+    prod = evaluate_set(args.models_dir, val, args.threshold) if has_prod else None
+    del val
+    return cand, prod
+
+
 def guardrail(cand: dict, prod: dict, max_f1_drop: float, max_recall_drop: float) -> tuple[bool, list[str]]:
     reasons = []
     for path in ("v4", "v3"):
@@ -537,7 +553,7 @@ def record_run(args, run: dict) -> None:
         log("not promoted: guardrail rejected the candidate")
     manifest["history"].append({k: run[k] for k in (
         "finished_at", "git_commit", "datasets", "feedback", "guardrail_passed",
-        "guardrail_reasons", "mlflow_run_id")} | {
+        "guardrail_reasons", "guardrail_set", "mlflow_run_id")} | {
         # approved by the guardrail and written to the working tree; the production entry that
         # CI deploys only changes once the CI model gate passes and Jenkinsfile.model commits it
         "promoted_to_workspace": run["promoted"],
@@ -622,18 +638,29 @@ def run_pipeline(args) -> int:
         cand_threshold = float(selection["selected"]["threshold"])
     log(f"candidate evaluated at threshold {cand_threshold}, production at its own {args.threshold}")
 
+    has_prod = all((args.models_dir / v).exists() for v in ARTIFACTS.values())
+    # With --promote the guardrail decides on the validation fleet (independent of the test
+    # set that supplies the headline score). Without --promote there is no validated
+    # validation fleet, so the verdict is a preview computed on the test set.
+    guard_set, guard_cand, guard_prod = "test", None, None
+    if args.promote:
+        guard_set = "validation"
+        guard_cand, guard_prod = guardrail_on_validation(args, cand_threshold, has_prod)
+
     test = load_fleet(args.test)
     datasets["test"]["rows"] = int(len(test))
     cand_eval = evaluate_set(args.work_dir, test, cand_threshold)
-    log(f"candidate  v4 F1={cand_eval['v4']['f1']:.4f}  v3 F1={cand_eval['v3']['f1']:.4f}")
-    has_prod = all((args.models_dir / v).exists() for v in ARTIFACTS.values())
+    log(f"candidate  v4 F1={cand_eval['v4']['f1']:.4f}  v3 F1={cand_eval['v3']['f1']:.4f}  (test set, reported)")
     prod_eval = evaluate_set(args.models_dir, test, args.threshold) if has_prod else None
     if prod_eval:
-        log(f"production v4 F1={prod_eval['v4']['f1']:.4f}  v3 F1={prod_eval['v3']['f1']:.4f}")
-        passed, reasons = guardrail(cand_eval, prod_eval, args.max_f1_drop, args.max_recall_drop)
+        log(f"production v4 F1={prod_eval['v4']['f1']:.4f}  v3 F1={prod_eval['v3']['f1']:.4f}  (test set, reported)")
+        if guard_set == "validation":
+            passed, reasons = guardrail(guard_cand, guard_prod, args.max_f1_drop, args.max_recall_drop)
+        else:
+            passed, reasons = guardrail(cand_eval, prod_eval, args.max_f1_drop, args.max_recall_drop)
     else:
         passed, reasons = True, ["no production artifacts present -- initial training"]
-    log("GUARDRAIL " + ("PASS" if passed else "REJECT: " + "; ".join(reasons)))
+    log(f"GUARDRAIL (decided on the {guard_set} set) " + ("PASS" if passed else "REJECT: " + "; ".join(reasons)))
 
     run = {
         "started_at": started.isoformat(),
@@ -649,6 +676,9 @@ def run_pipeline(args) -> int:
         "production_evaluation": prod_eval,
         "guardrail_passed": passed,
         "guardrail_reasons": reasons,
+        "guardrail_set": guard_set,
+        "candidate_guardrail_evaluation": guard_cand,
+        "production_guardrail_evaluation": guard_prod,
         "threshold_selection": selection,
         "promoted": False,
         "mlflow_run_id": None,

@@ -1,0 +1,33 @@
+# NetworkPolicy for the ml-serving namespace.
+#
+# What it does: PostgreSQL accepts connections ONLY from the anomaly-api pods.
+# Everything else in the cluster (any other pod, a compromised neighbour) can no longer
+# reach the feedback database on 5432. Pod-to-pod traffic is otherwise left as it is:
+# the API stays open to the NodePort, Prometheus and Jenkins, and egress is unrestricted,
+# so this adds a boundary without touching serving or the CI/CD paths.
+#
+# Not affected: `kubectl exec` / `kubectl logs` (they go through the API server, not the
+# pod network), the API's own init container (it runs inside the API pod), the NodePort.
+#
+# It only has an effect if the cluster's network plugin enforces NetworkPolicy; verify with
+# the two commands in docs/INFRASTRUCTURE_SETUP.md ("NetworkPolicy check").
+# Roll back with:  kubectl delete -f kubernetes/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-only-from-api
+  namespace: ml-serving
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: anomaly-api
+      ports:
+        - protocol: TCP
+          port: 5432

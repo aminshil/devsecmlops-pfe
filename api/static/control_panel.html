@@ -115,6 +115,7 @@
     <button type="button" data-tab="infra">Infrastructure</button>
     <button type="button" data-tab="training">Training</button>
     <button type="button" data-tab="ct">Continuous training</button>
+    <button type="button" data-tab="review">Review</button>
     <button type="button" data-tab="summary">Project</button>
   </div>
 
@@ -275,6 +276,15 @@
     </div>
   </div>
 
+  <div class="tabpage" id="review">
+    <div class="card" style="margin-bottom:16px">
+      <h3>Review flagged anomalies <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshReview">↻ Refresh</button></h3>
+      <div class="sub">Anomalies the pods in the cluster flagged that nobody has judged yet (newest first, from the latest 1000 logged predictions). Press <b>Real</b> if the alert was a true anomaly, <b>False alarm</b> if the machine was fine. Verdicts are stored in the cluster database and become training data the next time the <span class="mono">devsecmlops-model</span> job runs with feedback.</div>
+      <label style="display:block;margin-top:10px;font-size:13px"><input type="checkbox" id="rv_show_judged"> also show the ones already judged</label>
+      <div id="review_body"><div class="hint">Open this tab to load.</div></div>
+    </div>
+  </div>
+
   <div class="tabpage" id="summary">
     <div class="card">
       <h3>Project summary</h3>
@@ -353,6 +363,30 @@
     try{ await sendVerdict(btn.dataset.pid,btn.dataset.opjudge,"control-panel operator tab"); note.textContent="recorded: "+btn.dataset.opjudge.replace("_"," "); }
     catch(e){ note.textContent="not recorded: "+e.message; }
   }
+  async function loadReview(){
+    const body=document.getElementById("review_body");
+    body.innerHTML='<div class="hint"><span class="spin"></span> loading…</div>';
+    const judged=document.getElementById("rv_show_judged").checked;
+    let d;
+    try{ d=await getJSON(API+"/ui/cluster/review?include_judged="+(judged?"true":"false")); }
+    catch(e){ body.innerHTML='<div class="hint" style="color:var(--red)">Cluster API unreachable or database down: '+ctEsc(e.message)+'</div>'; return; }
+    if(!d.count){ body.innerHTML='<div class="hint">Nothing to review: '+ctEsc(d.scanned)+' recent predictions scanned, no unjudged anomaly. Send traffic from the Demo tab or wait for the production agent, then refresh.</div>'; return; }
+    let h='<div class="hint" style="margin-top:10px">'+ctEsc(d.count)+' anomaly(ies) shown, '+ctEsc(d.scanned)+' recent predictions scanned.</div>';
+    h+='<table><thead><tr><th>When</th><th>Machine</th><th>Model</th><th>Cause given</th><th>P(normal)</th><th>Judge</th></tr></thead><tbody>';
+    d.anomalies.forEach(function(x){
+      const p=(typeof x.p_normal==="number")?x.p_normal.toFixed(3):"—";
+      const cell=x.verdict?'<span class="tag norm">'+ctEsc(String(x.verdict).replace("_"," "))+'</span>'
+        :'<button type="button" class="btn small" data-rvjudge="true_positive" data-pid="'+ctEsc(x.id)+'">Real</button> <button type="button" class="btn sec small" data-rvjudge="false_positive" data-pid="'+ctEsc(x.id)+'">False alarm</button>';
+      h+='<tr><td class="mono">'+ctEsc(x.timestamp)+'</td><td class="mono">'+ctEsc(x.machine)+'</td><td class="mono">'+ctEsc(x.model_version)+'</td><td>'+ctEsc(x.cause)+'</td><td class="mono">'+p+'</td><td>'+cell+'</td></tr>';
+    });
+    body.innerHTML=h+'</tbody></table>';
+  }
+  async function reviewJudge(btn){
+    const cell=btn.parentElement;
+    cell.innerHTML='<span class="spin"></span>';
+    try{ await sendVerdict(btn.dataset.pid,btn.dataset.rvjudge,"control-panel review tab"); cell.innerHTML='<span class="tag norm">'+ctEsc(btn.dataset.rvjudge.replace("_"," "))+'</span>'; }
+    catch(e){ cell.innerHTML='<span class="hint" style="color:var(--red)">not recorded: '+ctEsc(e.message)+'</span>'; }
+  }
   function ctHistoryTable(rows){
     if(!rows.length){ return '<div class="hint">No retraining run recorded yet.</div>'; }
     let h='<table><thead><tr><th>When</th><th>Commit</th><th>Candidate v4 F1</th><th>Threshold (cand / prod)</th><th>Guardrail</th><th>Promoted</th><th>Feedback files</th><th>MLflow run</th></tr></thead><tbody>';
@@ -390,6 +424,7 @@
     const page=document.getElementById(id); if(page){ page.classList.add("on"); }
     if(id==="status"){ refreshStatus(); loadFixLog(); }
     if(id==="ct"){ loadCt(); }
+    if(id==="review"){ loadReview(); }
     if(id==="infra"){ loadInfra(); loadPipeline(); }
     if(id==="training"){ loadDatasets(); loadRuns(); }
     if(id==="summary"){ loadSummary(); }
@@ -870,6 +905,9 @@
   document.getElementById("btnJudgeAll").addEventListener("click", function(){ judgeBatch(false); });
   document.getElementById("btnJudgeFlagged").addEventListener("click", function(){ judgeBatch(true); });
   document.getElementById("btnRefreshCt").addEventListener("click", loadCt);
+  document.getElementById("btnRefreshReview").addEventListener("click", loadReview);
+  document.getElementById("rv_show_judged").addEventListener("change", loadReview);
+  document.getElementById("review_body").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.rvjudge!==undefined){ reviewJudge(t); } });
   document.getElementById("op_rbody").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.opjudge!==undefined){ opJudge(t); } });
   document.getElementById("resultsTable").addEventListener("click", function(ev){ const t=ev.target; if(t.dataset.detail!==undefined){ toggleDetail(Number(t.dataset.detail)); } if(t.dataset.page!==undefined){ gotoPage(Number(t.dataset.page)); } if(t.dataset.judge!==undefined){ const p=t.dataset.judge.split("|"); judgeRow(Number(p[0]),p[1]); } });
   await refreshStatus();

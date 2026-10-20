@@ -124,3 +124,47 @@ def test_ct_summarises_feedback_and_history_newest_first(client, cluster, monkey
 
 def test_the_dead_register_endpoint_is_gone(client):
     assert client.post("/ui/register", auth=CREDS, json={"run_id": "x"}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Review tab: unjudged anomalies from the cluster
+# ---------------------------------------------------------------------------
+def _pred(i, anomaly, verdict=None, cause="cpu_spike"):
+    return {"id": f"id-{i}", "timestamp": f"2026-10-20T01:0{i}:00", "machine": f"web-0{i}", "model_version": "telecom_v4_rolling",
+            "final_is_anomaly": anomaly, "final_cause": cause if anomaly else "normal",
+            "xgb_p_normal": 0.02 if anomaly else 0.99, "predict_threshold": 0.91, "operator_verdict": verdict,
+            "features_json": "{}", "raw_metrics_json": "{}"}
+
+
+def test_review_needs_the_ops_credentials(client, cluster):
+    assert client.get("/ui/cluster/review").status_code == 401
+    assert cluster.calls == []
+
+
+def test_review_lists_only_unjudged_anomalies_by_default(client, cluster):
+    cluster.answers[("GET", "/predictions/recent?limit=1000")] = {"predictions": [
+        _pred(1, 1), _pred(2, 0), _pred(3, 1, verdict="true_positive"), _pred(4, 1, cause="unknown (flagged by safety-net model only)")]}
+    r = client.get("/ui/cluster/review", auth=CREDS)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["scanned"] == 4 and body["count"] == 2
+    assert [a["id"] for a in body["anomalies"]] == ["id-1", "id-4"]
+    assert set(body["anomalies"][0]) == {"id", "timestamp", "machine", "model_version", "cause", "p_normal", "threshold", "verdict"}
+    assert "features_json" not in body["anomalies"][0]                       # raw features are not sent to the browser
+    shown = client.get("/ui/cluster/review?include_judged=true", auth=CREDS).json()
+    assert [a["id"] for a in shown["anomalies"]] == ["id-1", "id-3", "id-4"]
+
+
+def test_review_limit_is_clamped_and_cluster_errors_are_502(client, cluster):
+    cluster.answers[("GET", "/predictions/recent?limit=1000")] = {"predictions": []}
+    assert client.get("/ui/cluster/review?limit=99999", auth=CREDS).json()["count"] == 0
+    cluster.answers[("GET", "/predictions/recent?limit=1000")] = app_module._ClusterError("cluster API unreachable")
+    r = client.get("/ui/cluster/review", auth=CREDS)
+    assert r.status_code == 502 and "unreachable" in r.json()["detail"]
+
+
+def test_review_tab_is_in_the_page_and_uses_the_existing_verdict_route():
+    html = (ROOT / "api" / "static" / "control_panel.html").read_text()
+    assert 'data-tab="review"' in html and 'id="review"' in html
+    assert "/ui/cluster/review" in html and "data-rvjudge" in html
+    assert html.index('data-tab="ct"') < html.index('data-tab="review"') < html.index('data-tab="summary"')

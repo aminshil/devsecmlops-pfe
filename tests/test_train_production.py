@@ -255,3 +255,40 @@ def test_threshold_fallback_matches_the_api():
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from api.app import FALLBACK_THRESHOLD
     assert tp.FALLBACK_THRESHOLD == FALLBACK_THRESHOLD
+
+
+def test_promotion_guardrail_is_decided_on_the_validation_fleet(promoted, tiny_fleet, tmp_path, monkeypatch):
+    """With --promote the guardrail reads the validation fleet, not the test set that
+    supplies the headline score; the test-set evaluation is still reported."""
+    assert promoted["report"]["guardrail_set"] == "validation"
+    assert promoted["report"]["candidate_guardrail_evaluation"] is not None
+    assert promoted["report"]["production_guardrail_evaluation"] is None      # initial training
+
+    models = tmp_path / "models"
+    shutil.copytree(promoted["models"], models)
+    seen = {}
+
+    def spy(cand, prod, *a, **k):
+        seen["cand"], seen["prod"] = cand, prod
+        return True, []
+    monkeypatch.setattr(tp, "guardrail", spy)
+    report = tmp_path / "r.json"
+    assert tp.main(_args(tiny_fleet, models, tmp_path / "w", "--promote", "--report", str(report))) == 0
+    run = json.loads(report.read_text())
+    assert run["guardrail_set"] == "validation"
+    assert seen["cand"] == run["candidate_guardrail_evaluation"]
+    assert seen["prod"] == run["production_guardrail_evaluation"]
+    # the reported (headline) evaluation is the test set's, a separate computation
+    assert run["candidate_evaluation"] is not None
+    history = json.loads((models / "manifest.json").read_text())["history"]
+    assert history[-1]["guardrail_set"] == "validation"
+
+
+def test_guardrail_without_promote_is_a_test_set_preview(tiny_fleet, promoted, tmp_path, monkeypatch):
+    models = tmp_path / "models"
+    shutil.copytree(promoted["models"], models)
+    report = tmp_path / "r.json"
+    tp.main(_args(tiny_fleet, models, tmp_path / "w", "--report", str(report)))
+    run = json.loads(report.read_text())
+    assert run["guardrail_set"] == "test"
+    assert run["candidate_guardrail_evaluation"] is None

@@ -82,6 +82,15 @@ spec:
                   key: POSTGRES_DB
             - name: DATABASE_URL
               value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres.ml-serving.svc.cluster.local:5432/$(POSTGRES_DB)"
+            # Optional access token for POST /feedback. The Secret is created only when
+            # FEEDBACK_TOKEN is set when the Ansible playbook runs; without it the variable
+            # is simply absent and /feedback stays open (the demo default).
+            - name: FEEDBACK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: feedback-token
+                  key: token
+                  optional: true
           # v3: XGBoost primary model baked into the image (3.6MB) --
           # no MinIO fetch needed, so MinIO env vars removed. Lower
           # resource footprint reflects XGBoost's much smaller size.

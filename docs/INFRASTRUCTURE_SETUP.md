@@ -250,6 +250,20 @@ The README states the expected results.
 | Change training size or the recall target | Edit **only** `config/model_policy.json` |
 | Rotate credentials | Change the values in `/root/.devsecmlops.env`, re-run the playbook (this rewrites the root-only files and restarts the units), then change Grafana's and SonarQube's passwords in their UIs |
 
+### Optional hardening (written, apply by hand; not part of the default run)
+
+**NetworkPolicy check.** `kubernetes/networkpolicy.yaml` lets only the API pods reach PostgreSQL. It takes effect only if the cluster's network plugin enforces policies, so prove it:
+
+```bash
+kubectl apply -f kubernetes/networkpolicy.yaml
+kubectl -n ml-serving run np-test --rm -i --restart=Never --image=postgres:16-alpine -- pg_isready -h postgres -t 5    # expect: no response (blocked)
+kubectl -n ml-serving exec deploy/anomaly-api -c api -- python3 -c "import socket;socket.create_connection(('postgres',5432),3);print('api reaches postgres')"   # expect: api reaches postgres
+```
+
+If the first command still answers "accepting connections", the plugin does not enforce policies: the file does nothing, so delete it (`kubectl delete -f kubernetes/networkpolicy.yaml`) and do not claim it in the defense.
+
+**Vault file for the production profile:** `scripts/make_production_secrets.sh` (random password, encrypted, refuses to overwrite). **Feedback token:** `export FEEDBACK_TOKEN=...` before the playbook creates the `feedback-token` Secret and gives the control panel the same value; without it `/feedback` stays open. **CI settings as files:** `python scripts/ci_config.py export` (read-only) writes `ci-config/` from the running Jenkins and SonarQube; `restore --yes` replays the jobs. Both need `JENKINS_USER`, `JENKINS_TOKEN` and `SONAR_TOKEN`; the export script is tested against a fake server only.
+
 ---
 
 ## 9. Known gaps for a clean-machine setup
