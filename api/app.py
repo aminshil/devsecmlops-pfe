@@ -1526,6 +1526,7 @@ def ui_sample(n: int = 20):
                 "machine": cur["machine"],
                 "type": cur.get("type", ""),
                 "hour": _hr,
+                "timestamp": _ts,
                 "metrics": {
                     "cpu": float(cur["cpu"]), "ram": float(cur["ram"]),
                     "network": float(cur["network"]), "disk_io": float(cur["disk_io"]),
@@ -1646,6 +1647,7 @@ class _ClusterPredict(BaseModel):
     # Demo sources only: the reading's true label. Never sent to the cluster; kept for the Review tab.
     true_label: Literal[0, 1] | None = None
     true_cause: str | None = None
+    true_time: str | None = None      # the dataset row's own timestamp
 
 
 class _ClusterVerdict(BaseModel):
@@ -1657,11 +1659,11 @@ class _ClusterVerdict(BaseModel):
 def ui_cluster_predict(body: _ClusterPredict):
     """Score one reading on the cluster API (v4 when history is supplied); it logs the prediction."""
     try:
-        result = _cluster_call("POST", "/predict", body.model_dump(exclude_none=True, exclude={"true_label", "true_cause"}))
+        result = _cluster_call("POST", "/predict", body.model_dump(exclude_none=True, exclude={"true_label", "true_cause", "true_time"}))
     except _ClusterError as e:
         raise _HTTPException(status_code=502, detail=str(e)) from e
     if body.true_label is not None and result.get("is_anomaly") == 1:
-        _demo_labels.record(result.get("prediction_id"), body.true_label, body.true_cause, "demo tab")
+        _demo_labels.record(result.get("prediction_id"), body.true_label, body.true_cause, "demo tab", body.true_time)
     return result
 
 
@@ -1724,7 +1726,8 @@ def _review_row(p: dict, real: dict | None) -> dict:
         "metrics": _json_dict(p.get("raw_metrics_json")),
         "features": _json_dict(p.get("features_json")),
         "history": _json_dict(p.get("history_json")),
-        "real": ({"label": real.get("label"), "cause": real.get("cause") or "", "source": real.get("source") or ""}
+        "real": ({"label": real.get("label"), "cause": real.get("cause") or "", "source": real.get("source") or "",
+                  "time": real.get("time") or ""}
                  if real else None),
     }
 

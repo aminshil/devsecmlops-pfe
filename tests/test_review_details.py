@@ -78,10 +78,10 @@ def test_label_store_drops_oldest_lines_when_too_big(monkeypatch):
 
 def test_demo_predict_strips_the_truth_and_records_it_for_flagged_readings(client, cluster):
     cluster.answers[("POST", "/predict")] = {"prediction_id": PID, "is_anomaly": 1}
-    body = {"machine": "web-01", "hour": 14, "metrics": {"cpu": 30}, "true_label": 1, "true_cause": "cpu_spike"}
+    body = {"machine": "web-01", "hour": 14, "metrics": {"cpu": 30}, "true_label": 1, "true_cause": "cpu_spike", "true_time": "2026-01-01 03:00:00"}
     assert client.post("/ui/cluster/predict", auth=CREDS, json=body).status_code == 200
     assert cluster.calls == [("POST", "/predict", {"machine": "web-01", "hour": 14, "metrics": {"cpu": 30}})]
-    assert demo_labels.load()[PID]["cause"] == "cpu_spike"
+    assert demo_labels.load()[PID]["cause"] == "cpu_spike" and demo_labels.load()[PID]["time"] == "2026-01-01 03:00:00"
 
 
 def test_demo_predict_records_nothing_for_unflagged_or_unlabelled_readings(client, cluster):
@@ -110,14 +110,14 @@ def _logged(pid, **over):
 
 
 def test_review_returns_details_and_the_real_label(client, cluster):
-    demo_labels.record(PID, 1, "cpu_spike", "demo tab")
+    demo_labels.record(PID, 1, "cpu_spike", "demo tab", "2026-01-01 03:00:00")
     cluster.answers[("GET", "/predictions/recent?limit=1000")] = {"predictions": [_logged(PID)]}
     row = client.get("/ui/cluster/review", auth=CREDS).json()["anomalies"][0]
     assert row["metrics"] == {"cpu": 97.0, "ram": 40.0} and row["features"] == {"cpu_z": 8.1}
     assert row["history"]["cpu"] == [30.0] * 10
     assert row["machine_type"] == "web" and row["window"] == "night" and row["iso_score"] == 0.61
     assert row["flagged_by"] == "classifier"
-    assert row["real"] == {"label": 1, "cause": "cpu_spike", "source": "demo tab"}
+    assert row["real"] == {"label": 1, "cause": "cpu_spike", "source": "demo tab", "time": "2026-01-01 03:00:00"}
 
 
 def test_review_without_a_recorded_label_or_with_broken_json_still_works(client, cluster):
@@ -127,6 +127,15 @@ def test_review_without_a_recorded_label_or_with_broken_json_still_works(client,
     row = client.get("/ui/cluster/review", auth=CREDS).json()["anomalies"][0]
     assert row["real"] is None and row["metrics"] is None and row["features"] is None and row["history"] is None
     assert row["flagged_by"] == "safety net"
+
+
+def test_sample_rows_carry_the_dataset_timestamp(client, monkeypatch):
+    cur = {"machine": "web-01", "type": "web", "timestamp": "2026-01-01 03:00:30", "label": "1", "anomaly_type": "cpu_spike",
+           **{c: "1.0" for c in ("cpu", "ram", "network", "disk_io", "disk_usage", "load_avg")}}
+    hist = [{"cpu": "1", "ram": "1", "load_avg": "1"}] * 10
+    monkeypatch.setattr(app_module, "_load_sample_pool", lambda: [{"cur": cur, "hist": hist}])
+    row = client.get("/ui/sample?n=1", auth=CREDS).json()["rows"][0]
+    assert row["timestamp"] == "2026-01-01 03:00:30" and row["hour"] == 3
 
 
 class _Resp:
@@ -159,4 +168,5 @@ def test_the_agent_records_the_label_of_flagged_readings_only(monkeypatch):
     got = demo_labels.load()
     assert set(got) == {PID, "id-3"}
     assert got[PID]["label"] == 1 and got[PID]["cause"] == "cpu_spike" and got[PID]["source"] == "production agent"
+    assert got[PID]["time"] == "2026-01-01 03:00:00"
     assert got["id-3"]["label"] == 0 and got["id-3"]["cause"] == "normal"

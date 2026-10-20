@@ -20,12 +20,13 @@ def labels_path() -> Path:
     return Path(os.environ.get("DEMO_LABELS_PATH") or ROOT / "data" / "demo_labels.jsonl")
 
 
-def record(prediction_id, label, cause, source) -> bool:
+def record(prediction_id, label, cause, source, reading_time=None) -> bool:
     """Append one label. Best effort: returns False instead of raising (a label is never worth a failed request)."""
     if not prediction_id or label not in (0, 1):
         return False
     line = json.dumps({"id": str(prediction_id), "label": int(label),
-                       "cause": str(cause or "")[:60], "source": str(source)[:30]}) + "\n"
+                       "cause": str(cause or "")[:60], "source": str(source)[:30],
+                       "time": str(reading_time or "")[:30]}) + "\n"
     path = labels_path()
     try:
         with _LOCK:
