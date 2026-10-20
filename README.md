@@ -1012,6 +1012,54 @@ the original 5-point design). The pipeline today:
    (`tests/test_train_production.py::test_rejected_candidate_leaves_production_untouched`)
    to be byte-identical, not just "probably fine."
 
+#### Feedback and the safety net's contamination — measured
+
+A natural question is: *since the operator judges readings, why not add those judged
+rows to the dataset and improve the unsupervised IsolationForest too — or recompute its
+`contamination`?* Measured answer: feedback retrains the **classifier only**, and the
+net's `contamination` deliberately stays tied to the base fleet. Three reasons, with
+numbers from the real feedback DB (282 judged rows at the time of writing).
+
+**1. The net is unsupervised — a verdict is a label, and the net ignores labels.** The
+only value it takes from the data is `contamination`, the base anomaly rate
+(`float(train["label"].mean())` = **0.0675**, which equals the manifest's
+`iso.contamination` exactly — the raw CSV and the shipped model agree).
+
+**2. The judged rows are a *flagged* pool, not a representative one.** Operators judge
+alerts, and a flagged reading is ~67% likely to be a true anomaly (that fraction *is* the
+detector's precision). Folding flagged feedback into `contamination` drags it from 0.0675
+toward 0.67, and the net would over-flag. Two scripts make this concrete:
+
+| judged rows added | Case A (flagged only, ~67% anomalies) | Case B (representative, 6.75%) |
+|---|---|---|
+| 10,000 | 0.0678 | 0.0675 |
+| 100,000 | 0.0709 | 0.0675 |
+| 500,000 | 0.0845 | 0.0675 |
+| 1,000,000 | 0.1005 | 0.0675 |
+
+`scripts/contamination_ab.py` prints that arithmetic from the real base rate;
+`scripts/contamination_empirical.py` does the empirical version on the actual judged rows.
+
+**3. The real feedback is far too small to matter anyway.** The 282 real judged rows change
+`contamination` by **+0.000001**. To move it you would need ~500k+ judged rows — years of
+hand-judging, since a 200-machine fleet produces ~323,000 alerts *per week* and no human
+judges that many. The only way a single week *would* move it is auto-judging every alert and
+folding it in (Case A), which pushes 0.0675 → ~0.079 and makes the net over-flag — exactly the
+bias the design avoids.
+
+**Why feedback is still safe for the classifier:** it learns `P(cause | features)`, so a
+correct (features → label) pair is valid regardless of how the row was sampled, and its
+threshold is re-selected each run on the representative validation fleet with the guardrail
+checking it there. The net has no such correction, so its base rate is kept representative.
+
+**The correct way to grow the net (future work):** a *random sample of unflagged readings as
+pseudo-normal* (representative, Case B), not the judged alerts.
+
+> **Independent validation.** The live operator verdicts reproduce the offline metrics:
+> among the real flagged judgments, precision = 34/49 = **0.69** (offline 0.6713) and
+> recall = 34/43 = **0.79** (offline 0.7979) — from a 282-row sample, so "consistent with",
+> not a tight estimate, but the demo behaves like the measured model.
+
 #### Deployment cycle after a promoted retrain
 
 A promoted retrain writes new artifacts directly; getting them served is the
