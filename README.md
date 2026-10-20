@@ -45,8 +45,8 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Served v3 fallback | F1 0.6664 · precision 0.5967 · recall 0.7546 | `models/manifest.json` |
 | Weakest cause | `cascade`, recall 0.2679 (label noise by design) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7755** · precision 0.7202 · recall 0.84. A different sample from the full test file, so it is not comparable with 0.7291 | `scripts/live_k8s_validation.py`, run on 19 October |
-| Latest green pipeline | Build `2.20.3-b106` (commit `8adaf87e`, the audit-pass code: input range checks, opt-in feedback token, stage-9 rollback): all 11 stages green, 132 tests, Quality Gate OK, 0 image vulnerabilities, smoke-tested in the live pod, which now also fails unless the alert threshold was read from the manifest | [L3 run history](#l3--cicd) |
-| Tests | 132 passing | `pytest tests/` (stage 1b) |
+| Latest green pipeline | Build `2.20.3-b107` (commit `0ea14df3`: input range checks, opt-in feedback token, stage-9 rollback, Review tab, validation-fleet guardrail): all 11 stages green, 141 tests, Quality Gate OK, 0 image vulnerabilities, smoke-tested in the live pod, which now also fails unless the alert threshold was read from the manifest | [L3 run history](#l3--cicd) |
+| Tests | 141 passing | `pytest tests/` (stage 1b) |
 | Dashboard | 30 Grafana panels, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-19: the model promoted by Jenkins `devsecmlops-model` build 8 (MLflow `241447d0…`), trained on all 17,280,000 rows of the labelled fleet, v4 F1 0.7291, threshold 0.91 selected by the pipeline, guardrail PASS, model files read back from MinIO, deployed as image `2.20.3-b103`. Before that: the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
 | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
@@ -59,7 +59,7 @@ A production-oriented anomaly detection platform for a simulated 200-machine tel
 
 The current numbers, build and deployment state are summarized in [At a glance](#at-a-glance).
 
-**Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — two SonarQube Quality Gate blocks (proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, a SonarQube server-side failure caused by the VM's disk reaching 95%, a Quality Gate block on new code (a duplicated literal in the chunked evaluation), and an image-scan block on 6 HIGH OpenSSL CVEs that Debian had already fixed but a stale cached build layer never picked up. The most recent run (build `2.20.3-b106`) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
+**Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — two SonarQube Quality Gate blocks (proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, a SonarQube server-side failure caused by the VM's disk reaching 95%, a Quality Gate block on new code (a duplicated literal in the chunked evaluation), and an image-scan block on 6 HIGH OpenSSL CVEs that Debian had already fixed but a stale cached build layer never picked up. The most recent run (build `2.20.3-b107`) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
 
 **What makes this project genuinely defensible, beyond the final metrics:**
 
@@ -1334,7 +1334,7 @@ Jenkins, `Jenkinsfile`, 11 stages, every one a real gate — a failure stops the
 Stage labels below match the Jenkins console exactly.
 
 - **1. Checkout**
-- **1b. Unit tests** — pytest, 132 tests, coverage report. Fail-fast: a broken commit stops here.
+- **1b. Unit tests** — pytest, 141 tests, coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that no deployment file carries a copy of the threshold (it is read from the manifest) and that the manifest's threshold is the evaluated one, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
@@ -2108,7 +2108,7 @@ this project.)
 
 ## Testing
 
-**132 tests** (up from 15), `pytest`, in `tests/`:
+**141 tests** (up from 15), `pytest`, in `tests/`:
 
 - `test_api.py` (38 tests) — every endpoint, input validation (NaN/inf
   rejection, physical-range rejection (cpu=150 is a 422), the opt-in feedback token, machine length, metrics count, history shape), v3/v4

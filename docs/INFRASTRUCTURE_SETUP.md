@@ -63,10 +63,10 @@ The original VM was set up at `~/devsecmlops-pfe` as root. If you use another pa
 cd /root/devsecmlops-pfe
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
-python3 -m pytest -q tests          # expect: 132 passed
+python3 -m pytest -q tests          # expect: 141 passed
 ```
 
-If `132 passed` does not appear, stop here. Nothing else will work reliably.
+If `141 passed` does not appear, stop here. Nothing else will work reliably.
 
 ---
 
