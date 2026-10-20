@@ -1028,20 +1028,57 @@ only value it takes from the data is `contamination`, the base anomaly rate
 **2. The judged rows are a *flagged* pool, not a representative one.** Operators judge
 alerts, and a flagged reading is ~67% likely to be a true anomaly (that fraction *is* the
 detector's precision). Folding flagged feedback into `contamination` drags it from 0.0675
-toward 0.67, and the net would over-flag. Two scripts make this concrete:
+toward 0.67, and the net would over-flag. The numbers below are the **verbatim output** of
+`scripts/contamination_ab.py`, which reads the real base rate from the training file and
+projects the two cases (run it to reproduce them):
 
-| judged rows added | Case A (flagged only, ~67% anomalies) | Case B (representative, 6.75%) |
-|---|---|---|
-| 10,000 | 0.0678 | 0.0675 |
-| 100,000 | 0.0709 | 0.0675 |
-| 500,000 | 0.0845 | 0.0675 |
-| 1,000,000 | 0.1005 | 0.0675 |
+```console
+$ python3 scripts/contamination_ab.py
+Base anomaly rate (true contamination): 0.0675   [measured from data/telecom_fleet_v2_labeled.csv]
+Base training fleet size:               17,280,000 rows
+Flagged-pool anomaly fraction (Case A): 0.6713   [= detector precision]
 
-`scripts/contamination_ab.py` prints that arithmetic from the real base rate;
-`scripts/contamination_empirical.py` does the empirical version on the actual judged rows.
+ judged rows added |  Case A (flagged only) |  Case B (representative)
+------------------------------------------------------------------------
+                 0 |                 0.0675 |                   0.0675
+             1,000 |                 0.0675 |                   0.0675
+            10,000 |                 0.0678 |                   0.0675
+            50,000 |                 0.0692 |                   0.0675  <- inflating
+           100,000 |                 0.0709 |                   0.0675  <- inflating
+           500,000 |                 0.0845 |                   0.0675  <- inflating
+         1,000,000 |                 0.1005 |                   0.0675  <- inflating
+```
 
-**3. The real feedback is far too small to matter anyway.** The 282 real judged rows change
-`contamination` by **+0.000001**. To move it you would need ~500k+ judged rows — years of
+The base rate it measures from the raw CSV (0.0675) equals the manifest's
+`iso.contamination` (0.06747) — the data and the shipped model agree.
+
+**3. The real feedback is far too small to matter anyway.** This one is empirical, not
+projected: `scripts/contamination_empirical.py` reads the judged rows exported from the
+feedback DB, counts the real anomalies and real normals by operator verdict, appends them and
+recomputes `contamination`. Verbatim output:
+
+```console
+$ python3 scripts/export_feedback_dataset.py     # writes data/feedback/feedback_<ts>.csv
+$ python3 scripts/contamination_empirical.py
+Judged rows (real):         282   from 1 file(s)
+  verdict breakdown:        {'true_negative': 224, 'true_positive': 34, 'false_positive': 15, 'false_negative': 9}
+  -> real anomalies:        43   (true_positive + false_negative)
+  -> real normals:          239   (false_positive + true_negative)
+
+Empirical anomaly fraction of the judged pool: 0.1525
+
+Base fleet:                 17,280,000 rows at contamination 0.0675
+Case A  add judged as-is:   0.067475   (delta +0.000001)
+Case B  same count, repr.:  0.067474   (delta +0.000000)
+```
+
+That pool is 15% anomalies rather than the ~67% of a pure alert queue because this particular
+set also contains 224 judged *normals* (`true_negative`): the control panel's Demo tab judges
+unflagged readings too, which makes it closer to representative. Restricted to the **flagged**
+rows alone (TP+FP = 49), the anomaly fraction is 34/49 = **0.69** — the ~67% figure, confirmed
+on real verdicts.
+
+So the 282 real judged rows change `contamination` by **+0.000001**. To move it you would need ~500k+ judged rows — years of
 hand-judging, since a 200-machine fleet produces ~323,000 alerts *per week* and no human
 judges that many. The only way a single week *would* move it is auto-judging every alert and
 folding it in (Case A), which pushes 0.0675 → ~0.079 and makes the net over-flag — exactly the
