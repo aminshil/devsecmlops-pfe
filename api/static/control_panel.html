@@ -99,6 +99,11 @@
   .flsvg{display:block}
   .fl-anom{color:var(--red)}.fl-ok{color:var(--teal)}.fl-none{color:var(--faint);opacity:.55}
   .fldot{width:9px;height:9px;border-radius:50%;display:inline-block}
+  .flcard.sev-red{border-color:rgba(255,107,107,.55)}.flcard.sev-amber{border-color:rgba(242,177,52,.55)}
+  .flbanner{font-size:11.5px;line-height:1.45;border-radius:7px;padding:7px 9px;margin:-2px 0 10px}
+  .flbanner.sev-red{background:rgba(255,107,107,.10);color:var(--red)}
+  .flbanner.sev-amber{background:rgba(242,177,52,.10);color:var(--amber)}
+  .flchip.stale{outline:1px dashed var(--faint);outline-offset:-2px}
 
   .rvmodal{position:fixed;inset:0;z-index:1000;background:rgba(5,8,14,.8);display:flex;align-items:center;justify-content:center;padding:24px}
   .rvwin{background:var(--bg);border:1px solid var(--line);border-radius:14px;width:min(1100px,100%);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,.65)}
@@ -274,7 +279,7 @@
   <div class="tabpage" id="fleet">
     <div class="card">
       <h3>Fleet <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshFleet">↻ Refresh</button></h3>
-      <div class="sub">Every machine grouped under the router it depends on, coloured by <b>what the models currently say</b> &mdash; the serving pods' own <span class="mono">api_currently_anomalous</span> gauge, which is 1 when that machine's most recent prediction was flagged. This is the live model verdict, not a dataset label. Machines the pods have not scored recently are greyed out.</div>
+      <div class="sub">Every machine grouped under the router it depends on, coloured by <b>what the models currently say</b> &mdash; the serving pods' own <span class="mono">api_currently_anomalous</span> gauge, which is 1 when that machine's most recent prediction was flagged. This is the live model verdict, not a dataset label. Each router card also says what the pattern means, the way network monitoring reasons: dependents that <b>stop reporting</b> (dashed, no report for 2 minutes) are <b>unreachable</b> and point at the router, not at the machines; many dependents <b>degraded together</b> point upstream even when the router's own metrics look normal (a <b>gray failure</b>: silent packet loss the router does not report); a busy router with healthy machines is a control-plane event or a failure still propagating. Measured on realistic data: it names every hard-down router within about 30 s, but catches gray failures only when they are strong (README, section 9c). Machines the pods have never scored are greyed out.</div>
       <label style="display:block;margin-top:10px;font-size:13px"><input type="checkbox" id="fl_auto" style="width:auto;display:inline;margin-right:6px">auto-refresh every 10s</label>
       <div id="fleet_body"><div class="hint">Open this tab to load.</div></div>
     </div>
@@ -569,37 +574,50 @@
       +'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>';
   }
   function flCls(st){ return st===1?"fl-anom":(st===0?"fl-ok":"fl-none"); }
-  function flChip(m,st,type){
-    return '<div class="flchip" title="'+ctEsc(m)+' — '+(st===1?"anomalous":(st===0?"normal":"no recent prediction"))+'">'
-      +flIcon(type||m.split("-")[0],flCls(st),19)+'<span class="nm">'+ctEsc(m)+'</span></div>';
+  function flChip(m,s){
+    const st=s?(s.stale?"stale":s.anomalous):undefined;
+    const label=st===1?"anomalous":(st===0?"normal":(st==="stale"?("not reporting for "+Math.round(s.age_s||0)+" s (unreachable?)"):"no prediction yet"));
+    const cls=st==="stale"?"fl-none":flCls(st);
+    return '<div class="flchip'+(st==="stale"?" stale":"")+'" title="'+ctEsc(m)+' — '+label+'">'
+      +flIcon((s&&s.type)||m.split("-")[0],cls,19)+'<span class="nm">'+ctEsc(m)+'</span></div>';
   }
-  function flCard(title,members,state,hub){
-    const known=members.filter(function(m){ return state[m]!==undefined; });
-    const bad=known.filter(function(m){ return state[m].anomalous===1; }).length;
-    const hubSt=hub?(state[hub]?state[hub].anomalous:undefined):undefined;
-    let h='<div class="flcard"><div class="flhead">';
-    h+=hub?flIcon("router",flCls(hubSt),20):'';
-    h+='<span class="nm">'+ctEsc(title)+'</span><span class="ct">'+bad+'/'+(known.length||members.length)+' anomalous</span></div>';
+  const FL_SEV={unreachable:"sev-red",router_incident:"sev-red",gray_suspected:"sev-amber",router_only:"sev-amber"};
+  function flCard(title,members,state,hub,rs){
+    const live=members.filter(function(m){ return state[m]!==undefined && !state[m].stale; });
+    const bad=live.filter(function(m){ return state[m].anomalous===1; }).length;
+    const stale=members.filter(function(m){ return state[m] && state[m].stale; }).length;
+    const hs=hub?state[hub]:undefined;
+    const hubSt=hs?(hs.stale?undefined:hs.anomalous):undefined;
+    const sev=(rs&&FL_SEV[rs.state])||"";
+    let h='<div class="flcard '+sev+'"><div class="flhead">';
+    h+=hub?flIcon("router",hs&&hs.stale?"fl-none":flCls(hubSt),20):'';
+    h+='<span class="nm">'+ctEsc(title)+'</span><span class="ct">'+bad+'/'+(live.length||members.length)+' anomalous'
+      +(stale?' · '+stale+' not reporting':'')+'</span></div>';
+    if(rs&&rs.message){ h+='<div class="flbanner '+sev+'">'+ctEsc(rs.message)+'</div>'; }
     h+='<div class="flchips">';
-    members.forEach(function(m){ const s=state[m]; h+=flChip(m,s?s.anomalous:undefined,s?s.type:""); });
+    members.forEach(function(m){ h+=flChip(m,state[m]); });
     return h+'</div></div>';
   }
   function renderFleet(d){
     const state=d.machines||{}, routers=d.routers||[], down=d.downstream_of||{}, dep=d.depends_on||{};
+    const rstates=d.router_states||{};
     if(!routers.length){ return '<div class="hint" style="color:var(--red)">dependency graph unavailable</div>'; }
     const inGraph={}; routers.forEach(function(r){ inGraph[r]=1; });
     Object.keys(dep).forEach(function(m){ inGraph[m]=1; });
     const extra=Object.keys(state).filter(function(m){ return !inGraph[m]; }).sort();
-    const total=Object.keys(state).length;
-    const bad=Object.keys(state).filter(function(m){ return state[m].anomalous===1; }).length;
+    const names=Object.keys(state);
+    const staleN=names.filter(function(m){ return state[m].stale; }).length;
+    const bad=names.filter(function(m){ return !state[m].stale && state[m].anomalous===1; }).length;
+    const flagged=routers.filter(function(r){ return rstates[r] && rstates[r].state!=="ok"; }).length;
     let h='';
     if(!d.reachable){ h+='<div class="hint" style="color:var(--red)">Prometheus unreachable, so no live verdicts: '+ctEsc(d.error)+'</div>'; }
-    h+='<div class="hint">'+bad+' anomalous · '+(total-bad)+' normal · '+total+' machines scored by the pods right now</div>';
+    h+='<div class="hint">'+bad+' anomalous · '+(names.length-bad-staleN)+' normal · '+staleN+' not reporting · '
+      +names.length+' machines seen by the pods · '+flagged+' router(s) with a pattern worth a look</div>';
     h+='<div class="flgrid">';
     routers.forEach(function(r){
-      h+=flCard(r,(down[r]||[]).slice().sort(function(a,b){ return a.split("-")[0].localeCompare(b.split("-")[0])||a.localeCompare(b); }),state,r);
+      h+=flCard(r,(down[r]||[]).slice().sort(function(a,b){ return a.split("-")[0].localeCompare(b.split("-")[0])||a.localeCompare(b); }),state,r,rstates[r]);
     });
-    if(extra.length){ h+=flCard("independent (no router)",extra,state,null); }
+    if(extra.length){ h+=flCard("independent (no router)",extra,state,null,null); }
     return h+'</div>';
   }
   async function loadFleet(){

@@ -12,6 +12,7 @@ __pycache__/
 data/smd-raw/
 data/*.csv
 data/demo_labels.jsonl
+data/*.incidents.json
 
 # MLflow local runs
 mlruns/

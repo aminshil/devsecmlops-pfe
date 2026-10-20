@@ -1421,12 +1421,18 @@ def ui_infra():
     }
 
 
+from api.fleet_rules import router_states as _fleet_router_states  # noqa: E402
+from api.fleet_rules import STALE_AFTER_S as _STALE_AFTER_S  # noqa: E402
+
+
 @app.get("/ui/fleet")
 def ui_fleet():
     """Every machine with the verdict the SERVING PODS currently report for it, plus the
     dependency graph, for the Fleet tab. The state is the model's own output
     (api_currently_anomalous = 1 if that machine's most recent prediction was anomalous),
-    read from the freshest replica per machine -- not a dataset label."""
+    read from the freshest replica per machine -- not a dataset label. A machine whose last
+    report is older than _STALE_AFTER_S is marked stale (not reaching the pods), and
+    router_states holds the per-router reading from _fleet_router_states."""
     machines, reachable, error = {}, False, ""
     try:
         url = "http://localhost:9090/api/v1/query?query=" + _ur.quote(_freshest("api_currently_anomalous"))
@@ -1439,13 +1445,28 @@ def ui_fleet():
         reachable = True
     except Exception as e:                      # Prometheus down: say so, still draw the topology
         error = str(e)
+    if reachable:
+        try:
+            q = "max by (machine) (" + _LAST_SEEN_METRIC + ")"
+            with _ur.urlopen("http://localhost:9090/api/v1/query?query=" + _ur.quote(q), timeout=6) as r:
+                now = time.time()
+                for s in json.loads(r.read())["data"]["result"]:
+                    name = s["metric"].get("machine")
+                    if name in machines:
+                        age = max(0.0, now - float(s["value"][1]))
+                        machines[name]["age_s"] = round(age, 1)
+                        machines[name]["stale"] = age > _STALE_AFTER_S
+        except Exception:                       # ages unknown: nothing is marked stale
+            pass
     try:
         g = load_graph()
     except Exception:
         g = {}
-    return {"reachable": reachable, "error": error, "machines": machines,
-            "routers": g.get("routers", []), "depends_on": g.get("depends_on", {}),
-            "downstream_of": g.get("downstream_of", {})}
+    routers, down = g.get("routers", []), g.get("downstream_of", {})
+    return {"reachable": reachable, "error": error, "machines": machines, "routers": routers,
+            "depends_on": g.get("depends_on", {}), "downstream_of": down,
+            "stale_after_s": _STALE_AFTER_S,
+            "router_states": _fleet_router_states(machines, routers, down)}
 
 
 # ---------------------------------------------------------------------------

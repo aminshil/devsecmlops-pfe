@@ -175,6 +175,13 @@ def send_one(base_url, row, history=None):
         print(f"  {row.get('machine','?'):11} request failed: {e}")
 
 
+def reports(row) -> bool:
+    """False while the machine is unreachable in the replayed data (generate_telecom_fleet_v3.py
+    writes reachable=0 behind a router that is down): a real agent there cannot reach the API, so it
+    sends nothing and the machine goes quiet. v2 files have no reachable column: every row is sent."""
+    return str(row.get("reachable", "1")).strip() not in ("0", "0.0")
+
+
 def machine_agent(machine, rows, base_url, interval, stop_event):
     """One independent monitoring agent for one machine: replays its own
     readings in time order on a jittered cycle, keeping the last
@@ -188,6 +195,11 @@ def machine_agent(machine, rows, base_url, interval, stop_event):
         row = rows[i % len(rows)]
         if i and i % len(rows) == 0:
             recent.clear()  # segment wrapped: history restarts, same as a real gap in coverage
+        if not reports(row):
+            recent.clear()  # behind a dead router: nothing reaches the API, and the outage is a gap
+            i += 1
+            stop_event.wait(rng.uniform(interval * 0.7, interval * 1.3))
+            continue
         recent.append({c: float(row[c]) for c in HISTORY_KEYS})
         history = ({c: [r[c] for r in recent] for c in HISTORY_KEYS}
                    if len(recent) == HISTORY_WINDOW else None)

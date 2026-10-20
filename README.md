@@ -2057,6 +2057,228 @@ healthy is a real operational phenomenon, which is exactly why root-cause attrib
 dependency graph instead of the router's own readings. That resemblance is a coincidence, not the
 original intent.
 
+### 9c. Failure model v3 — router incidents modelled the way networks actually fail
+
+Decision 9b found that the v2 generator never marks the router that causes a cascade. The fix
+is a separate generator, `ml-model/generate_telecom_fleet_v3.py`, built so that every pattern a
+reviewer can point at has a mechanism behind it and a measured count. **The shipped models are
+still trained on v2 data**; v3 is a side-by-side generator with its own report, tests and the live
+detection logic in the Fleet tab. Adopting it means regenerating every dataset and retraining (see
+"Adopting it" below).
+
+**What real networks do, and where each rule comes from**
+
+| Observation from production networks | Source | What v3 does with it |
+|---|---|---|
+| A component can be degraded while its own monitoring says it is healthy: "differential observability". Silent packet drops cause application glitches and latency, and data-centre networks do not reroute around them. | Huang et al., *Gray Failure: The Achilles' Heel of Cloud-Scale Systems*, HotOS 2017 | **Gray** incident: the router's own CPU/RAM stay near normal, its forwarded throughput falls, its dependents degrade. |
+| Silent drops are "nearly impossible to detect with traditional monitoring tools (e.g., SNMP)"; the signal is seen at the hosts, as TCP retransmissions. | Arzani et al., *007: Democratically Finding the Cause of Packet Drops*, NSDI 2018 | The evidence of a gray failure is in the dependents, not in the router's counters. |
+| TCP throughput falls as packet loss rises: bandwidth ∝ MSS/(RTT·√p). | Mathis et al., *The Macroscopic Behavior of the TCP Congestion Avoidance Algorithm*, CCR 1997 | Dependents' network throughput **drops** under a gray failure. (v2 *doubled* it, which is backwards.) |
+| Median traffic during a failure is 65% of normal per link; most link failures are resolved within five minutes; ToRs fail less than 5% per year. | Gill et al., *Understanding Network Failures in Data Centers*, SIGCOMM 2011 | Gray throughput loss centred near 65%; incident durations short-tailed (median 5 min, up to 1 h); rates compressed and stated. |
+| When a parent router is down, its children are reported UNREACHABLE, not DOWN, and only the parent raises an alert. | Nagios parent/child reachability | **Down** incident: router and all dependents go silent at once (`reachable=0`). |
+| An unreachable scrape target shows up as `up == 0` or missing data, not as a high value. | Grafana alerting guide, connectivity errors | Unreachable machines are not "anomalous metrics"; the live agent sends nothing for them. |
+| Cascades build up through positive feedback, retries and resource exhaustion, over about a couple of minutes. | Beyer et al., *Site Reliability Engineering*, ch. 22 "Addressing Cascading Failures" | Dependents degrade 30 s to 3 min after the router and recover with a short tail. |
+| Linux load average counts runnable and uninterruptible (disk-blocked) tasks. | B. Gregg, *Linux Load Averages: Solving the Mystery*, 2017 | Load rises only a little under network loss (socket waits are not disk waits). |
+| Fault-injection benchmarks inject a fault into a randomly chosen service for each case and label its root-cause service. | Pham et al., *RCAEval*, 2024 | Every anomalous reading carries `root_cause`; the incident log is the ground truth. |
+
+**The model**
+
+- **Three router incident modes.** *Gray* (silent loss, 55% of incidents), *down* (crash or lost
+  uplink, 30%), *control plane* (the router's management CPU spikes but forwarding is unaffected,
+  15%). The split is an assumption informed by Gill et al. (most failures are partial); no
+  published study gives it exactly.
+- **One schedule drives the router and its dependents**, so the router is labelled during every
+  one of its incidents (Decision 9b's defect is gone).
+- **Impact depends on the machine and the hour.** Chatty or latency-sensitive tiers (web, app,
+  cache, edge, voip) are hit hardest, batch least; impact scales with current traffic, so the same
+  gray failure hurts far fewer machines at night.
+- **Labels follow impact, deterministically.** A dependent is labelled anomalous only if its impact
+  is material. Decision 9's coin flip (the same degraded state labelled anomalous 40% of the time)
+  is gone.
+- **Two new columns.** `root_cause` (the machine that caused the reading's anomaly) and `reachable`.
+  The v2 columns are unchanged, so the current pipeline can read a v3 file.
+
+**Measured realism** (200 machines × 3 days, seed 42; reproduce with the commands below):
+
+```console
+$ python3 scripts/failure_model_report.py --data data/telecom_fleet_v3.csv
+== 1. Incidents (ground truth) ==
+  gray              92   duration median 6.0 min, p95 19.7 min
+  down              47   duration median 5.0 min, p95 14.5 min
+  control_plane     17   duration median 5.5 min, p95 10.2 min
+
+== 2. Share of a router's dependents affected at the incident's peak ==
+  mode           when       n    min  median    max
+  gray           day       43     0%     78%    91%
+  gray           night     49     0%     14%    74%
+  down           day       21    82%     95%   100%
+  down           night     26    91%     95%   100%
+  control_plane  day       10     0%      0%     0%
+  control_plane  night      7     0%      0%     0%
+  hard down, dependents UNREACHABLE at the peak: min 100%, median 100% (below 100% affected only where a machine was already failing for its own reason)
+
+== 3. Propagation delay (incident start -> first affected dependent) ==
+  gray   median 60 s, range 30-120 s
+  down   median 0 s, range 0-0 s
+
+== 4. "15+ machines behind one router are anomalous and the router is normal" ==
+  router-steps with 15+ anomalous dependents: 1,110
+  ... of which the router is labelled normal:         41
+      in the recovery tail just after an incident:     41
+      not explained by an incident (coincident local faults): 0
+
+== 5. "every machine behind a router is anomalous" ==
+  during down             528
+  unreachable dependents outside any hard-down incident or its tail: 0
+
+== 6. "the router is anomalous and its machines are fine" ==
+  control_plane (data plane unaffected)        198 of 198 router-anomalous steps
+  gray                                         422 of 1,330 router-anomalous steps
+  down                                           0 of 575 router-anomalous steps
+    gray, within the first 3 min (propagation lag): 303
+    gray, later (impact below materiality: low traffic or mild loss): 119
+```
+
+Coupling between a router's own label and its dependents' state, same fleet and days
+(`scripts/cascade_check.py`):
+
+| | v2 (shipped data) | v3 |
+|---|---|---|
+| correlation, router label vs share of dependents anomalous | -0.016 | **+0.70** |
+| router anomalous during a cascade (≥25% of dependents) | 4.3% (base rate 5.2%) → 0.83× | 90.9% (base rate 3.0%) → **29.9×** |
+
+**Accuracy study: the real pipeline on v2 versus v3 data.** Same code, same policy, same settings:
+`train_production.py --promote` on a 200-machine fleet (3-day training fleet, seed 42; 2-day
+validation fleet, seed 7, where the threshold is selected; 2-day test fleet, seed 123, where it is
+scored), with the production artifacts copied to a scratch folder first, as the smoke stage does
+(their SHA-256 hashes were unchanged afterwards). The v2 run reproduces production closely (test
+F1 0.7248 vs 0.7291 on the full 30-day data; cascade recall 0.307 vs 0.268), so the short fleets
+are a fair basis for the comparison. One seed: indicative, not a production claim.
+
+| test set, served decision (v4) | v2 data | v3 data |
+|---|---|---|
+| threshold selected on validation (`min_recall` 0.80) | 0.59 | 0.13 |
+| F1 / precision / recall | 0.7248 / 0.6703 / 0.7890 | **0.7629 / 0.6955 / 0.8449** |
+| classifier alone: F1 / precision / recall | 0.8167 / 0.9582 / 0.7117 | 0.8803 / 0.9599 / 0.8129 |
+| cause accuracy | 0.9972 | 0.9654 |
+
+| per-cause recall | v2 | v3 |
+|---|---|---|
+| cpu_spike / disk_saturation / network_flood | 0.974 / 0.993 / 0.972 | 0.946 / 0.981 / 0.986 |
+| memory_leak / silent_failure | 0.860 / 0.959 | 0.768 / 0.916 |
+| cascade (v2: coin-flip labels) | 0.307 | — |
+| cascade_unreachable (router hard down) | — | **0.908** |
+| cascade_gray (router gray failure) | — | **0.124** |
+| router_down / router_gray (the router's own rows) | — | 0.691 / 0.184 |
+
+Rack level (`scripts/rack_rule_eval.py`: the v3-trained model scores every test reading, then the
+Fleet tab's exact rule from `api/fleet_rules.py` runs at every 30-second step):
+
+```console
+$ python3 scripts/rack_rule_eval.py --data test_v3.csv --models <v3 candidate> --threshold 0.13
+per machine: the served decision flags 12.4% of gray-cascade readings (756 of 6,113)
+per incident, gray: router named as suspect in 4 of 59 (7%); median 465 s after the incident starts
+per incident, down: router named as suspect in 31 of 31 (100%); median 30 s after the incident starts
+false alarms: 21 router-steps flagged outside any incident, of 44,159 (0.048%; 1.4 per router-day)
+```
+
+Accumulating evidence over time does not rescue gray failures; it buys detection with false alarms:
+
+| evidence window | share of the rack | gray incidents named | false alarms per router-day |
+|---|---|---|---|
+| 30 s (shipped) | 40% | 4 / 59 | **1.4** |
+| 30 s | 20% | 14 / 59 | 100 |
+| 2 min | 25% | 27 / 59 | 286 |
+| 3 min | 30% | 28 / 59 | 310 |
+| 4 min | 20% | 43 / 59 | 1,173 |
+
+What it says:
+
+1. **Labels that agree with the data help on both axes**: +0.04 F1, +0.06 recall and +0.03
+   precision with the same pipeline.
+2. **Hard failures become easy.** 91% of the readings of machines cut off by a dead router are
+   flagged, and the rule names 100% of hard-down routers within about 30 s. On its own, a cut-off
+   machine looks like a silent failure (hence cause accuracy 0.965); telling the two apart takes
+   topology, which is what the rack rule adds.
+3. **Gray failures stay mostly invisible**: 12% per reading, 7% per incident at a usable false-alarm
+   rate, and catching more costs hundreds of false alarms a day. That is the documented nature of
+   gray failure (differential observability), and the limit is the **feature set**, not the rule:
+   cpu, ram, network, disk and load do not carry the signals a gray failure leaves, retransmissions
+   and latency. The concrete next step is a seventh feature, the TCP retransmission ratio that
+   node_exporter already exposes (`node_netstat_Tcp_RetransSegs` over `node_netstat_Tcp_OutSegs`),
+   emitted by the generator as well.
+4. `memory_leak` recall drops (0.86 → 0.77), probably because a gray cascade also raises RAM and
+   CPU a little; not investigated further.
+
+**Detection side: the Fleet tab reasons like network monitoring.** Each router card is classified
+from the live model verdicts by `api/fleet_rules.py` (tested in `tests/test_ui_fleet.py`, measured
+above: every hard-down router named, gray failures only when strong, 1.4 false alarms per router-day):
+
+| Pattern on the card | Reading shown |
+|---|---|
+| most dependents stopped reporting (no report for 2 min) | router down or uplink lost; the machines are **unreachable, not failing** |
+| router and ≥40% of its dependents anomalous | router incident; likely root cause the router |
+| ≥40% of dependents degraded, router's own metrics normal | **suspected gray failure upstream**; likely root cause the router |
+| router anomalous, dependents healthy | control-plane event, or a failure not yet propagated |
+
+**Questions a reviewer will ask, and the answers**
+
+- *"15 machines behind one router are anomalous and the router is normal: how?"* In v3 this only
+  happens in the 30–90 s recovery tail after the router's incident (41 of 41 cases above, 0
+  unexplained), because machines take a little longer than the router to recover. In live data,
+  the same picture with no recovery to explain it is exactly a gray failure, and the Fleet tab
+  flags the router as the suspect. The shipped v2 data shows it for a different reason: its
+  generator defect (Decision 9b).
+- *"What if all 20 machines behind a router are anomalous?"* That is a hard-down router. In
+  production the monitor would see 20 machines go silent at once and report them unreachable, with
+  one alert on the router; v3 reproduces that (100% of dependents unreachable in every hard-down
+  incident) and the Fleet tab says "unreachable, not failing".
+- *"The router is anomalous and its machines are fine?"* A control-plane event (management CPU
+  busy, forwarding fine), or a gray failure in its first minutes or too mild for the current traffic.
+- *"Why are two machines behind a failing router still green?"* In a gray failure the impact depends
+  on the tier: batch jobs are not request-driven, so a few minutes of packet loss slows them without
+  a material change. At the v3 worst moment (`scripts/fleet_status.py`), router-04 has 21 of 23
+  dependents anomalous and the two green ones are both batch machines. In a hard-down incident there
+  are no exceptions: every dependent is unreachable.
+- *"Why do routers fail so often in your data?"* They do not in production (under 5% per year,
+  Gill et al.). Rates are compressed so the models see enough incidents to learn from, as
+  fault-injection benchmarks do; durations and propagation timing are kept realistic.
+
+**Limitations.** Racks are single-homed, like Facebook's one-switch-per-rack design (Meza et al.,
+IMC 2018); with dual-homed servers, redundancy would mask part of the impact (median traffic per
+redundancy group 93% vs 65% per link, Gill et al.). No application-tier propagation (web → app →
+db), which was tried and reverted in Decision 6. Unreachable rows keep the host-local agent's
+idle readings (as an agent with local buffering would record them), flagged `reachable=0`.
+
+**Sources for section 9c** (every source the failure model, its parameters and this analysis draw on):
+
+1. P. Gill, N. Jain, N. Nagappan, *Understanding Network Failures in Data Centers: Measurement, Analysis, and Implications*, ACM SIGCOMM 2011. Failure rates per device type, durations, traffic during failures, redundancy effectiveness. https://people.cs.umass.edu/~phillipa/papers/comm235-gill.pdf
+2. P. Huang et al., *Gray Failure: The Achilles' Heel of Cloud-Scale Systems*, HotOS 2017. Differential observability, silent packet drops. https://www.microsoft.com/en-us/research/publication/gray-failure-achilles-heel-cloud-scale-systems/ (summary used: https://blog.acolyer.org/2017/06/15/gray-failure-the-achilles-heel-of-cloud-scale-systems/)
+3. B. Arzani et al., *007: Democratically Finding the Cause of Packet Drops*, USENIX NSDI 2018. Silent drops invisible to SNMP; host TCP retransmissions as the signal. https://arxiv.org/pdf/1802.07222
+4. M. Mathis, J. Semke, J. Mahdavi, T. Ott, *The Macroscopic Behavior of the TCP Congestion Avoidance Algorithm*, ACM SIGCOMM CCR 1997. TCP throughput ∝ 1/√p. https://courses.cs.duke.edu/fall24/compsci514/readings/mathis-tcpmodel-ccr97.pdf
+5. J. Meza et al., *A Large Scale Study of Data Center Network Reliability*, ACM IMC 2018. Rack-switch incidents, single switch per rack, root-cause categories. https://conferences.sigcomm.org/imc/2018/papers/imc18-final179.pdf
+6. Nagios, *Parent/child host relationships and network reachability* (UNREACHABLE vs DOWN, notification suppression). https://support.nagios.com/kb/print-904.html
+7. Grafana Labs, *Handle connectivity errors in alerts* (`up == 0`, missing data). https://grafana.com/docs/grafana/v12.4/alerting/guides/connectivity-errors/
+8. B. Beyer, C. Jones, J. Petoff, N. R. Murphy (eds.), *Site Reliability Engineering*, O'Reilly 2016, ch. 22 "Addressing Cascading Failures". https://sre.google/sre-book/addressing-cascading-failures/
+9. B. Gregg, *Linux Load Averages: Solving the Mystery*, 2017. What the load average counts. https://www.brendangregg.com/blog/2017-08-08/linux-load-averages.html
+10. L. Pham et al., *RCAEval: A Benchmark for Root Cause Analysis of Microservice Systems with Telemetry Data*, 2024. Fault injection and root-cause labelling. https://arxiv.org/html/2412.17015v1
+11. OneUptime, *Which Network Metrics Catch Host Problems? Drops, Errors, and Saturation*, 2026. `node_netstat_Tcp_RetransSegs` and the retransmission ratio. https://oneuptime.com/blog/post/2026-07-31-host-network-metrics-drops-errors-retransmits-saturation/markdown
+12. Facebook Engineering, *More details about the October 4 outage*, 2021. Maintenance command, backbone down, DNS withdrawal (the pattern listed under future work). https://engineering.fb.com/2021/10/05/networking-traffic/outage-details/
+13. Lucide icons (ISC licence; portions from Feather, MIT), the equipment pictograms in `scripts/fleet_status.py` and the Fleet tab. https://lucide.dev
+
+**Adopting it** changes every dataset, both classifiers, the IsolationForest, the selected
+threshold, the guardrail baseline and every number in this README:
+
+```bash
+G=ml-model/generate_telecom_fleet_v3.py
+python $G --days 30 --seed 42  --output data/telecom_fleet_v3_labeled.csv
+python $G --days 14 --seed 7   --output data/telecom_fleet_v3_val.csv
+python $G --days 30 --seed 123 --output data/telecom_fleet_v3_test.csv
+python $G --days 3  --seed 2026 --output data/telecom_fleet_v3_operator.csv
+python3 scripts/failure_model_report.py --data data/telecom_fleet_v3_labeled.csv
+```
+
+then point the training job, the production agent and the panel sampler at the v3 files.
+
 ### 10. Why dual-model architecture (primary + safety net)
 
 RandomForest is blind to cascades by construction (see previous). IsolationForest, being unsupervised, has no such blind spot -- it reacts to any statistical deviation regardless of label noise (0.262 cascade recall). Running both means the primary gets high accuracy on the 5 clean cause types AND cascades still get detected via the safety net. Two rejected alternatives:
