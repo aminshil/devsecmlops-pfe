@@ -279,7 +279,7 @@
   <div class="tabpage" id="review">
     <div class="card" style="margin-bottom:16px">
       <h3>Review flagged anomalies <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshReview">↻ Refresh</button></h3>
-      <div class="sub">Anomalies the pods in the cluster flagged that nobody has judged yet (newest first, from the latest 1000 logged predictions). <b>Logged</b> is when the pod stored the prediction (UTC, 1 hour behind Tunisia); <b>Reading time</b> is the time of the reading itself; the request to the pod carries only its hour, which picks the time-window baseline. Press <b>Details</b> to see why a reading was flagged (the reading, the scores, the history). <b>Real label (demo)</b> is the truth for readings sent by the Demo tab or the production agent, which replay labelled data (blank for anything else, and for readings the agent sent before it was restarted). Press <b>Real</b> if the alert was a true anomaly, <b>False alarm</b> if the machine was fine. Verdicts are stored in the cluster database and become training data the next time the <span class="mono">devsecmlops-model</span> job runs with feedback.</div>
+      <div class="sub">Anomalies the pods in the cluster flagged that nobody has judged yet (newest first, from the latest 1000 logged predictions). <b>Logged</b> is when the pod stored the prediction, shown in your local time (the database keeps it in UTC); <b>Reading time</b> is the time of the reading itself; the request to the pod carries only its hour, which picks the time-window baseline. Press <b>Details</b> to see why a reading was flagged (the reading, the scores, the history). <b>Real label (demo)</b> is the truth for readings sent by the Demo tab or the production agent, which replay labelled data (blank for anything else, and for readings the agent sent before it was restarted). Press <b>Real</b> if the alert was a true anomaly, <b>False alarm</b> if the machine was fine. Verdicts are stored in the cluster database and become training data the next time the <span class="mono">devsecmlops-model</span> job runs with feedback.</div>
       <label style="display:block;margin-top:10px;font-size:13px"><input type="checkbox" id="rv_show_judged" style="width:auto;display:inline;margin-right:6px"> also show the ones already judged</label>
       <div id="review_body"><div class="hint">Open this tab to load.</div></div>
     </div>
@@ -374,17 +374,23 @@
     if(!d.count){ body.innerHTML='<div class="hint">Nothing to review: '+ctEsc(d.scanned)+' recent predictions scanned, no unjudged anomaly. Send traffic from the Demo tab or wait for the production agent, then refresh.</div>'; return; }
     let h='<div class="hint" style="margin-top:10px">'+ctEsc(d.count)+' anomaly(ies) shown, '+ctEsc(d.scanned)+' recent predictions scanned.</div>';
     RV_ROWS=d.anomalies;
-    h+='<table><thead><tr><th>Logged (UTC)</th><th>Reading time</th><th>Machine</th><th>Model</th><th>Cause given</th><th>P(normal)</th><th>Real label (demo)</th><th>Judge</th><th></th></tr></thead><tbody>';
+    h+='<table><thead><tr><th>Logged (your time)</th><th>Reading time</th><th>Machine</th><th>Model</th><th>Cause given</th><th>P(normal)</th><th>Real label (demo)</th><th>Judge</th><th></th></tr></thead><tbody>';
     d.anomalies.forEach(function(x,i){
       const p=(typeof x.p_normal==="number")?x.p_normal.toFixed(3):"—";
       const cell=x.verdict?'<span class="tag norm">'+ctEsc(String(x.verdict).replace("_"," "))+'</span>'
         :'<button type="button" class="btn small" data-rvjudge="true_positive" data-pid="'+ctEsc(x.id)+'">Real</button> <button type="button" class="btn sec small" data-rvjudge="false_positive" data-pid="'+ctEsc(x.id)+'">False alarm</button>';
-      h+='<tr><td class="mono">'+ctEsc(x.timestamp)+'</td><td class="mono">'+ctEsc(x.real&&x.real.time?x.real.time:"—")+'</td><td class="mono">'+ctEsc(x.machine)+'</td><td class="mono">'+ctEsc(x.model_version)+'</td><td>'+ctEsc(x.cause)+'</td><td class="mono">'+p+'</td><td>'+rvReal(x)+'</td><td>'+cell+'</td><td><button type="button" class="btn sec small" data-rvdetail="'+i+'">Details</button></td></tr>';
+      h+='<tr><td class="mono">'+ctEsc(rvLocal(x.timestamp))+'</td><td class="mono">'+ctEsc(x.real&&x.real.time?x.real.time:"—")+'</td><td class="mono">'+ctEsc(x.machine)+'</td><td class="mono">'+ctEsc(x.model_version)+'</td><td>'+ctEsc(x.cause)+'</td><td class="mono">'+p+'</td><td>'+rvReal(x)+'</td><td>'+cell+'</td><td><button type="button" class="btn sec small" data-rvdetail="'+i+'">Details</button></td></tr>';
       h+='<tr style="display:none"><td colspan="9"></td></tr>';
     });
     body.innerHTML=h+'</tbody></table>';
   }
   let RV_ROWS=[];
+  function rvLocal(ts){
+    const d=new Date(ts);
+    if(isNaN(d.getTime())){ return ts; }
+    const z=function(n){ return String(n).padStart(2,"0"); };
+    return d.getFullYear()+"-"+z(d.getMonth()+1)+"-"+z(d.getDate())+" "+z(d.getHours())+":"+z(d.getMinutes())+":"+z(d.getSeconds());
+  }
   function rvNum(v,digits){ return (typeof v==="number")?v.toFixed(digits):"—"; }
   function rvReal(x){
     if(!x.real){ return '<span class="hint">not recorded</span>'; }
@@ -413,7 +419,7 @@
     why+=kv("decision threshold",ctEsc(rvNum(t,2)));
     if(typeof p==="number"&&typeof t==="number"){ why+=kv("margin",ctEsc(rvNum(t-p,4))+(p<t?" under the threshold: flagged":" above the threshold: the classifier alone would not flag it")); }
     why+=kv("classifier cause",ctEsc(x.xgb_cause))+kv("cause given",ctEsc(x.cause))+kv("IsolationForest score",ctEsc(rvNum(x.iso_score,4)));
-    why+=kv("logged at (UTC)",ctEsc(x.timestamp))+kv("reading time",ctEsc(x.real&&x.real.time?x.real.time:"not recorded"))+kv("hour in the request",ctEsc(x.real&&x.real.time?x.real.time.slice(11,13):"not recorded"));
+    why+=kv("logged at (your time)",ctEsc(rvLocal(x.timestamp)))+kv("logged at (UTC)",ctEsc(x.timestamp))+kv("reading time",ctEsc(x.real&&x.real.time?x.real.time:"not recorded"))+kv("hour in the request",ctEsc(x.real&&x.real.time?x.real.time.slice(11,13):"not recorded"));
     why+=kv("model",ctEsc(x.model_version))+kv("machine type",ctEsc(x.machine_type))+kv("time window",ctEsc(x.window))+kv("prediction id",ctEsc(x.id));
     let real="";
     if(x.real){
