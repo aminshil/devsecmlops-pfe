@@ -2193,8 +2193,9 @@ Accumulating evidence over time does not rescue gray failures; it buys detection
 
 What it says:
 
-1. **Labels that agree with the data help on both axes**: +0.04 F1, +0.06 recall and +0.03
-   precision with the same pipeline.
+1. **The v2 and v3 columns are not like-for-like** (see the correction below): they are scored on
+   different test fleets, the v3 one is easier to score because its labels follow the data, and both
+   models were trained on a tenth of production's data.
 2. **Hard failures become easy.** 91% of the readings of machines cut off by a dead router are
    flagged, and the rule names 100% of hard-down routers within about 30 s. On its own, a cut-off
    machine looks like a silent failure (hence cause accuracy 0.965); telling the two apart takes
@@ -2208,6 +2209,15 @@ What it says:
    emitted by the generator as well.
 4. `memory_leak` recall drops (0.86 → 0.77), probably because a gray cascade also raises RAM and
    CPU a little; not investigated further.
+
+**Correction, found on re-reading the run's report.** The same run also scored the *production*
+model (trained on 30 days of v2) on the v3 test fleet: F1 0.8116, precision 0.7423, recall 0.8952,
+higher than the 3-day v3 candidate (0.7629), and the guardrail rejected that candidate on the v3
+validation fleet (F1 0.8192 → 0.7660). The comparison above therefore does not show that v3 data
+trains a better model: training size dominates at this scale, and the v3 test fleet is easier to
+score. The like-for-like comparison, production and a v3 candidate both trained on full-size fleets
+and scored on the same v3 test fleet, is `scripts/v3_experiment.sh` (summary printed by
+`scripts/compare_v2_v3.py`); its results replace this paragraph.
 
 **Detection side: the Fleet tab reasons like network monitoring.** Each router card is classified
 from the live model verdicts by `api/fleet_rules.py` (tested in `tests/test_ui_fleet.py`, measured
