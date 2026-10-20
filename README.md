@@ -2007,6 +2007,56 @@ IsolationForest tells you *something is wrong* but not *what*. Adding labeled ca
 
 The generator by design labels cascade anomalies only 40% consistently (a downstream machine affected by a router failure is labeled anomalous 40% of the time, unlabeled 60%, *for the identical feature pattern*). Training a supervised classifier on this noisy label collapses everything -- initial F1 = 0.513, cascade precision = 0.16, poisoning the other classes. Folding cascade into normal during training fixed that (F1 = 0.731) but left RandomForest blind to cascades. Solution: keep IsolationForest as a *safety net* (see next decision).
 
+### 9b. Audit finding — the generator does not mark the router that causes a cascade
+
+Decision 9 covers the cascade label being noisy by design. Auditing the generator surfaced a
+second, independent problem: **a router's own anomaly timeline is unrelated to the cascades it
+drives.** In `ml-model/generate_telecom_fleet.py` each router is generated twice — once to build
+the mask that propagates to its dependents (that frame is then discarded), and again, at a
+different `rng` state, to produce the router's own rows. Measured on the full training fleet with
+`scripts/cascade_check.py`:
+
+```console
+$ python3 scripts/cascade_check.py
+    router | own rate | corr(own, dep share) | cascade events | router anomalous then
+----------------------------------------------------------------------------------------
+ router-01 |   0.0501 |               0.0009 |          4,247 |                0.0626
+ router-02 |   0.0501 |               0.0053 |          4,166 |                0.0480
+ router-03 |   0.0500 |               0.0001 |          4,278 |                0.0423
+ router-04 |   0.0507 |              -0.0236 |          4,274 |                0.0241
+ router-05 |   0.0503 |              -0.0022 |          4,331 |                0.0566
+ router-06 |   0.0502 |              -0.0055 |          4,295 |                0.0536
+ router-07 |   0.0503 |               0.0290 |          4,262 |                0.0878
+ router-08 |   0.0503 |              -0.0070 |          4,210 |                0.0359
+
+mean correlation across routers: -0.0004
+during cascade events the router is anomalous 0.0514 of the time; its base rate is 0.0502
+ratio 1.02x  (1.0x = the cascade tells you nothing about the router)
+```
+
+Mean correlation **-0.0004**, and during a cascade the router is anomalous **1.02x** its base
+rate — i.e. no more often than chance. The cascades themselves are real and plentiful (~4,250
+events per router, ~34,000 across the fleet): the dependents of one router genuinely fail
+together. Only the router's own label fails to mark them.
+
+**Consequences.** `score_root_causes` (`ml-model/root_cause.py`) accumulates downstream effects
+only for a machine that is itself in the flagged set, so for a generator-produced cascade it never
+names the router; the Root Cause tab demonstrates the logic on a constructed input (a router plus
+its dependents, flagged together), not on a pattern the data produces on its own. This also
+compounds Decision 9: cascade is hard to learn both because its label is 40% consistent *and*
+because the one signal that would explain it — the upstream router's state — is absent from the
+data as well.
+
+**Deliberately not fixed before the defense.** The correction is one line (reuse the first draw
+instead of regenerating the router), but it invalidates every dataset, both classifiers, the
+IsolationForest, the selected threshold, the guardrail baseline and every number in this README.
+It is recorded here rather than quietly patched.
+
+One caveat against over-reading it: a router degrading traffic while its own SNMP counters stay
+healthy is a real operational phenomenon, which is exactly why root-cause attribution leans on the
+dependency graph instead of the router's own readings. That resemblance is a coincidence, not the
+original intent.
+
 ### 10. Why dual-model architecture (primary + safety net)
 
 RandomForest is blind to cascades by construction (see previous). IsolationForest, being unsupervised, has no such blind spot -- it reacts to any statistical deviation regardless of label noise (0.262 cascade recall). Running both means the primary gets high accuracy on the 5 clean cause types AND cascades still get detected via the safety net. Two rejected alternatives:
