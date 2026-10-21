@@ -43,7 +43,7 @@ Have `screenshots/` open as a last-resort fallback.
 | 0 | 0:30 | Jenkins | open `devsecmlops-pipeline` → the last green build (#109). **Do not start a build**: #98 took 46 minutes on a base-image cache miss | "This is the last build: 11 stages, all green. I'll walk through it at step 12." | Log (b109) |
 | 1 | 1 | Control panel → **Status** | open the tab | "Seven layers, each with a live check: API, registry, Jenkins, SonarQube, MLflow, Kubernetes, Prometheus, Grafana, exporters." Expect 11 of 11 up. The model card shows the selector name `telecom_v3`; the model that answers is chosen per request (step 4). | Log (rehearsal) |
 | 2 | 2 | Terminal | block D below (`/health` with the long machine list collapsed, so the lineage is visible) | "The deployed service reports its own lineage: version, the served model's F1 and the artifact hashes it verified before loading." | Log (rehearsal) |
-| 3 | 2 | Terminal | the in-pod smoke test (block A below) | "This is the exact check CI runs after every deploy: a request without history is answered by v3, one with a 10-reading history by v4." Expect 6 `PASS` lines. | Log (stage 9) |
+| 3 | 2 | Terminal | the in-pod smoke test (block A below) | "This is the exact check CI runs after every deploy: a request without history is answered by v3, one with a 10-reading history by v4." Expect 7 `PASS` lines. | Log (stage 9) |
 | 4 | 1 | Terminal | the model-count snippet (block B below) | "Almost all traffic is v4. v3 answers only a machine's first 9 requests after the traffic generator starts or wraps (no 10-reading history yet) and any request sent without history." Expect both keys, v4 far larger. | Log (rehearsal) |
 | 5 | 2 | Control panel → **Operator** | preset `memory-leak`, run | "A prediction with per-feature z-scores, the likely cause, and each model's vote. The z-scores say which metric drove the alert." | Rehearse |
 | 6 | 2 | Control panel → **Demo** | send a batch | "Real held-out readings, scored live, with true and false positives shown. About a third of alerts are false: precision is 0.66, and I show that rather than hide it." | Rehearse |
@@ -58,7 +58,7 @@ Have `screenshots/` open as a last-resort fallback.
 
 ### The feedback loop and retraining (about 5 minutes, after step 7)
 
-**Precondition.** The cluster runs the latest image (history logging; `kubectl -n ml-serving get deploy -o jsonpath='{.items[*].spec.template.spec.containers[*].image}'` should show `2.20.3-b99` or later). The feedback table lives on a 2 Gi volume and survives reboots (verified across two reboots; the Continuous training tab shows the live counts). Only a deleted volume empties it.
+**Precondition.** The cluster runs the latest image (history logging; `kubectl -n ml-serving get deploy -o jsonpath='{.items[*].spec.template.spec.containers[*].image}'` should show `2.20.3-b109`). The feedback table lives on a 2 Gi volume and survives reboots (verified across two reboots; the Continuous training tab shows the live counts). Only a deleted volume empties it.
 
 1. **Control panel → Demo → Send 20 → Review alerts only.** Say: "the readings come from a labelled fleet that is not part of training, validation or test; the cluster pods answer and log them; the verdicts come from the generator's ground truth, standing in for an operator."
 1b. **Review tab (optional, 30 seconds):** the anomalies the pods flagged that nobody has judged. Press Real or False alarm on a row; it becomes training data for the next retraining run. Say: "this is how an operator feeds the loop without opening Postgres."
