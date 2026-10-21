@@ -32,6 +32,21 @@ def classify(n_seen: int, n_stale: int, n_live: int, n_bad: int, hub_bad: bool,
     return "ok"
 
 
+def classify_arrays(n_seen, n_stale, n_live, n_bad, hub_bad,
+                    suspect_share: float = SUSPECT_SHARE, min_group: int = MIN_GROUP):
+    """classify() over numpy arrays (one element per router-step), for offline evaluation.
+    Same rules, same order; tests/test_rack_tools.py checks the two agree element for element."""
+    import numpy as np
+    n_seen, n_stale, n_live, n_bad = (np.asarray(x) for x in (n_seen, n_stale, n_live, n_bad))
+    hub_bad = np.asarray(hub_bad, dtype=bool)
+    share = np.divide(n_bad, n_live, out=np.zeros(np.broadcast(n_bad, n_live).shape, dtype=float),
+                      where=np.asarray(n_live) > 0)
+    unreachable = (n_stale >= min_group) & (n_stale >= 0.6 * n_seen)
+    group = (n_bad >= min_group) & (share >= suspect_share)
+    return np.select([unreachable, group & hub_bad, group, hub_bad & (share < QUIET_SHARE)],
+                     ["unreachable", "router_incident", "gray_suspected", "router_only"], default="ok")
+
+
 def router_states(machines: dict, routers: list, downstream_of: dict) -> dict:
     """machines: name -> {"anomalous": 0/1, "stale": bool, ...} from the pods' gauges."""
     out = {}
