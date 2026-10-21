@@ -336,3 +336,28 @@ def test_feedback_requires_token_when_configured(monkeypatch):
     # right token passes the check and reaches the (unreachable) DB
     assert client.post("/feedback/abc", json=body,
                        headers={"X-Feedback-Token": "s3cret-token"}).status_code == 503
+
+
+@pytest.mark.parametrize("name", ["__windows__", "__feature_order__", "__has_windows__", "__global__", "__type__web"])
+def test_reserved_machine_names_are_rejected_not_a_500(name):
+    """Found by an external review: internal baseline keys used as a machine name raised a 500."""
+    r = client.post("/predict", json={"machine": name, "hour": 14, "metrics": {"cpu": 30, "ram": 50, "network": 80,
+                                                                  "disk_io": 25, "disk_usage": 40, "load_avg": 1.2}})
+    assert r.status_code == 422, r.text
+
+
+def test_root_cause_rejects_nan_instead_of_a_500():
+    """Found by an external review: NaN in /root-cause broke JSON serialisation (500)."""
+    r = client.post("/root-cause", content='{"anomalies": {"web-01": NaN}}',
+                    headers={"Content-Type": "application/json"})
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
+def test_predict_rejects_non_finite_numbers_with_a_422(token):
+    """Python's JSON parser accepts NaN and Infinity; the reading must be refused with a 422, not a 500."""
+    body = ('{"machine": "web-01", "hour": 14, "metrics": {"cpu": %s, "ram": 50, "network": 80, '
+            '"disk_io": 25, "disk_usage": 40, "load_avg": 1.2}}' % token)
+    r = client.post("/predict", content=body, headers={"Content-Type": "application/json"})
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]

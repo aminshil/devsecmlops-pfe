@@ -25,8 +25,9 @@ computed for) are written to models/manifest.json under
 production.threshold_selection, and production.decision_threshold is set.
 
 Ownership: train_production.py --promote is the only path that creates a new production
-model and its threshold. This tool only re-selects the threshold for the artifacts already in
-production (the record binds their SHA-256) and clears the recorded evaluation, so the CI gate
+model and its threshold. This tool only re-selects the threshold for the model files in models/ (the record
+stores the SHA-256 of the files on disk; it does not check that they are the promoted
+ones, so approval stays a matter of process) and clears the recorded evaluation, so the CI gate
 fails until --evaluate-production has redone it. Enforced: --record refuses any --models-dir
 other than models/ (a read-only run on another directory still prints the curve).
 The test-set evaluation must then be recorded at that threshold:

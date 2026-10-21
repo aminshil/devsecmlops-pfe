@@ -48,6 +48,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
 import math
 
@@ -306,6 +308,27 @@ app = FastAPI(
         "model over time. See README section 'Feedback loop and online learning'."
     ),
 )
+
+
+def _json_safe(value):
+    """NaN and infinity are not valid JSON: show them as text in an error response."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """FastAPI's default 422, except that a rejected NaN or infinity is echoed as text. Without this,
+    a request carrying NaN was rejected but answered with HTTP 500 (the error itself failed to encode)."""
+    detail = _json_safe(jsonable_encoder(exc.errors()))
+    print(f"rejected request to {request.url.path}: {len(detail)} validation error(s)")
+    return JSONResponse(status_code=422, content={"detail": detail})
+
 
 # ---------------------------------------------------------------------------
 # Self-instrumentation: this endpoint reports its OWN prediction activity
@@ -582,6 +605,8 @@ class Reading(BaseModel):
     def _machine_bounded(cls, v: str) -> str:
         if not v or len(v) > 64:
             raise ValueError("machine must be 1-64 characters")
+        if v.startswith("__"):   # reserved for internal baseline keys (__global__, __windows__, ...)
+            raise ValueError("machine names starting with '__' are reserved")
         return v
 
     @field_validator("metrics")
@@ -615,6 +640,7 @@ class Reading(BaseModel):
 
 
 class AnomalyBatch(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)   # NaN would break the JSON response (HTTP 500)
     anomalies: dict[str, float]   # {machine_name: anomaly_score, ...}
 
 
