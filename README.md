@@ -43,11 +43,12 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Where to change training and threshold behaviour | One file: `config/model_policy.json` (training size, recall target, threshold grid, guardrail limits) | [Current method](#current-method-one-policy-file-a-threshold-chosen-per-model) |
 | Served v4 (independent test set, 17.28M rows) | F1 **0.7291** · precision 0.6713 · recall 0.7979 | `models/manifest.json`, re-checked by CI on every build. Several L0 analysis tables below were measured on earlier models (July: v4 F1 0.7246; 13 October: 0.7278) |
 | Served v3 fallback | F1 0.6664 · precision 0.5967 · recall 0.7546 | `models/manifest.json` |
-| Weakest cause | `cascade`, recall 0.2679 (label noise by design) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
+| Weakest cause | `cascade`, recall 0.2679 (label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7755** · precision 0.7202 · recall 0.84. A different sample from the full test file, so it is not comparable with 0.7291 | `scripts/live_k8s_validation.py`, run on 19 October |
-| Latest green pipeline | Build `2.20.3-b107` (commit `0ea14df3`: input range checks, opt-in feedback token, stage-9 rollback, Review tab, validation-fleet guardrail): all 11 stages green, 141 tests, Quality Gate OK, 0 image vulnerabilities, smoke-tested in the live pod, which now also fails unless the alert threshold was read from the manifest | [L3 run history](#l3--cicd) |
-| Tests | 141 passing | `pytest tests/` (stage 1b) |
-| Dashboard | 30 Grafana panels, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
+| Latest green pipeline | Build `2.20.3-b107` (commit `0ea14df3`: input range checks, opt-in feedback token, stage-9 rollback, Review tab, validation-fleet guardrail): all 11 stages green, 141 tests at the time, Quality Gate OK, 0 image vulnerabilities, smoke-tested in the live pod, which now also fails unless the alert threshold was read from the manifest | [L3 run history](#l3--cicd) |
+| Tests | 176 passing on `main`, in 18 files (141 when b107 ran) | `pytest tests/`; stage 1b runs them on every build |
+| Since b107 | Commits not yet through Jenkins: the Review tab's details pop-up and real-label column, the Fleet tab, failure model v3 and its full-size experiment, docs. **Serving is unchanged**: every `api/app.py` change is under `/ui/` (the operations UI, never enabled on the pods), and the agent's change only matters for v3 files (it skips rows marked unreachable; the v2 fleets it replays have no such column). The control panel runs from the repository on the host, so it serves the new tabs after `systemctl restart control-panel` | `git log 0ea14df3..HEAD` |
+| Dashboard | 25 Grafana panels in 5 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-19: the model promoted by Jenkins `devsecmlops-model` build 8 (MLflow `241447d0…`), trained on all 17,280,000 rows of the labelled fleet, v4 F1 0.7291, threshold 0.91 selected by the pipeline, guardrail PASS, model files read back from MinIO, deployed as image `2.20.3-b103`. Before that: the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
 | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
 
@@ -1235,7 +1236,7 @@ A single web console served by the API at `/ui` that drives the entire
 platform by clicking, not commands — built as the live-demo and operator
 interface. It calls the existing `/predict`, `/root-cause`, `/machines`,
 and `/feedback` endpoints (it does not alter any serving logic) plus small
-read-only support endpoints (`/ui/status`, `/ui/metrics`, `/ui/infra`).
+read-only support endpoints (`/ui/status`, `/ui/metrics`, `/ui/infra`, `/ui/fleet`).
 
 **Access is now gated.** `/ui/*` returns `404` unless `ENABLE_OPS_UI=1` is
 explicitly set — never set on the Kubernetes serving pods — and requires
@@ -1262,7 +1263,17 @@ Tabs:
 - **Infrastructure** — Docker containers and images, Kubernetes pods (image
   tags, restart counts), `kubectl top`, HPA status, Prometheus target
   health, and the machines currently flagged anomalous.
+- **Fleet** — the live topology: every router and its dependents, with an equipment icon, coloured
+  by the pods' own verdicts (red anomalous, green normal, dashed when it stopped reporting, greyed out
+  if never scored). Each router card is
+  classified by `api/fleet_rules.py` (unreachable, router incident, suspected gray failure,
+  router only), the rule measured in [Decision 9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail).
 - **Continuous training** — read-only view of the retraining loop: predictions logged by the cluster and how many an operator judged, the model the cluster serves (from its `/health`), the model in the repository manifest, the recent retraining runs, and links to the Jenkins job and MLflow. The retraining itself runs in Jenkins (`Jenkinsfile.model`).
+- **Training** — the training console, see [below](#training-console-interactive-mlops-train-and-verify).
+- **Review** — the anomalies the pods flagged that nobody has judged yet. *Real* or *False alarm*
+  turns a row into training data for the next retraining run. *Details* opens a pop-up with the
+  reading's decision, metrics, z-scores, recent history and times, and, for readings replayed from the
+  labelled fleet, the real label from the dataset (`api/demo_labels.py`).
 - **Project** — a results summary.
 
 #### Honest demo evaluation, and a bug it exposed
@@ -1371,9 +1382,11 @@ found and fixed in the most recent security pass; see
 |---|---|
 | `api/app.py` | The FastAPI application — every endpoint above, input validation, Prometheus metrics, artifact-integrity checking before unpickling, and the ops-UI guard. |
 | `api/feedback_db.py` | PostgreSQL access for logging predictions and recording operator verdicts. |
+| `api/fleet_rules.py` | The Fleet tab's group rule (pure logic, no I/O), shared by `/ui/fleet` and the offline scripts that measure it. |
+| `api/demo_labels.py` | Keeps the true label of replayed readings beside the cluster's prediction id, for the Review tab's real-label column. |
 | `api/training.py` | Backend for the training console — dataset selection (with the path-traversal fix), representative sampling, comparing a candidate against production. |
 | `api/static/control_panel.html` | The mission-control UI, served at `/ui`. |
-| `tests/test_api.py` (27 tests), `test_decision.py`, `test_training_console.py` | Covered in full in [Testing](#testing) below. |
+| `tests/test_api.py` (38 tests), `test_decision.py`, `test_training_console.py`, `test_ui_cluster.py`, `test_ui_fleet.py`, `test_review_details.py` | Covered in full in [Testing](#testing) below. |
 
 ---
 
@@ -1419,7 +1432,7 @@ Jenkins, `Jenkinsfile`, 11 stages, every one a real gate — a failure stops the
 Stage labels below match the Jenkins console exactly.
 
 - **1. Checkout**
-- **1b. Unit tests** — pytest, 141 tests, coverage report. Fail-fast: a broken commit stops here.
+- **1b. Unit tests** — pytest (141 tests in b107, 176 on `main`), coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that no deployment file carries a copy of the threshold (it is read from the manifest) and that the manifest's threshold is the evaluated one, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
@@ -1601,6 +1614,7 @@ kubectl get pods -n ml-serving
 | `kubernetes/postgres.yaml` | The hardened `postgres` StatefulSet (uid 70), probes using the Secret's own user/database. |
 | `kubernetes/service.yaml` | NodePort `:30080`. |
 | `kubernetes/hpa.yaml` | HorizontalPodAutoscaler, 2–5 replicas, 70% CPU. |
+| `kubernetes/networkpolicy.yaml` | Opt-in: only the API pods may reach PostgreSQL. Not applied on the demo cluster (see Known limitations). |
 | `scripts/ensure_db_secret.sh` | Generates a random DB password idempotently (demo profile). |
 | `scripts/k8s_recover.sh` | Recovers Minikube and Jenkins's cluster access after a Docker daemon or VM restart. |
 
@@ -2051,6 +2065,9 @@ data as well.
 instead of regenerating the router), but it invalidates every dataset, both classifiers, the
 IsolationForest, the selected threshold, the guardrail baseline and every number in this README.
 It is recorded here rather than quietly patched.
+
+**Update.** The fix was then built as a separate generator (v3) and tested at full size against
+production; see [Decision 9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail). The shipped data and models are unchanged.
 
 One caveat against over-reading it: a router degrading traffic while its own SNMP counters stay
 healthy is a real operational phenomenon, which is exactly why root-cause attribution leans on the
@@ -2658,19 +2675,19 @@ this project.)
 
 ## Testing
 
-**141 tests** (up from 15), `pytest`, in `tests/`:
+**176 tests** in 18 files (up from 15), `pytest`, in `tests/`:
 
 - `test_api.py` (38 tests) — every endpoint, input validation (NaN/inf
   rejection, physical-range rejection (cpu=150 is a 422), the opt-in feedback token, machine length, metrics count, history shape), v3/v4
   auto-selection, Prometheus metrics, DB-unavailable behavior (503, not
   500), ops-UI auth (required, wrong password rejected, absent when
   disabled), and artifact-integrity rejection of a tampered model file.
-- `test_decision.py` — the scalar and vectorized forms of the served
+- `test_decision.py` (5 tests) — the scalar and vectorized forms of the served
   decision rule produce identical results, at multiple thresholds, with and
   without per-class overrides.
-- `test_preprocess.py` — baseline construction, the fallback chain, z-score
+- `test_preprocess.py` (8 tests) — baseline construction, the fallback chain, z-score
   correctness, the standard-deviation floor that prevents division by zero.
-- `test_train_production.py` — the full training pipeline and the model gate: promotion with
+- `test_train_production.py` (22 tests) — the full training pipeline and the model gate: promotion with
   correct lineage, the CI gate accepting a genuinely promoted model and
   rejecting a tampered or low-F1 one, retraining determinism, a rejected
   candidate leaving production byte-for-byte untouched, and feedback rows
@@ -2680,10 +2697,31 @@ this project.)
   fleet that is the test set; promotion refuses a missing, test, or train file as the validation
   fleet; and a promoted threshold is selected for the candidate that carries it. The standalone selection tool refuses a non-independent validation fleet, and refuses `--record` for any directory other than `models/`.
 - `test_threshold_policy.py` (21 tests) — the policy file is validated; the threshold rules (F-beta, minimum recall, recall target unreachable); training uses every normal row when asked; command-line defaults come from the policy; the guardrail also checks recall; the API takes its threshold from the manifest, an environment override, or a fallback, in that order, and says which; no file in the repository hard-codes a threshold; and the model gate flags one that does.
-- `test_training_console.py` — the dataset whitelist (rejects path
+- `test_training_console.py` (8 tests) — the dataset whitelist (rejects path
   traversal in every form tried), that sampling genuinely spreads across
   the whole file, and that a candidate is compared against production on
   the same rows.
+- `test_ui_cluster.py` (15) — the continuous-training panel routes: cluster proxies, read-only tab
+  data, and that every `/ui/` route requires the ops credentials.
+- `test_ui_fix.py` (10) — the panel's Stop/Fix buttons go through systemd only (a `pkill` is undone
+  by `Restart=always`; a Fix must not start a second copy).
+- `test_ui_fleet.py` (10) — the Fleet tab: topology, colours from the pods' verdicts, staleness, and
+  every state of the group rule.
+- `test_review_details.py` (12) — the Review tab's details and real-label column: the label store,
+  the review payload, and the production agent recording labels.
+- `test_failure_model_v3.py` (8) — the v3 generator: one incident drives the router and its
+  dependents, gray / down / control-plane behave as documented, labels follow impact, and the
+  realism report finds nothing unexplained.
+- `test_rack_tools.py` (3) — the vectorised group rule equals the API's rule on 5,000 random cases;
+  the curve comparison and the window sweep run end to end.
+- `test_compare_v2_v3.py` (2) — the v2/v3 comparison reads the manifest and the run report.
+- `test_cause_metric.py` (3) — one `api_anomaly_cause_p` series per currently anomalous machine.
+- `test_prediction_logging.py` (2) — a prediction is logged with the history it carried, so
+  feedback on a v4 prediction can become a v4 training example.
+- `test_export_feedback.py` (4) — the feedback exporter with `kubectl` stubbed: relative and
+  outside output folders, empty table, `kubectl` failure.
+- `test_sampler_source.py` (2) — the panel's sampler never reads the test fleet.
+- `test_ci_config.py` (3) — `scripts/ci_config.py` against a fake Jenkins and SonarQube.
 
 ```bash
 pip install -r requirements-dev.txt
@@ -2776,13 +2814,22 @@ python monitoring/k8s_exporter.py &
 - **Disk headroom is a CI dependency.** Every Jenkins build leaves a ~2 GB image on the host (the registry keeps its own copy, so local images are safe to prune), and SonarQube's Elasticsearch switches every index to read-only when the disk passes 95% (observed live, and again at 97% before a cleanup). Unpruned, a day of builds is enough to reach it. Routine: `docker image prune -a -f --filter "until=24h"` after heavy CI days and a `df -h /` before a demo. The registry volume (about 6 GB, every tag since `2.3.0`) is the one store that only grows; trimming it needs registry garbage collection, which means recreating its container with deletes enabled and its network preserved.
 - **Dependencies are pinned at the top level, not locked.** `requirements-api.txt`, `boto3` and `msgpack` are pinned exactly, but their transitive dependencies are only bounded (`>=`), so two builds hours apart can install different versions (observed: `python-dotenv` 1.2.3 → 1.2.4 and `uvloop` 0.22.1 → 0.23.0 between builds `b93` and `b94`; the image scan reports 0 vulnerabilities in both). A lockfile generated from the image's Python environment would close it; it needs its own verification cycle, so it is deliberately left for after the defense.
 - **Operator feedback carries a verdict, not a cause.** `POST /feedback/{id}` takes `verdict` and `notes`, so a true positive that only the IsolationForest flagged (the classifier named no cause) has no label for the classifier and is skipped by retraining. In the sandbox demo run, 24 judged rows gave 21 used and 3 skipped, and F1 moved from 0.7152 to 0.7156: 21 rows are about 0.06% of the training rows, so the loop's mechanics are shown, not an improvement.
-- **No NetworkPolicy.** Pods are hardened individually (non-root, read-only filesystem, no capabilities, seccomp), but nothing restricts pod-to-pod traffic inside `ml-serving`. Adding a policy alone would not be enough: Minikube's default network plugin does not enforce NetworkPolicy, so it would need a CNI that does (e.g. Calico) and a test proving traffic is actually blocked.
+- **The NetworkPolicy is written but not enforced.** Pods are hardened individually (non-root, read-only filesystem, no capabilities, seccomp). `kubernetes/networkpolicy.yaml` lets only the API pods reach PostgreSQL, but Minikube's default network plugin does not enforce NetworkPolicy, so it is not applied on the demo cluster and not claimed. Enforcing it needs a CNI that does (e.g. Calico) and the check in `docs/INFRASTRUCTURE_SETUP.md` proving traffic is actually blocked.
 
 - **`cascade` recall (0.27) is genuinely the weakest result in this
   project**, stated honestly rather than hidden — the generator's own
   cascade labeling is inconsistent row to row, which is why it is trained
   as `normal` and relies on the IsolationForest for coverage instead. See
   [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training).
+- **Gray failures are mostly invisible, even with realistic data** ([Decision 9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)).
+  On the full-size v3 fleets, every hard-down router is named within about 30 s, but the router
+  is named in only 5% of gray-failure incidents (10% with a v3-trained model) at under 1.5 false
+  alarms per router-day; catching about 70% costs about 800. The six features do not carry the
+  signal a gray failure leaves (retransmissions, latency). A model trained on v3 data was rejected
+  by the guardrail, so production keeps the v2-trained model.
+- **The safety net costs most of the precision.** On the v3 test fleet the classifier alone reaches
+  precision 0.91 (production) to 0.99 (v3 candidate); the served decision, classifier OR
+  IsolationForest, is about 0.73 for both. Tuning the safety net is the more promising lever.
 - **v4's rolling features cover 3 of 6 metrics** (`cpu`, `ram`, `load_avg`)
   — the ones where a *trend* carries more signal than a snapshot. Extending
   to all six is real, larger work (retraining v4 from scratch, re-selecting
@@ -2810,6 +2857,9 @@ python monitoring/k8s_exporter.py &
   a better approach would decouple the correlation injection from baseline
   computation, using the service graph only for root-cause ranking, never
   for anomaly injection.
+- **A TCP retransmission feature** — the next step from Decision 9c: the retransmission ratio
+  node_exporter already exposes (`node_netstat_Tcp_RetransSegs` over `node_netstat_Tcp_OutSegs`),
+  emitted by the generator too, so gray failures leave a signal the model can learn. Not built.
 - **Alertmanager integration** — wiring real Slack/email notifications when
   `/root-cause` identifies a `likely_root_cause`, closing the loop from
   detection to human notification. Not built.
