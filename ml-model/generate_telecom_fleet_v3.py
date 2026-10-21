@@ -54,7 +54,8 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import generate_telecom_fleet as v2  # noqa: E402  (profiles, anomaly signatures, calendar, fleet)
+# v2 supplies the machine profiles, anomaly signatures, calendar and fleet layout.
+import generate_telecom_fleet as v2  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "data" / "telecom_fleet_v3.csv"
@@ -160,45 +161,65 @@ def apply_router_own(m, incidents, labels, atypes, roots, reach, name, rng):
         labels[sl], roots[sl] = 1, name
 
 
+def _gray_reading(m, i, imp, is_gear):
+    """One dependent reading under a gray failure of impact `imp`. True when the impact is material."""
+    m["network"][i] *= 1 - 0.45 * imp             # TCP backs off under loss
+    m["cpu"][i] = min(100.0, m["cpu"][i] * (1 + 0.2 * imp))   # retries, timeouts
+    if not is_gear:
+        m["ram"][i] = min(100.0, m["ram"][i] * (1 + 0.1 * imp))   # in-flight work queues
+        m["load_avg"][i] *= 1 + 0.25 * imp                    # busier workers
+        m["disk_io"][i] *= 1 - 0.15 * imp                     # fewer requests completed
+    return imp >= MATERIAL
+
+
+def _cut_off_reading(m, i, is_gear, rng):
+    """One dependent reading behind a router that is down: nothing gets through."""
+    m["network"][i] = abs(float(rng.normal(0, 0.5)))
+    m["cpu"][i] *= 0.25
+    if not is_gear:
+        m["load_avg"][i] *= 0.3
+        m["disk_io"][i] *= 0.3
+
+
+def _incident_window(inc, n, rng):
+    """When a dependent feels an incident: (gray, first, end, ramp, tail). Draw order is fixed."""
+    gray = inc["mode"] == "gray"
+    lag = int(rng.integers(1, 7)) if gray else int(rng.integers(0, 2))    # 30 s - 3 min / instant
+    ramp = int(rng.integers(2, 5)) if gray else 1
+    tail = int(rng.integers(1, 4)) if gray else int(rng.integers(0, 3))
+    return gray, inc["start"] + lag, min(n, inc["end"] + tail), ramp, tail
+
+
+def _hit_dependent(m, n, tf, inc, router, marks, is_gear, sens, rng):
+    """Apply one router incident to one dependent. marks = (labels, atypes, roots, reach)."""
+    labels, atypes, roots, reach = marks
+    gray, a, b, ramp, tail = _incident_window(inc, n, rng)
+    for i in range(a, b):
+        if labels[i]:
+            if not gray:
+                reach[i] = 0                     # a local fault behind a dead router is unreachable too
+            continue
+        r = min(1.0, (i - a + 1) / ramp)
+        if i >= inc["end"]:
+            r *= (b - i) / (tail + 1)            # recovery tail
+        if gray:
+            imp = inc["severity"] * sens * tf[i] * r      # less traffic, fewer losses to suffer
+            if _gray_reading(m, i, imp, is_gear):
+                labels[i], atypes[i], roots[i] = 1, "cascade_gray", router
+        else:
+            _cut_off_reading(m, i, is_gear, rng)
+            reach[i] = 0
+            labels[i], atypes[i], roots[i] = 1, "cascade_unreachable", router
+
+
 def apply_dependent(m, profile_name, n, tf, incidents, router, labels, atypes, roots, reach, rng):
     """What a dependent records while its router is degraded or down (control-plane events do not
     reach it). Machine-local faults already in progress keep their own label and signature."""
     is_gear = profile_name in v2.NETWORK_GEAR
     sens = SENSITIVITY.get(profile_name, 1.0)
     for inc in incidents:
-        if inc["mode"] == "control_plane":
-            continue
-        gray = inc["mode"] == "gray"
-        lag = int(rng.integers(1, 7)) if gray else int(rng.integers(0, 2))    # 30 s - 3 min / instant
-        ramp = int(rng.integers(2, 5)) if gray else 1
-        tail = int(rng.integers(1, 4)) if gray else int(rng.integers(0, 3))
-        a, b = inc["start"] + lag, min(n, inc["end"] + tail)
-        for i in range(a, b):
-            if labels[i]:
-                if not gray:
-                    reach[i] = 0                     # a local fault behind a dead router is unreachable too
-                continue
-            r = min(1.0, (i - a + 1) / ramp)
-            if i >= inc["end"]:
-                r *= (b - i) / (tail + 1)            # recovery tail
-            if gray:
-                imp = inc["severity"] * sens * tf[i] * r      # less traffic, fewer losses to suffer
-                m["network"][i] *= 1 - 0.45 * imp             # TCP backs off under loss
-                m["cpu"][i] = min(100.0, m["cpu"][i] * (1 + 0.2 * imp))   # retries, timeouts
-                if not is_gear:
-                    m["ram"][i] = min(100.0, m["ram"][i] * (1 + 0.1 * imp))   # in-flight work queues
-                    m["load_avg"][i] *= 1 + 0.25 * imp                    # busier workers
-                    m["disk_io"][i] *= 1 - 0.15 * imp                     # fewer requests completed
-                if imp >= MATERIAL:
-                    labels[i], atypes[i], roots[i] = 1, "cascade_gray", router
-            else:
-                m["network"][i] = abs(float(rng.normal(0, 0.5)))          # cut off
-                m["cpu"][i] *= 0.25
-                if not is_gear:
-                    m["load_avg"][i] *= 0.3
-                    m["disk_io"][i] *= 0.3
-                reach[i] = 0
-                labels[i], atypes[i], roots[i] = 1, "cascade_unreachable", router
+        if inc["mode"] != "control_plane":
+            _hit_dependent(m, n, tf, inc, router, (labels, atypes, roots, reach), is_gear, sens, rng)
 
 
 def topology(fleet):
@@ -211,7 +232,7 @@ def topology(fleet):
     return routers, dep
 
 
-def main() -> int:
+def _parse_args():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--machines", type=int, default=200)
     ap.add_argument("--days", type=int, default=30)
@@ -224,18 +245,63 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--output", type=Path, default=OUTPUT)
     args = ap.parse_args()
-
-    ctrl = 1.0 - args.gray_share - args.down_share
-    if ctrl < 0:
+    if 1.0 - args.gray_share - args.down_share < 0:
         ap.error("--gray-share + --down-share must not exceed 1")
-    shares = [args.gray_share, args.down_share, ctrl]
+    return args
+
+
+def _machine_frame(name, pname, profile, n, tf, stamps, incidents, depends_on, args, rng):
+    """All readings of one machine, as the DataFrame written to the CSV."""
+    m = base_signals(pname, profile, n, tf, rng)
+    labels = np.zeros(n, dtype=np.int8)
+    atypes = np.full(n, "", dtype=object)
+    roots = np.full(n, "", dtype=object)
+    reach = np.ones(n, dtype=np.int8)
+    if pname == "router":
+        apply_router_own(m, incidents[name], labels, atypes, roots, reach, name, rng)
+    else:
+        inject_local_faults(m, pname, profile, n, tf, args.anomaly_ratio, labels, atypes, roots, name, rng)
+        if name in depends_on:
+            apply_dependent(m, pname, n, tf, incidents[depends_on[name]], depends_on[name],
+                            labels, atypes, roots, reach, rng)
+    return pd.DataFrame({"timestamp": stamps, "machine": name, "type": pname,
+                         **{k: np.round(m[k], 3) for k in v2.METRICS},
+                         "label": labels, "anomaly_type": atypes,
+                         "root_cause": roots, "reachable": reach})
+
+
+def _write_log(out, args, n, stamps, depends_on, incidents):
+    log = {"generator": "generate_telecom_fleet_v3.py", "seed": args.seed, "start": str(START),
+           "step_seconds": STEP_S, "readings_per_machine": n,
+           "params": {k: getattr(args, k) for k in ("machines", "days", "anomaly_ratio",
+                                                     "router_fault_ratio", "gray_share", "down_share")},
+           "depends_on": depends_on,
+           "incidents": {r: [{**i, "start_ts": stamps[i["start"]],
+                              "end_ts": stamps[min(i["end"], n - 1)]} for i in incs]
+                         for r, incs in incidents.items()}}
+    log_path = out.with_suffix(".incidents.json")
+    log_path.write_text(json.dumps(log, indent=1))
+    return log_path
+
+
+def _print_summary(totals, by_type, incidents, out, log_path):
+    print(f"\nrows {totals['rows']:,}   anomaly rate {totals['anom'] / totals['rows']:.4f}")
+    for t in sorted(by_type, key=lambda x: -by_type[x]):
+        print(f"  {t:<20} {by_type[t]:>10,}")
+    modes = [i["mode"] for incs in incidents.values() for i in incs]
+    print(f"router incidents: {len(modes)}  "
+          + "  ".join(f"{md} {modes.count(md)}" for md in MODES))
+    print(f"wrote {out}\nwrote {log_path}")
+
+
+def main() -> int:
+    args = _parse_args()
+    shares = [args.gray_share, args.down_share, 1.0 - args.gray_share - args.down_share]
     n = args.days * 24 * 60 * 2
     fleet = v2.build_fleet(args.machines)
     routers, depends_on = topology(fleet)
-    if GRAPH.exists() and args.machines == 200:
-        g = json.loads(GRAPH.read_text())
-        if g.get("depends_on") != depends_on:
-            print("WARNING: topology differs from models/dependency_graph.json", file=sys.stderr)
+    if GRAPH.exists() and args.machines == 200 and json.loads(GRAPH.read_text()).get("depends_on") != depends_on:
+        print("WARNING: topology differs from models/dependency_graph.json", file=sys.stderr)
 
     times = [START + timedelta(seconds=STEP_S * i) for i in range(n)]
     stamps = np.array([str(t) for t in times], dtype=object)
@@ -253,52 +319,20 @@ def main() -> int:
     totals, by_type = {"rows": 0, "anom": 0}, {}
     print(f"generating {len(fleet)} machines x {n:,} readings (30 s, {args.days} days) -> {out}")
     for idx, (name, pname, profile) in enumerate(fleet):
-        rng = np.random.default_rng(seeds[idx])
         if pname not in tf_cache:
             tf_cache[pname] = np.array([v2.time_factor(h, profile[6]) for h in hours])
-        tf = tf_cache[pname]
-        m = base_signals(pname, profile, n, tf, rng)
-        labels = np.zeros(n, dtype=np.int8)
-        atypes = np.full(n, "", dtype=object)
-        roots = np.full(n, "", dtype=object)
-        reach = np.ones(n, dtype=np.int8)
-        if pname == "router":
-            apply_router_own(m, incidents[name], labels, atypes, roots, reach, name, rng)
-        else:
-            inject_local_faults(m, pname, profile, n, tf, args.anomaly_ratio, labels, atypes, roots, name, rng)
-            if name in depends_on:
-                apply_dependent(m, pname, n, tf, incidents[depends_on[name]], depends_on[name],
-                                labels, atypes, roots, reach, rng)
-        df = pd.DataFrame({"timestamp": stamps, "machine": name, "type": pname,
-                           **{k: np.round(m[k], 3) for k in v2.METRICS},
-                           "label": labels, "anomaly_type": atypes,
-                           "root_cause": roots, "reachable": reach})
+        df = _machine_frame(name, pname, profile, n, tf_cache[pname], stamps, incidents, depends_on, args,
+                            np.random.default_rng(seeds[idx]))
         df.to_csv(out, mode="a", header=(idx == 0), index=False)
+        flagged = df["anomaly_type"].to_numpy()[df["label"].to_numpy() == 1]
         totals["rows"] += n
-        totals["anom"] += int(labels.sum())
-        for t, c in zip(*np.unique(atypes[labels == 1], return_counts=True)):
+        totals["anom"] += len(flagged)
+        for t, c in zip(*np.unique(flagged, return_counts=True)):
             by_type[t] = by_type.get(t, 0) + int(c)
         if (idx + 1) % 20 == 0:
             print(f"  {idx + 1}/{len(fleet)} machines", flush=True)
 
-    log = {"generator": "generate_telecom_fleet_v3.py", "seed": args.seed, "start": str(START),
-           "step_seconds": STEP_S, "readings_per_machine": n,
-           "params": {k: getattr(args, k) for k in ("machines", "days", "anomaly_ratio",
-                                                     "router_fault_ratio", "gray_share", "down_share")},
-           "depends_on": depends_on,
-           "incidents": {r: [{**i, "start_ts": stamps[i["start"]],
-                              "end_ts": stamps[min(i["end"], n - 1)]} for i in incs]
-                         for r, incs in incidents.items()}}
-    log_path = out.with_suffix(".incidents.json")
-    log_path.write_text(json.dumps(log, indent=1))
-
-    print(f"\nrows {totals['rows']:,}   anomaly rate {totals['anom'] / totals['rows']:.4f}")
-    for t in sorted(by_type, key=lambda x: -by_type[x]):
-        print(f"  {t:<20} {by_type[t]:>10,}")
-    modes = [i["mode"] for incs in incidents.values() for i in incs]
-    print(f"router incidents: {len(modes)}  "
-          + "  ".join(f"{md} {modes.count(md)}" for md in MODES))
-    print(f"wrote {out}\nwrote {log_path}")
+    _print_summary(totals, by_type, incidents, out, _write_log(out, args, n, stamps, depends_on, incidents))
     return 0
 
 

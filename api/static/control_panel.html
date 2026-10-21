@@ -375,7 +375,7 @@
   const CT_JSON={"Content-Type":"application/json"};
   function ctEsc(s){ return String(s==null?"—":s).replace(/[&<>"]/g,function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
   async function predictLogged(body,truth){
-    const logged=truth?Object.assign({},body,truth):body;
+    const logged=truth?{...body,...truth}:body;
     try{ return await getJSON(API+"/ui/cluster/predict",{method:"POST",headers:CT_JSON,body:JSON.stringify(logged)}); }
     catch(e){ console.debug("cluster API unavailable, using the local API (prediction not logged)", e); return await getJSON(API+"/predict",{method:"POST",headers:CT_JSON,body:JSON.stringify(body)}); }
   }
@@ -441,11 +441,11 @@
     body.innerHTML=h+'</tbody></table>';
   }
   let RV_ROWS=[];
+  function rvPad(n){ return String(n).padStart(2,"0"); }
   function rvLocal(ts){
     const d=new Date(ts);
-    if(isNaN(d.getTime())){ return ts; }
-    const z=function(n){ return String(n).padStart(2,"0"); };
-    return d.getFullYear()+"-"+z(d.getMonth()+1)+"-"+z(d.getDate())+" "+z(d.getHours())+":"+z(d.getMinutes())+":"+z(d.getSeconds());
+    if(Number.isNaN(d.getTime())){ return ts; }
+    return d.getFullYear()+"-"+rvPad(d.getMonth()+1)+"-"+rvPad(d.getDate())+" "+rvPad(d.getHours())+":"+rvPad(d.getMinutes())+":"+rvPad(d.getSeconds());
   }
   function rvNum(v,digits){ return (typeof v==="number")?v.toFixed(digits):"—"; }
   function rvReal(x){
@@ -482,31 +482,48 @@
       return '<div class="rvhist"><div class="rvk"><span>'+ctEsc(k)+'</span><span>'+ctEsc(first)+' → '+ctEsc(last)+'</span></div>'+rvSpark(v)+'</div>';
     }).join("");
   }
-  function rvModalHtml(x){
-    const byClf=(x.flagged_by==="classifier"), p=x.p_normal, t=x.threshold, time=(x.real&&x.real.time)?x.real.time:"";
-    let head='<header class="rvhead"><div><div class="rvtitle">'+ctEsc(x.machine)+'</div><div class="rvsub">'+ctEsc(x.cause)+' · '+ctEsc(x.model_version)+'</div></div><div class="rvtags">'
-      +'<span class="tag '+(byClf?'anom':'iso')+'">'+(byClf?'flagged by the classifier':'flagged by the safety net only')+'</span>'
-      +(x.verdict?'<span class="tag norm">judged: '+ctEsc(String(x.verdict).replace("_"," "))+'</span>':'<span class="tag de">not judged yet</span>')
+  function rvHead(x){
+    const byClf=(x.flagged_by==="classifier");
+    const flagged=byClf?'<span class="tag anom">flagged by the classifier</span>':'<span class="tag iso">flagged by the safety net only</span>';
+    const judged=x.verdict?'<span class="tag norm">judged: '+ctEsc(String(x.verdict).replace("_"," "))+'</span>':'<span class="tag de">not judged yet</span>';
+    return '<header class="rvhead"><div><div class="rvtitle">'+ctEsc(x.machine)+'</div><div class="rvsub">'+ctEsc(x.cause)+' · '+ctEsc(x.model_version)+'</div></div><div class="rvtags">'
+      +flagged+judged
       +'</div><button type="button" class="btn sec small" data-rvclose="1" aria-label="Close this window">✕ Close</button></header>';
+  }
+  function rvDecision(x){
+    const p=x.p_normal, t=x.threshold;
     let dec=rvGauge(p,t)+kv("P(normal)",ctEsc(rvNum(p,4)))+kv("decision threshold",ctEsc(rvNum(t,2)));
     if(typeof p==="number"&&typeof t==="number"){ dec+=kv("margin",ctEsc(rvNum(t-p,4))+(p<t?" under the threshold":" above the threshold")); }
-    dec+=kv("classifier cause",ctEsc(x.xgb_cause))+kv("cause given",ctEsc(x.cause))+kv("IsolationForest score",ctEsc(rvNum(x.iso_score,4)));
-    const times=kv("logged at (your time)",ctEsc(rvLocal(x.timestamp)))+kv("logged at (UTC)",ctEsc(x.timestamp))
+    return dec+kv("classifier cause",ctEsc(x.xgb_cause))+kv("cause given",ctEsc(x.cause))+kv("IsolationForest score",ctEsc(rvNum(x.iso_score,4)));
+  }
+  function rvTimes(x){
+    const time=(x.real&&x.real.time)?x.real.time:"";
+    return kv("logged at (your time)",ctEsc(rvLocal(x.timestamp)))+kv("logged at (UTC)",ctEsc(x.timestamp))
       +kv("reading time",ctEsc(time||"not recorded"))+kv("hour in the request",ctEsc(time?time.slice(11,13):"not recorded"))+kv("time window",ctEsc(x.window));
+  }
+  function rvReading(x){
     const m=x.metrics;
-    const reading=m?'<div class="rvtiles">'+Object.keys(m).map(function(k){ return rvTile(k,typeof m[k]==="number"?rvNum(m[k],1):m[k]); }).join("")+'</div>':'<div class="hint">not stored for this reading</div>';
-    let truth;
-    if(x.real){ const ok=(x.real.label===1);
-      truth='<div class="rvbig"><span class="tag '+(ok?'anom':'norm')+'">'+(ok?'anomaly'+(x.real.cause?' · '+ctEsc(x.real.cause):''):'normal')+'</span></div>'
-        +'<div>'+(ok?'✓ The alert was right (a true anomaly).':'✗ The alert was wrong (the machine was normal: a false alarm).')+'</div>'+kv("recorded by",ctEsc(x.real.source||"—"));
-    }else{ truth='<div class="hint">not recorded: only readings from the Demo tab or the production agent carry a true label</div>'; }
-    const who=kv("machine",ctEsc(x.machine))+kv("machine type",ctEsc(x.machine_type))+kv("model",ctEsc(x.model_version))+kv("prediction id",ctEsc(x.id));
-    const how='<div class="hint" style="margin-top:0">The classifier flags a reading when P(normal) falls below the threshold. The IsolationForest safety net flags unusual readings on its own; either one is enough (OR rule). A z-score is how many standard deviations a value is from this machine\'s usual value for this time of day; 3 or more is far.</div>';
-    return '<div class="rvwin">'+head+'<div class="rvbody">'
-      +rvBox("Decision",dec)+rvBox("Real label (demo)",truth)+rvBox("Times",times)
-      +rvBox("The reading received",reading,true)
-      +rvBox("Distance from this machine's normal (z-scores)",rvZbars(x.features))+rvBox("Recent history (oldest → newest)",rvHistoryBoxes(x.history))+rvBox("Machine",who)
-      +rvBox("How to read this",how,true)+'</div></div>';
+    if(!m){ return '<div class="hint">not stored for this reading</div>'; }
+    return '<div class="rvtiles">'+Object.keys(m).map(function(k){ return rvTile(k,typeof m[k]==="number"?rvNum(m[k],1):m[k]); }).join("")+'</div>';
+  }
+  function rvTruth(x){
+    if(!x.real){ return '<div class="hint">not recorded: only readings from the Demo tab or the production agent carry a true label</div>'; }
+    const ok=(x.real.label===1);
+    let tag="normal";
+    if(ok){ tag='anomaly'+(x.real.cause?' · '+ctEsc(x.real.cause):''); }
+    return '<div class="rvbig"><span class="tag '+(ok?'anom':'norm')+'">'+tag+'</span></div>'
+      +'<div>'+(ok?'✓ The alert was right (a true anomaly).':'✗ The alert was wrong (the machine was normal: a false alarm).')+'</div>'+kv("recorded by",ctEsc(x.real.source||"—"));
+  }
+  function rvWho(x){
+    return kv("machine",ctEsc(x.machine))+kv("machine type",ctEsc(x.machine_type))+kv("model",ctEsc(x.model_version))+kv("prediction id",ctEsc(x.id));
+  }
+  const RV_HOW='<div class="hint" style="margin-top:0">The classifier flags a reading when P(normal) falls below the threshold. The IsolationForest safety net flags unusual readings on its own; either one is enough (OR rule). A z-score is how many standard deviations a value is from this machine\'s usual value for this time of day; 3 or more is far.</div>';
+  function rvModalHtml(x){
+    return '<div class="rvwin">'+rvHead(x)+'<div class="rvbody">'
+      +rvBox("Decision",rvDecision(x))+rvBox("Real label (demo)",rvTruth(x))+rvBox("Times",rvTimes(x))
+      +rvBox("The reading received",rvReading(x),true)
+      +rvBox("Distance from this machine's normal (z-scores)",rvZbars(x.features))+rvBox("Recent history (oldest → newest)",rvHistoryBoxes(x.history))+rvBox("Machine",rvWho(x))
+      +rvBox("How to read this",RV_HOW,true)+'</div></div>';
   }
   let RV_OPENER=null;
   function rvClose(){
@@ -573,10 +590,23 @@
     return '<svg class="flsvg '+cls+'" width="'+size+'" height="'+size+'" viewBox="0 0 24 24" fill="none" '
       +'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>';
   }
-  function flCls(st){ return st===1?"fl-anom":(st===0?"fl-ok":"fl-none"); }
+  function flCls(st){
+    if(st===1){ return "fl-anom"; }
+    return st===0?"fl-ok":"fl-none";
+  }
+  function flState(s){
+    if(!s){ return undefined; }
+    return s.stale?"stale":s.anomalous;
+  }
+  function flLabel(st,s){
+    if(st===1){ return "anomalous"; }
+    if(st===0){ return "normal"; }
+    if(st==="stale"){ return "not reporting for "+Math.round(s.age_s||0)+" s (unreachable?)"; }
+    return "no prediction yet";
+  }
   function flChip(m,s){
-    const st=s?(s.stale?"stale":s.anomalous):undefined;
-    const label=st===1?"anomalous":(st===0?"normal":(st==="stale"?("not reporting for "+Math.round(s.age_s||0)+" s (unreachable?)"):"no prediction yet"));
+    const st=flState(s);
+    const label=flLabel(st,s);
     const cls=st==="stale"?"fl-none":flCls(st);
     return '<div class="flchip'+(st==="stale"?" stale":"")+'" title="'+ctEsc(m)+' — '+label+'">'
       +flIcon((s&&s.type)||m.split("-")[0],cls,19)+'<span class="nm">'+ctEsc(m)+'</span></div>';
@@ -587,10 +617,10 @@
     const bad=live.filter(function(m){ return state[m].anomalous===1; }).length;
     const stale=members.filter(function(m){ return state[m] && state[m].stale; }).length;
     const hs=hub?state[hub]:undefined;
-    const hubSt=hs?(hs.stale?undefined:hs.anomalous):undefined;
+    const hubSt=(hs&&!hs.stale)?hs.anomalous:undefined;
     const sev=(rs&&FL_SEV[rs.state])||"";
     let h='<div class="flcard '+sev+'"><div class="flhead">';
-    h+=hub?flIcon("router",hs&&hs.stale?"fl-none":flCls(hubSt),20):'';
+    if(hub){ const hubCls=(hs&&hs.stale)?"fl-none":flCls(hubSt); h+=flIcon("router",hubCls,20); }
     h+='<span class="nm">'+ctEsc(title)+'</span><span class="ct">'+bad+'/'+(live.length||members.length)+' anomalous'
       +(stale?' · '+stale+' not reporting':'')+'</span></div>';
     if(rs&&rs.message){ h+='<div class="flbanner '+sev+'">'+ctEsc(rs.message)+'</div>'; }

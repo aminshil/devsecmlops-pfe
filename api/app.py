@@ -1214,6 +1214,9 @@ def _k8s_layer():
         return {"layer": "L4", "name": "Kubernetes", "up": False, "detail": "unreachable"}
 
 
+_PROM_QUERY_URL = "http://localhost:9090/api/v1/query?query="   # Prometheus instant query on this host
+
+
 # (host, port, layer, name, detail) for each port-checked layer
 _PORT_LAYERS = [
     ("localhost", 5000, "L2", "Docker registry", ":5000"),
@@ -1250,7 +1253,7 @@ def ui_status():
 
 def _prom_query(expr):
     try:
-        url = f"http://localhost:9090/api/v1/query?query={_ur.quote(expr)}"
+        url = _PROM_QUERY_URL + _ur.quote(expr)
         with _ur.urlopen(url, timeout=3) as r:
             res = json.loads(r.read())["data"]["result"]
         return float(res[0]["value"][1]) if res else None
@@ -1396,7 +1399,7 @@ def _infra_live_anomalies():
     anomalies = []
     try:
         expr = _freshest("api_currently_anomalous") + " == 1"
-        url = "http://localhost:9090/api/v1/query?query=" + _ur.quote(expr)
+        url = _PROM_QUERY_URL + _ur.quote(expr)
         with _ur.urlopen(url, timeout=4) as r:
             for s in json.loads(r.read())["data"]["result"]:
                 m = s["metric"]
@@ -1435,7 +1438,7 @@ def ui_fleet():
     router_states holds the per-router reading from _fleet_router_states."""
     machines, reachable, error = {}, False, ""
     try:
-        url = "http://localhost:9090/api/v1/query?query=" + _ur.quote(_freshest("api_currently_anomalous"))
+        url = _PROM_QUERY_URL + _ur.quote(_freshest("api_currently_anomalous"))
         with _ur.urlopen(url, timeout=6) as r:
             for s in json.loads(r.read())["data"]["result"]:
                 name = s["metric"].get("machine")
@@ -1448,7 +1451,7 @@ def ui_fleet():
     if reachable:
         try:
             q = "max by (machine) (" + _LAST_SEEN_METRIC + ")"
-            with _ur.urlopen("http://localhost:9090/api/v1/query?query=" + _ur.quote(q), timeout=6) as r:
+            with _ur.urlopen(_PROM_QUERY_URL + _ur.quote(q), timeout=6) as r:
                 now = time.time()
                 for s in json.loads(r.read())["data"]["result"]:
                     name = s["metric"].get("machine")
@@ -1846,7 +1849,7 @@ import urllib.parse as _up
 def _prom_scalar(metric: str):
     """Read a single scalar metric from Prometheus, or None if unavailable."""
     try:
-        url = "http://localhost:9090/api/v1/query?query=" + _up.quote(metric)
+        url = _PROM_QUERY_URL + _up.quote(metric)
         with _ur.urlopen(url, timeout=4) as r:
             data = json.loads(r.read().decode())
         result = data.get("data", {}).get("result", [])
