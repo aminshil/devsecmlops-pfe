@@ -46,7 +46,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Weakest cause | `cascade`, recall 0.2679 (label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7755** · precision 0.7202 · recall 0.84. A different sample from the full test file, so it is not comparable with 0.7291 | `scripts/live_k8s_validation.py`, run on 19 October |
 | Latest green pipeline | Build `2.20.3-b107` (commit `0ea14df3`: input range checks, opt-in feedback token, stage-9 rollback, Review tab, validation-fleet guardrail): all 11 stages green, 141 tests at the time, Quality Gate OK, 0 image vulnerabilities, smoke-tested in the live pod, which now also fails unless the alert threshold was read from the manifest | [L3 run history](#l3--cicd) |
-| Tests | 176 passing on `main`, in 18 files (141 when b107 ran) | `pytest tests/`; stage 1b runs them on every build |
+| Tests | 179 passing on `main`, in 18 files (141 when b107 ran) | `pytest tests/`; stage 1b runs them on every build |
 | Since b107 | Commits not yet through Jenkins: the Review tab's details pop-up and real-label column, the Fleet tab, failure model v3 and its full-size experiment, docs. **Serving is unchanged**: every `api/app.py` change is under `/ui/` (the operations UI, never enabled on the pods), and the agent's change only matters for v3 files (it skips rows marked unreachable; the v2 fleets it replays have no such column). The control panel runs from the repository on the host, so it serves the new tabs after `systemctl restart control-panel` | `git log 0ea14df3..HEAD` |
 | Dashboard | 25 Grafana panels in 5 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-19: the model promoted by Jenkins `devsecmlops-model` build 8 (MLflow `241447d0…`), trained on all 17,280,000 rows of the labelled fleet, v4 F1 0.7291, threshold 0.91 selected by the pipeline, guardrail PASS, model files read back from MinIO, deployed as image `2.20.3-b103`. Before that: the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
@@ -1432,7 +1432,7 @@ Jenkins, `Jenkinsfile`, 11 stages, every one a real gate — a failure stops the
 Stage labels below match the Jenkins console exactly.
 
 - **1. Checkout**
-- **1b. Unit tests** — pytest (141 tests in b107, 176 on `main`), coverage report. Fail-fast: a broken commit stops here.
+- **1b. Unit tests** — pytest (141 tests in b107, 179 on `main`), coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that no deployment file carries a copy of the threshold (it is read from the manifest) and that the manifest's threshold is the evaluated one, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
@@ -2675,7 +2675,7 @@ this project.)
 
 ## Testing
 
-**176 tests** in 18 files (up from 15), `pytest`, in `tests/`:
+**179 tests** in 18 files (up from 15), `pytest`, in `tests/`:
 
 - `test_api.py` (38 tests) — every endpoint, input validation (NaN/inf
   rejection, physical-range rejection (cpu=150 is a 422), the opt-in feedback token, machine length, metrics count, history shape), v3/v4
@@ -2703,7 +2703,7 @@ this project.)
   the same rows.
 - `test_ui_cluster.py` (15) — the continuous-training panel routes: cluster proxies, read-only tab
   data, and that every `/ui/` route requires the ops credentials.
-- `test_ui_fix.py` (10) — the panel's Stop/Fix buttons go through systemd only (a `pkill` is undone
+- `test_ui_fix.py` (13) — every layer on the Status tab has a fix; Stop/Fix go through systemd only (a `pkill` is undone
   by `Restart=always`; a Fix must not start a second copy).
 - `test_ui_fleet.py` (10) — the Fleet tab: topology, colours from the pods' verdicts, staleness, and
   every state of the group rule.

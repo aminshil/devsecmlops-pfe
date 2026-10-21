@@ -1922,6 +1922,7 @@ _FIX_MAP = {
     "Prometheus":       ("process", "prometheus"),
     "K8s exporter":     ("process", "monitoring/k8s_exporter.py"),
     "Production agent": ("process", _AGENT_SCRIPT),
+    "MLflow":           ("process", "mlflow"),
     "Kubernetes":       ("k8s", None),
 }
 
@@ -1944,7 +1945,7 @@ def _fix_result(ok, note=None, error=None, **extra):
 # undone seconds later, and starting one by spawning it makes a second copy outside systemd (a Prometheus with
 # another storage path, a second production agent doubling the traffic): systemctl is the single authority.
 _UNIT_FOR_TARGET = {"prometheus": "prometheus", "monitoring/k8s_exporter.py": "k8s-exporter",
-                    _AGENT_SCRIPT: "production-agent"}
+                    _AGENT_SCRIPT: "production-agent", "mlflow": "mlflow"}
 
 
 def _systemctl(action, unit, layer_name):

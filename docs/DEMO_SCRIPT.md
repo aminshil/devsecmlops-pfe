@@ -1,6 +1,6 @@
 # Defense demo script
 
-Prepared against build `2.20.3-b107` (all 11 CI stages green, 141 tests at the time, 176 on `main` since; Quality Gate OK; serves the model promoted on 19 October, trained on all 17.28M rows, v4 F1 0.7291, threshold 0.91), commit `0ea14df3` (`git log --oneline -5`). About 15 minutes.
+Prepared against build `2.20.3-b107` (all 11 CI stages green, 141 tests at the time, 179 on `main` since; Quality Gate OK; serves the model promoted on 19 October, trained on all 17.28M rows, v4 F1 0.7291, threshold 0.91), commit `0ea14df3` (`git log --oneline -5`). About 15 minutes.
 
 **How to read the "Proven" column.** *Log* means the exact command or output appeared in a real Jenkins or terminal log during this project. *Rehearse* means it is documented in the README but was not run today. Run every *Rehearse* step once before the defense, from a cold start.
 

@@ -16,7 +16,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 import api.app as app_module  # noqa: E402
 
 CREDS = ("fix-test-user", "fix-test-password-0123456789")
-LAYERS = [("Prometheus", "prometheus"), ("K8s exporter", "k8s-exporter"), ("Production agent", "production-agent")]
+LAYERS = [("Prometheus", "prometheus"), ("K8s exporter", "k8s-exporter"), ("Production agent", "production-agent"),
+          ("MLflow", "mlflow")]
 
 
 @pytest.fixture
@@ -66,6 +67,12 @@ def test_the_agent_helpers_used_by_the_pipeline_control_use_systemctl_too(calls)
 def test_an_unknown_process_keeps_the_old_behaviour(calls):
     app_module._stop_process("something_else.py", "Something")
     assert calls == [["pkill", "-f", "something_else.py"]]
+
+
+def test_every_layer_on_the_status_tab_has_a_fix():
+    """Found when Fix on MLflow answered \"no known fix\": it is a systemd unit the map did not list."""
+    names = {name for _, _, _, name, _ in app_module._PORT_LAYERS} | {"Kubernetes"}
+    assert names <= set(app_module._FIX_MAP), names - set(app_module._FIX_MAP)
 
 
 def test_docker_layers_still_use_docker(client, calls):
