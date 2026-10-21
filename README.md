@@ -2061,10 +2061,17 @@ original intent.
 
 Decision 9b found that the v2 generator never marks the router that causes a cascade. The fix
 is a separate generator, `ml-model/generate_telecom_fleet_v3.py`, built so that every pattern a
-reviewer can point at has a mechanism behind it and a measured count. **The shipped models are
-still trained on v2 data**; v3 is a side-by-side generator with its own report, tests and the live
-detection logic in the Fleet tab. Adopting it means regenerating every dataset and retraining (see
-"Adopting it" below).
+reviewer can point at has a mechanism behind it and a measured count. It was then tested at full
+size against production (`scripts/v3_experiment.sh`). **Result: production stays on its v2-trained
+models.** A candidate trained on 30 days of v3 data was rejected by the guardrail, and the
+precision-recall curves below show the guardrail made the right call under the current policy.
+v3 remains in the repository as the more realistic generator, the data the Fleet tab's reasoning
+is measured on, and the basis for the next feature (a TCP retransmission feature, see "What it says").
+
+Vocabulary: a **router group** is one router plus the machines that depend on it in
+`models/dependency_graph.json` (in a data centre this is a rack behind its top-of-rack switch).
+The **group rule** is the Fleet tab's logic in `api/fleet_rules.py`, which judges a router from
+the verdicts of its whole group; the scripts call it the "rack rule".
 
 **What real networks do, and where each rule comes from**
 
@@ -2097,131 +2104,306 @@ detection logic in the Fleet tab. Adopting it means regenerating every dataset a
 - **Two new columns.** `root_cause` (the machine that caused the reading's anomaly) and `reachable`.
   The v2 columns are unchanged, so the current pipeline can read a v3 file.
 
-**Measured realism** (200 machines × 3 days, seed 42; reproduce with the commands below):
+**How the numbers below were produced.** One script, `scripts/v3_experiment.sh`, run as a
+transient systemd unit under the 11 GB memory cap used for full-size training. It generates the
+four v3 fleets with the same sizes and seeds as v2 (200 machines; training 30 days seed 42,
+validation 14 days seed 7, test 30 days seed 123, operator 3 days seed 2026), checks their realism,
+trains the real pipeline (`train_production.py --promote`) in a scratch folder, scores the group
+rule, and compares. Production's artifacts are hashed before and checked after (unchanged). Every
+block below is the script's output, copied verbatim from `build/v3/`.
+
+```bash
+systemd-run --unit=v3-experiment -p MemoryMax=11G -p MemorySwapMax=0 \
+    --working-directory="$PWD" /bin/bash scripts/v3_experiment.sh
+START=6 bash scripts/v3_experiment.sh     # only steps 6-7, reusing the fleets and the training report
+```
+
+**Measured realism** (step 2, training fleet: 17,280,000 rows, 1,510 router incidents):
 
 ```console
-$ python3 scripts/failure_model_report.py --data data/telecom_fleet_v3.csv
+$ python3 scripts/failure_model_report.py --data data/telecom_fleet_v3_labeled.csv
 == 1. Incidents (ground truth) ==
-  gray              92   duration median 6.0 min, p95 19.7 min
-  down              47   duration median 5.0 min, p95 14.5 min
-  control_plane     17   duration median 5.5 min, p95 10.2 min
+  gray             831   duration median 5.0 min, p95 18.2 min
+  down             458   duration median 5.0 min, p95 18.6 min
+  control_plane    221   duration median 5.0 min, p95 14.0 min
 
 == 2. Share of a router's dependents affected at the incident's peak ==
   mode           when       n    min  median    max
-  gray           day       43     0%     78%    91%
-  gray           night     49     0%     14%    74%
-  down           day       21    82%     95%   100%
-  down           night     26    91%     95%   100%
-  control_plane  day       10     0%      0%     0%
-  control_plane  night      7     0%      0%     0%
+  gray           day      432     0%     78%   100%
+  gray           night    399     0%      0%    91%
+  down           day      219    78%     96%   100%
+  down           night    239    82%     96%   100%
+  control_plane  day      120     0%      0%     0%
+  control_plane  night    101     0%      0%     0%
   hard down, dependents UNREACHABLE at the peak: min 100%, median 100% (below 100% affected only where a machine was already failing for its own reason)
 
 == 3. Propagation delay (incident start -> first affected dependent) ==
-  gray   median 60 s, range 30-120 s
+  gray   median 60 s, range 30-1140 s
   down   median 0 s, range 0-0 s
 
 == 4. "15+ machines behind one router are anomalous and the router is normal" ==
-  router-steps with 15+ anomalous dependents: 1,110
-  ... of which the router is labelled normal:         41
-      in the recovery tail just after an incident:     41
+  router-steps with 15+ anomalous dependents: 10,182
+  ... of which the router is labelled normal:         449
+      in the recovery tail just after an incident:     449
       not explained by an incident (coincident local faults): 0
 
 == 5. "every machine behind a router is anomalous" ==
-  during down             528
+  during down           6,080
+  during gray             272
   unreachable dependents outside any hard-down incident or its tail: 0
 
 == 6. "the router is anomalous and its machines are fine" ==
-  control_plane (data plane unaffected)        198 of 198 router-anomalous steps
-  gray                                         422 of 1,330 router-anomalous steps
-  down                                           0 of 575 router-anomalous steps
-    gray, within the first 3 min (propagation lag): 303
-    gray, later (impact below materiality: low traffic or mild loss): 119
+  control_plane (data plane unaffected)      2,728 of 2,728 router-anomalous steps
+  gray                                       4,771 of 11,603 router-anomalous steps
+  down                                           0 of 6,538 router-anomalous steps
+    gray, within the first 3 min (propagation lag): 2,839
+    gray, later (impact below materiality: low traffic or mild loss): 1,932
 ```
 
-Coupling between a router's own label and its dependents' state, same fleet and days
-(`scripts/cascade_check.py`):
+The generator's propagation lag is 30–180 s; longer gray delays (up to 1,140 s) are incidents
+whose impact stays below materiality until traffic rises, since impact scales with current traffic. In the "down" rows, a peak below 100% *affected* means a machine was already
+failing for its own reason; 100% of dependents are *unreachable* in every hard-down incident.
+
+**Coupling between a router's own label and its dependents** (`scripts/cascade_check.py`, both
+on full 30-day training fleets; the v2 output is in Decision 9b):
 
 | | v2 (shipped data) | v3 |
 |---|---|---|
-| correlation, router label vs share of dependents anomalous | -0.016 | **+0.70** |
-| router anomalous during a cascade (≥25% of dependents) | 4.3% (base rate 5.2%) → 0.83× | 90.9% (base rate 3.0%) → **29.9×** |
-
-**Accuracy study: the real pipeline on v2 versus v3 data.** Same code, same policy, same settings:
-`train_production.py --promote` on a 200-machine fleet (3-day training fleet, seed 42; 2-day
-validation fleet, seed 7, where the threshold is selected; 2-day test fleet, seed 123, where it is
-scored), with the production artifacts copied to a scratch folder first, as the smoke stage does
-(their SHA-256 hashes were unchanged afterwards). The v2 run reproduces production closely (test
-F1 0.7248 vs 0.7291 on the full 30-day data; cascade recall 0.307 vs 0.268), so the short fleets
-are a fair basis for the comparison. One seed: indicative, not a production claim.
-
-| test set, served decision (v4) | v2 data | v3 data |
-|---|---|---|
-| threshold selected on validation (`min_recall` 0.80) | 0.59 | 0.13 |
-| F1 / precision / recall | 0.7248 / 0.6703 / 0.7890 | **0.7629 / 0.6955 / 0.8449** |
-| classifier alone: F1 / precision / recall | 0.8167 / 0.9582 / 0.7117 | 0.8803 / 0.9599 / 0.8129 |
-| cause accuracy | 0.9972 | 0.9654 |
-
-| per-cause recall | v2 | v3 |
-|---|---|---|
-| cpu_spike / disk_saturation / network_flood | 0.974 / 0.993 / 0.972 | 0.946 / 0.981 / 0.986 |
-| memory_leak / silent_failure | 0.860 / 0.959 | 0.768 / 0.916 |
-| cascade (v2: coin-flip labels) | 0.307 | — |
-| cascade_unreachable (router hard down) | — | **0.908** |
-| cascade_gray (router gray failure) | — | **0.124** |
-| router_down / router_gray (the router's own rows) | — | 0.691 / 0.184 |
-
-Rack level (`scripts/rack_rule_eval.py`: the v3-trained model scores every test reading, then the
-Fleet tab's exact rule from `api/fleet_rules.py` runs at every 30-second step):
+| mean correlation, router label vs share of dependents anomalous | -0.0004 | **+0.6691** (per router 0.645 to 0.731) |
+| router anomalous during a cascade | 5.14% (base rate 5.02%) → 1.02× | 87.14% (base rate 3.02%) → **28.86×** |
 
 ```console
-$ python3 scripts/rack_rule_eval.py --data test_v3.csv --models <v3 candidate> --threshold 0.13
-per machine: the served decision flags 12.4% of gray-cascade readings (756 of 6,113)
-per incident, gray: router named as suspect in 4 of 59 (7%); median 465 s after the incident starts
-per incident, down: router named as suspect in 31 of 31 (100%); median 30 s after the incident starts
-false alarms: 21 router-steps flagged outside any incident, of 44,159 (0.048%; 1.4 per router-day)
+$ python3 scripts/cascade_check.py --data data/telecom_fleet_v3_labeled.csv
+    router | own rate | corr(own, dep share) | cascade events | router anomalous then
+----------------------------------------------------------------------------------------
+ router-01 |   0.0301 |               0.6506 |          1,705 |                0.8557
+ router-02 |   0.0301 |               0.6528 |          1,706 |                0.8417
+ router-03 |   0.0307 |               0.6492 |          1,617 |                0.8930
+ router-04 |   0.0304 |               0.6536 |          1,686 |                0.8802
+ router-05 |   0.0301 |               0.6445 |          1,654 |                0.8797
+ router-06 |   0.0301 |               0.7307 |          2,000 |                0.8765
+ router-07 |   0.0300 |               0.6722 |          1,777 |                0.8807
+ router-08 |   0.0301 |               0.6996 |          1,887 |                0.8649
+
+mean correlation across routers: +0.6691
+during cascade events the router is anomalous 0.8714 of the time; its base rate is 0.0302
+ratio 28.86x  (1.0x = the cascade tells you nothing about the router)
 ```
 
-Accumulating evidence over time does not rescue gray failures; it buys detection with false alarms:
+The router is anomalous in 87%, not 100%, of cascade steps mostly because dependents recover a
+little after the router does (the recovery tail of section 4 above).
 
-| evidence window | share of the rack | gray incidents named | false alarms per router-day |
-|---|---|---|---|
-| 30 s (shipped) | 40% | 4 / 59 | **1.4** |
-| 30 s | 20% | 14 / 59 | 100 |
-| 2 min | 25% | 27 / 59 | 286 |
-| 3 min | 30% | 28 / 59 | 310 |
-| 4 min | 20% | 43 / 59 | 1,173 |
+**Accuracy: production versus a v3-trained candidate** (step 3 trains the candidate on the 30-day
+v3 training fleet, 17,280,000 rows, IsolationForest contamination 0.06311; the policy selects its
+threshold on the v3 validation fleet: 0.32, recall 0.8569, precision 0.7268. Step 5 prints):
 
-What it says:
+```console
+$ python3 scripts/compare_v2_v3.py --report build/v3/report.json
 
-1. **The v2 and v3 columns are not like-for-like** (see the correction below): they are scored on
-   different test fleets, the v3 one is easier to score because its labels follow the data, and both
-   models were trained on a tenth of production's data.
-2. **Hard failures become easy.** 91% of the readings of machines cut off by a dead router are
-   flagged, and the rule names 100% of hard-down routers within about 30 s. On its own, a cut-off
-   machine looks like a silent failure (hence cause accuracy 0.965); telling the two apart takes
-   topology, which is what the rack rule adds.
-3. **Gray failures stay mostly invisible**: 12% per reading, 7% per incident at a usable false-alarm
-   rate, and catching more costs hundreds of false alarms a day. That is the documented nature of
-   gray failure (differential observability), and the limit is the **feature set**, not the rule:
-   cpu, ram, network, disk and load do not carry the signals a gray failure leaves, retransmissions
+== served decision, v4 path ==
+                              thr      F1    prec  recall |  clf F1   clf P   clf R | cause acc
+A production on v2 test      0.91  0.7291  0.6713  0.7979 |  0.8100       —       — |    0.9983
+B production on v3 test      0.91  0.8027  0.7324  0.8880 |  0.8981  0.9149  0.8819 |    0.8572
+C v3 candidate on v3 test    0.32  0.7901  0.7266  0.8658 |  0.9149  0.9868  0.8528 |    0.9797
+
+== served decision, v3 path ==
+                              thr      F1    prec  recall |  clf F1   clf P   clf R | cause acc
+A production on v2 test      0.91  0.6664  0.5967  0.7546 |  0.7119       —       — |    0.9938
+B production on v3 test      0.91  0.7359  0.6555  0.8387 |  0.7977  0.7669  0.8311 |    0.8368
+C v3 candidate on v3 test    0.32  0.7368  0.7009  0.7765 |  0.8356  0.9637  0.7376 |    0.9341
+
+== per-cause recall, v4 path ==
+cause                          A         B         C
+cascade                   0.2679         —         —
+cascade_gray                   —    0.1046    0.1695
+cascade_unreachable            —    0.9775    0.9652
+cpu_spike                 0.9879    0.9859    0.9640
+disk_saturation           0.9967    0.9966    0.9899
+memory_leak               0.9333    0.9355    0.8223
+network_flood             0.9945    0.9940    0.9863
+router_down                    —    0.7791    0.9098
+router_gray                    —    0.0800    0.1771
+silent_failure            0.9810    0.9805    0.9487
+
+== fair comparison (B vs C: same v3 test fleet) ==
+  f1        production 0.8027   v3 candidate 0.7901   difference -0.0126
+  precision production 0.7324   v3 candidate 0.7266   difference -0.0058
+  recall    production 0.8880   v3 candidate 0.8658   difference -0.0222
+
+guardrail on the validation fleet: REJECTED
+  - v4 recall 0.8780 -> 0.8569
+  - v4 cpu_spike recall 0.9856 -> 0.9629
+  - v4 memory_leak recall 0.9345 -> 0.8239
+  - v4 silent_failure recall 0.9806 -> 0.9479
+  - v3 recall 0.8310 -> 0.7695
+  - v3 cascade_gray recall 0.1170 -> 0.0428
+  - v3 cascade_unreachable recall 0.9793 -> 0.9297
+  - v3 cpu_spike recall 0.9042 -> 0.8323
+  - v3 disk_saturation recall 0.9839 -> 0.9627
+  - v3 memory_leak recall 0.7717 -> 0.6643
+
+candidate trained on 17,280,000 rows
+```
+
+(The full rejection list in the training log has two more lines: v3 router_down 0.8889 → 0.7767,
+v3 silent_failure 0.9173 → 0.8108.)
+
+**Is that a threshold effect?** The two models run at different thresholds (0.91 and 0.32), so step
+6 sweeps both over the policy's full grid (95 thresholds, 0.05 to 0.99) on the same v3 validation
+fleet and compares them at equal recall:
+
+```console
+$ python3 scripts/compare_curves.py --report build/v3/report.json --out build/v3/production_curve.json
+sweeping production on telecom_fleet_v3_val.csv: 95 thresholds, 0.05 -> 0.99
+
+  thr | production  P       R      F1 | v3 candidate  P       R      F1
+ 0.05 |        0.7552  0.7977  0.7759 |          0.7207  0.8117  0.7635
+ 0.10 |        0.7579  0.8120  0.7840 |          0.7239  0.8282  0.7726
+ 0.15 |        0.7592  0.8203  0.7885 |          0.7255  0.8379  0.7777
+ 0.20 |        0.7600  0.8262  0.7917 |          0.7263  0.8447  0.7810
+ 0.25 |        0.7604  0.8310  0.7941 |          0.7267  0.8503  0.7837
+ 0.30 |        0.7608  0.8351  0.7962 |          0.7268  0.8552  0.7858
+ 0.32 |        0.7608  0.8367  0.7969 |          0.7268  0.8569  0.7865
+ 0.35 |        0.7609  0.8388  0.7979 |          0.7267  0.8594  0.7875
+ 0.40 |        0.7610  0.8421  0.7995 |          0.7264  0.8634  0.7890
+ 0.45 |        0.7608  0.8452  0.8008 |          0.7259  0.8672  0.7903
+ 0.50 |        0.7605  0.8481  0.8019 |          0.7251  0.8708  0.7913
+ 0.55 |        0.7601  0.8509  0.8029 |          0.7239  0.8745  0.7921
+ 0.60 |        0.7595  0.8537  0.8038 |          0.7223  0.8783  0.7927
+ 0.65 |        0.7585  0.8566  0.8046 |          0.7200  0.8824  0.7930
+ 0.70 |        0.7572  0.8597  0.8052 |          0.7167  0.8870  0.7928
+ 0.75 |        0.7551  0.8631  0.8055 |          0.7117  0.8919  0.7917
+ 0.80 |        0.7519  0.8668  0.8053 |          0.7039  0.8977  0.7891
+ 0.85 |        0.7465  0.8710  0.8040 |          0.6894  0.9047  0.7825
+ 0.90 |        0.7356  0.8766  0.7999 |          0.6605  0.9145  0.7671
+ 0.91 |        0.7321  0.8780  0.7984 |          0.6511  0.9171  0.7615
+ 0.95 |        0.7053  0.8856  0.7852 |          0.5811  0.9313  0.7156
+
+best F1 on each curve: production 0.8055 at 0.74 | candidate 0.7930 at 0.65
+highest recall reached: production 0.9062 | candidate 0.9687
+at recall >= 0.80: production P 0.7610 (thr 0.37) | candidate P 0.7268 (thr 0.26)
+at recall >= 0.85: production P 0.7602 (thr 0.54) | candidate P 0.7268 (thr 0.26)
+at recall >= 0.90: production P 0.5479 (thr 0.99) | candidate P 0.6992 (thr 0.82)
+the candidate becomes the more precise detector from recall 0.89 upwards; below that, production is
+```
+
+No: at every recall up to 0.88, production is about 3 points more precise whatever the threshold.
+The candidate wins only above 0.89 recall, a level production cannot reach precisely (0.548 at
+0.90) and never passes 0.906. Under the current policy (`min_recall` 0.80) production is the better
+model; a policy demanding 90% recall would choose the candidate.
+
+**Group level** (step 4: each model scores every test reading, then the Fleet tab's exact rule from
+`api/fleet_rules.py` runs at every 30-second step; 845 gray and 453 hard-down incidents in the test
+fleet):
+
+```console
+$ python3 scripts/rack_rule_eval.py --data data/telecom_fleet_v3_test.csv --models build/v3/candidate --threshold 0.32
+threshold 0.32, rule: 40% of reporting dependents, at least 4 machines
+per machine: the served decision flags 17.0% of gray-cascade readings (16,599 of 97,907)
+per incident, gray: router named as suspect in 85 of 845 (10%); median 300 s after the incident starts
+per incident, down: router named as suspect in 453 of 453 (100%); median 30 s after the incident starts
+false alarms: 302 router-steps flagged outside any incident, of 664,210 (0.045%; 1.3 per router-day)
+
+$ python3 scripts/rack_rule_eval.py --data data/telecom_fleet_v3_test.csv --models models
+threshold 0.91, rule: 40% of reporting dependents, at least 4 machines
+per machine: the served decision flags 10.5% of gray-cascade readings (10,238 of 97,907)
+per incident, gray: router named as suspect in 45 of 845 (5%); median 360 s after the incident starts
+per incident, down: router named as suspect in 453 of 453 (100%); median 30 s after the incident starts
+false alarms: 159 router-steps flagged outside any incident, of 664,210 (0.024%; 0.7 per router-day)
+```
+
+**Can the rule catch more gray failures?** Step 7 sweeps the two knobs of the rule: the evidence
+window (a machine counts as flagged if the model flagged it at least once in its last W readings)
+and the share of the router's reporting dependents that must be flagged (at least 4 machines):
+
+```console
+$ python3 scripts/rack_rule_sweep.py --data data/telecom_fleet_v3_test.csv --models build/v3/candidate --threshold 0.32
+threshold 0.32; a router is named when the rule says ['gray_suspected', 'router_incident', 'unreachable']
+  window  share |     gray named  median lag |     down named |  false alarms / router-day
+    30 s    20% |   244/845   29%       180 s |   453/453  100% |                       81.3
+    30 s    25% |   177/845   21%       210 s |   453/453  100% |                       35.4
+    30 s    30% |   140/845   17%       240 s |   453/453  100% |                       15.6
+    30 s    40% |    85/845   10%       300 s |   453/453  100% |                        1.3  <- shipped
+   120 s    20% |   451/845   53%       150 s |   453/453  100% |                      372.0
+   120 s    25% |   342/845   40%       180 s |   453/453  100% |                      220.3
+   120 s    30% |   271/845   32%       210 s |   453/453  100% |                      152.4
+   120 s    40% |   176/845   21%       240 s |   453/453  100% |                       93.8
+   180 s    20% |   524/845   62%       120 s |   453/453  100% |                      608.0
+   180 s    25% |   419/845   50%       150 s |   453/453  100% |                      369.9
+   180 s    30% |   332/845   39%       180 s |   453/453  100% |                      235.6
+   180 s    40% |   201/845   24%       210 s |   453/453  100% |                      128.0
+   240 s    20% |   576/845   68%        60 s |   453/453  100% |                      849.2
+   240 s    25% |   487/845   58%       120 s |   453/453  100% |                      556.9
+   240 s    30% |   390/845   46%       165 s |   453/453  100% |                      361.6
+   240 s    40% |   236/845   28%       210 s |   453/453  100% |                      157.3
+
+$ python3 scripts/rack_rule_sweep.py --data data/telecom_fleet_v3_test.csv --models models
+threshold 0.91; a router is named when the rule says ['gray_suspected', 'router_incident', 'unreachable']
+  window  share |     gray named  median lag |     down named |  false alarms / router-day
+    30 s    20% |   217/845   26%       180 s |   453/453  100% |                       75.5
+    30 s    25% |   136/845   16%       210 s |   453/453  100% |                       29.7
+    30 s    30% |    98/845   12%       270 s |   453/453  100% |                       11.6
+    30 s    40% |    45/845    5%       360 s |   453/453  100% |                        0.7  <- shipped
+   120 s    20% |   458/845   54%       150 s |   453/453  100% |                      352.2
+   120 s    25% |   347/845   41%       180 s |   453/453  100% |                      204.0
+   120 s    30% |   252/845   30%       210 s |   453/453  100% |                      141.2
+   120 s    40% |   138/845   16%       240 s |   453/453  100% |                       81.8
+   180 s    20% |   530/845   63%       120 s |   453/453  100% |                      569.1
+   180 s    25% |   430/845   51%       150 s |   453/453  100% |                      329.8
+   180 s    30% |   330/845   39%       180 s |   453/453  100% |                      208.4
+   180 s    40% |   169/845   20%       240 s |   453/453  100% |                      122.4
+   240 s    20% |   589/845   70%        90 s |   453/453  100% |                      808.2
+   240 s    25% |   485/845   57%       120 s |   453/453  100% |                      494.8
+   240 s    30% |   390/845   46%       180 s |   453/453  100% |                      307.2
+   240 s    40% |   196/845   23%       240 s |   453/453  100% |                      144.8
+```
+
+`rack_rule_sweep.py` uses `fleet_rules.classify_arrays`, a vectorised copy of the API's rule that
+`tests/test_rack_tools.py` checks against `classify()` on 5,000 random cases; its shipped row
+matches `rack_rule_eval.py` exactly (85/845, 1.3 per router-day; 45/845, 0.7).
+
+**What it says**
+
+1. **Production stays, and the governance worked.** A model trained on more realistic data was
+   *not* better: lower F1 (-0.013), recall (-0.022) and precision (-0.006) on the same test fleet,
+   and less precise at every recall up to 0.88. The guardrail rejected it on the validation fleet,
+   not on the test numbers. Promotion is decided by measurement, not by the
+   assumption that newer or more realistic data trains a better model.
+2. **The candidate is better at what v3 adds, worse at the rest.** It names causes far better (cause
+   accuracy 0.980 vs 0.857: production has no `cascade_unreachable`, `cascade_gray` or `router_*`
+   class, so every such reading it catches gets a wrong cause name), catches more of the routers' own failures (router_down 0.910 vs 0.779,
+   router_gray 0.177 vs 0.080) and of gray cascades (0.170 vs 0.105). It loses on the five local
+   causes, most on `memory_leak` (0.822 vs 0.936; not investigated further).
+3. **The classifier is not the weak point; the safety net's precision is.** Classifier alone, the
+   candidate is better than production (F1 0.915 vs 0.898, precision 0.987 vs 0.915). Served
+   precision for both is about 0.73 because the decision is classifier OR IsolationForest
+   (Decision 10): every false positive beyond the classifier's comes from the IsolationForest.
+   Tuning the safety net looks like a more promising lever than changing the training data.
+4. **The same production model measures 0.80 F1 on v3 and 0.73 on v2.** Not a better model: v2's
+   test labels include Decision 9's coin flip, which no model can score well (cascade recall 0.27).
+   Labels that follow the data make the evaluation fairer.
+5. **Hard failures are solved at group level.** Every one of the 453 hard-down routers in the test
+   month is named, median 30 s after it fails, by both models and at every setting of the rule.
+6. **Gray failures stay mostly invisible**, and no setting of the rule fixes that. At the shipped
+   setting the router is named in 5% (production) or 10% (candidate) of gray incidents, with under
+   1.5 false alarms per router-day. A longer window or a lower share buys detection only with false
+   alarms: about 70% of gray incidents costs about 800 false alarms per router-day. That is the
+   documented nature of gray failure (differential observability). The limit is the **feature
+   set**: cpu, ram, network, disk and load do not carry what a gray failure leaves, retransmissions
    and latency. The concrete next step is a seventh feature, the TCP retransmission ratio that
    node_exporter already exposes (`node_netstat_Tcp_RetransSegs` over `node_netstat_Tcp_OutSegs`),
    emitted by the generator as well.
-4. `memory_leak` recall drops (0.86 → 0.77), probably because a gray cascade also raises RAM and
-   CPU a little; not investigated further.
 
-**Correction, found on re-reading the run's report.** The same run also scored the *production*
-model (trained on 30 days of v2) on the v3 test fleet: F1 0.8116, precision 0.7423, recall 0.8952,
-higher than the 3-day v3 candidate (0.7629), and the guardrail rejected that candidate on the v3
-validation fleet (F1 0.8192 → 0.7660). The comparison above therefore does not show that v3 data
-trains a better model: training size dominates at this scale, and the v3 test fleet is easier to
-score. The like-for-like comparison, production and a v3 candidate both trained on full-size fleets
-and scored on the same v3 test fleet, is `scripts/v3_experiment.sh` (summary printed by
-`scripts/compare_v2_v3.py`); its results replace this paragraph.
+**History of this section.** A first study on 3-day fleets reported that v3 data trains a better
+model (F1 0.7248 → 0.7629). That comparison was confounded (different test fleets, a tenth of
+production's training data), and the same run showed production scoring higher on the v3 test
+fleet. It was corrected in the README (commit `84f48ac`) and replaced by the full-size experiment
+above.
 
 **Detection side: the Fleet tab reasons like network monitoring.** Each router card is classified
-from the live model verdicts by `api/fleet_rules.py` (tested in `tests/test_ui_fleet.py`, measured
-above: every hard-down router named, gray failures only when strong, 1.4 false alarms per router-day):
+from the live model verdicts by `api/fleet_rules.py` (tested in `tests/test_ui_fleet.py`; measured
+above with production: all 453 hard-down routers named, gray failures only when strong, 0.7 false
+alarms per router-day):
 
 | Pattern on the card | Reading shown |
 |---|---|
@@ -2230,34 +2412,43 @@ above: every hard-down router named, gray failures only when strong, 1.4 false a
 | ≥40% of dependents degraded, router's own metrics normal | **suspected gray failure upstream**; likely root cause the router |
 | router anomalous, dependents healthy | control-plane event, or a failure not yet propagated |
 
-**Questions a reviewer will ask, and the answers**
+**Questions a reviewer will ask, and the answers** (counts from the training fleet's realism report)
 
 - *"15 machines behind one router are anomalous and the router is normal: how?"* In v3 this only
-  happens in the 30–90 s recovery tail after the router's incident (41 of 41 cases above, 0
+  happens in the recovery tail (up to 90 s) after the router's incident (449 of 449 cases, 0
   unexplained), because machines take a little longer than the router to recover. In live data,
   the same picture with no recovery to explain it is exactly a gray failure, and the Fleet tab
   flags the router as the suspect. The shipped v2 data shows it for a different reason: its
   generator defect (Decision 9b).
-- *"What if all 20 machines behind a router are anomalous?"* That is a hard-down router. In
-  production the monitor would see 20 machines go silent at once and report them unreachable, with
-  one alert on the router; v3 reproduces that (100% of dependents unreachable in every hard-down
-  incident) and the Fleet tab says "unreachable, not failing".
-- *"The router is anomalous and its machines are fine?"* A control-plane event (management CPU
-  busy, forwarding fine), or a gray failure in its first minutes or too mild for the current traffic.
-- *"Why are two machines behind a failing router still green?"* In a gray failure the impact depends
+- *"What if every machine behind a router is anomalous?"* In 96% of such moments (6,080 of 6,352
+  router-steps) the router is hard down; the other 4% (272) are severe daytime gray failures. The
+  router is anomalous in both. In a hard-down incident, monitoring sees every dependent go silent
+  at once and reports it unreachable, with one alert on the router; v3 reproduces that (100% of
+  dependents unreachable in every hard-down incident) and the Fleet tab says "unreachable, not
+  failing".
+- *"The router is anomalous and its machines are fine?"* Always during a control-plane event (2,728
+  of 2,728 steps: management CPU busy, forwarding fine). In a gray failure, during the first minutes
+  (2,839 steps) or when the loss is too mild for the current traffic (1,932). Never during a hard
+  down (0 of 6,538).
+- *"Why are some machines behind a failing router still green?"* In a gray failure the impact depends
   on the tier: batch jobs are not request-driven, so a few minutes of packet loss slows them without
-  a material change. At the v3 worst moment (`scripts/fleet_status.py`), router-04 has 21 of 23
-  dependents anomalous and the two green ones are both batch machines. In a hard-down incident there
-  are no exceptions: every dependent is unreachable.
+  a material change. `scripts/fleet_status.py --data <a v3 fleet>` draws any moment of a fleet. In a
+  hard-down incident there are no exceptions: every dependent is unreachable.
 - *"Why do routers fail so often in your data?"* They do not in production (under 5% per year,
   Gill et al.). Rates are compressed so the models see enough incidents to learn from, as
   fault-injection benchmarks do; durations and propagation timing are kept realistic.
+- *"Why not adopt the more realistic data?"* Because a model trained on it measured worse, and the
+  guardrail exists to stop exactly that. Adopting v3 becomes worthwhile when its extra signal (the
+  retransmission feature) gives the classifier something v2 cannot.
 
-**Limitations.** Racks are single-homed, like Facebook's one-switch-per-rack design (Meza et al.,
-IMC 2018); with dual-homed servers, redundancy would mask part of the impact (median traffic per
-redundancy group 93% vs 65% per link, Gill et al.). No application-tier propagation (web → app →
-db), which was tried and reverted in Decision 6. Unreachable rows keep the host-local agent's
-idle readings (as an agent with local buffering would record them), flagged `reachable=0`.
+**Limitations.** Each machine depends on one router (single-homed), like Facebook's
+one-switch-per-rack design (Meza et al., IMC 2018); with dual-homed servers, redundancy would mask
+part of the impact (median traffic per redundancy group 93% vs 65% per link, Gill et al.). No
+application-tier propagation (web → app → db), which was tried and reverted in Decision 6.
+Unreachable rows keep the host-local agent's idle readings (as an agent with local buffering would
+record them), flagged `reachable=0`. One seed per fleet and no confidence interval: small gaps
+(the 0.006 precision difference) should not be over-read; the curve comparison is the stronger
+evidence because it holds at every threshold up to 0.88 recall.
 
 **Sources for section 9c** (every source the failure model, its parameters and this analysis draw on):
 
@@ -2275,19 +2466,11 @@ idle readings (as an agent with local buffering would record them), flagged `rea
 12. Facebook Engineering, *More details about the October 4 outage*, 2021. Maintenance command, backbone down, DNS withdrawal (the pattern listed under future work). https://engineering.fb.com/2021/10/05/networking-traffic/outage-details/
 13. Lucide icons (ISC licence; portions from Feather, MIT), the equipment pictograms in `scripts/fleet_status.py` and the Fleet tab. https://lucide.dev
 
-**Adopting it** changes every dataset, both classifiers, the IsolationForest, the selected
-threshold, the guardrail baseline and every number in this README:
-
-```bash
-G=ml-model/generate_telecom_fleet_v3.py
-python $G --days 30 --seed 42  --output data/telecom_fleet_v3_labeled.csv
-python $G --days 14 --seed 7   --output data/telecom_fleet_v3_val.csv
-python $G --days 30 --seed 123 --output data/telecom_fleet_v3_test.csv
-python $G --days 3  --seed 2026 --output data/telecom_fleet_v3_operator.csv
-python3 scripts/failure_model_report.py --data data/telecom_fleet_v3_labeled.csv
-```
-
-then point the training job, the production agent and the panel sampler at the v3 files.
+**Adopting it later** changes every dataset, both classifiers, the IsolationForest, the selected
+threshold, the guardrail baseline and every number in this README. `scripts/v3_experiment.sh`
+already generates the four fleets and trains on them without touching production; adopting means
+running the same training with production's `--models-dir`, after the guardrail passes, and
+pointing the production agent and the panel sampler at the v3 files.
 
 ### 10. Why dual-model architecture (primary + safety net)
 
