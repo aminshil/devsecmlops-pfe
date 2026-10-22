@@ -1,0 +1,8 @@
+{{/* Telegram message for one group of alerts (at most 15 listed; Telegram caps a message at 4096 characters). */}}
+{{ define "devsecmlops.telegram" -}}
+{{ if eq .Status "firing" }}🔴{{ else }}✅{{ end }} <b>{{ .CommonLabels.alertname }}</b> · {{ .Status }} · {{ len .Alerts }} alert(s){{ if .CommonLabels.severity }} · {{ .CommonLabels.severity }}{{ end }}
+{{ range $i, $a := .Alerts }}{{ if lt $i 15 }}• {{ if eq $.Status "resolved" }}cleared: {{ end }}{{ $a.Annotations.summary }}
+{{ end }}{{ end }}{{ if gt (len .Alerts) 15 }}… showing 15 of {{ len .Alerts }}
+{{ end }}{{ if eq .Status "firing" }}{{ with .CommonAnnotations.description }}<i>{{ . }}</i>{{ end }}{{ end }}
+DevSecMLOps · Alertmanager :9093
+{{- end }}

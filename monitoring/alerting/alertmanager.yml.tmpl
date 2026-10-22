@@ -1,0 +1,46 @@
+# Alertmanager configuration TEMPLATE. scripts/setup_alerting.sh writes the real file to
+# /etc/devsecmlops/alertmanager/alertmanager.yml, replacing __TELEGRAM_CHAT_ID__; the bot token is
+# read from a root-only file (bot_token_file) and never appears in the repository or in this file.
+global:
+  resolve_timeout: 5m
+
+templates:
+  - /etc/alertmanager/telegram.tmpl
+
+route:
+  receiver: telegram
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # machine anomalies are frequent: batch them, and do not send a message when each one clears
+    - matchers: ['alertname="AnomalyDetected"']
+      receiver: telegram-anomalies
+      group_interval: 10m
+      repeat_interval: 6h
+
+inhibit_rules:
+  # a persistent anomaly already says the machine is anomalous
+  - source_matchers: ['alertname="AnomalyPersistent"']
+    target_matchers: ['alertname="AnomalyDetected"']
+    equal: [machine]
+  # with the Kubernetes API down, the per-pod alerts are consequences, not causes
+  - source_matchers: ['alertname="KubernetesUnreachable"']
+    target_matchers: ['alertname=~"ServingPodNotScraped|PodNotReady|ServingReplicasMissing|PredictionsStopped"']
+
+receivers:
+  - name: telegram
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/telegram_token
+        chat_id: __TELEGRAM_CHAT_ID__
+        parse_mode: HTML
+        message: '{{ template "devsecmlops.telegram" . }}'
+        send_resolved: true
+  - name: telegram-anomalies
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/telegram_token
+        chat_id: __TELEGRAM_CHAT_ID__
+        parse_mode: HTML
+        message: '{{ template "devsecmlops.telegram" . }}'
+        send_resolved: false

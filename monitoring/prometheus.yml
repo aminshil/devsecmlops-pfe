@@ -2,7 +2,46 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# Alerting: rules evaluated here every 15 s, delivered by Alertmanager (Telegram).
+# Unit-tested by promtool: scripts/check_alerting.sh. Installed by scripts/setup_alerting.sh.
+rule_files:
+  - alerting/alert_rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["localhost:9093"]
+
 scrape_configs:
+  # Every platform layer the Status tab checks, probed over HTTP by the blackbox exporter (:9115),
+  # so LayerDown fires whether or not anyone has the control panel open.
+  - job_name: "blackbox-layers"
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: ["http://localhost:5000/v2/"]
+        labels: {layer: "Docker registry"}
+      - targets: ["http://localhost:8080/login"]
+        labels: {layer: "Jenkins"}
+      - targets: ["http://localhost:9000/api/system/status"]
+        labels: {layer: "SonarQube"}
+      - targets: ["http://localhost:5001/health"]
+        labels: {layer: "MLflow"}
+      - targets: ["http://localhost:9001/minio/health/live"]
+        labels: {layer: "MinIO"}
+      - targets: ["http://localhost:3000/api/health"]
+        labels: {layer: "Grafana"}
+      - targets: ["http://192.168.49.2:30080/health"]
+        labels: {layer: "Anomaly API (cluster NodePort)"}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: localhost:9115
+
   # Host VM hardware (node-exporter container, host network)
   - job_name: "node-exporter"
     static_configs:

@@ -46,7 +46,8 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Weakest cause | `cascade`, recall 0.268 (label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7755** · precision 0.7202 · recall 0.84. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on the 19 October model; not rerun on the 21 October retrain (offline F1 +0.0001) | `scripts/live_k8s_validation.py`, run on 19 October |
 | Latest green pipeline | Build `2.20.3-b112` (commit `aaf947ff`, 21 October: the external-review fixes, HTTP 500 on NaN/Infinity and on reserved machine names now 422): all 11 stages green, 188 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS). Before it: b111 (`bd0fdd67`), started by the model pipeline after it promoted the retrained model | [L3 run history](#l3--cicd) |
-| Tests | 188 passing, in 18 files | `pytest tests/` (stage 1b) |
+| Tests | 192 passing, in 19 files (b112 ran 188; the 4 new ones check the alerting configuration, which runs on the host, not in the image) | `pytest tests/` (stage 1b) |
+| Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, persistent, fleet surge), any layer down, pods, Kubernetes, traffic stopped, disk and memory. 15 rules unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
 | Dashboard | 25 Grafana panels in 5 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-21: the model promoted by Jenkins `devsecmlops-model` build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, model files read back from MinIO, committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); the current image `2.20.3-b112` carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
 | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
@@ -1722,6 +1723,53 @@ one, causing `topk(25)` to return every machine ever in the top 25 across
 the whole time window instead of exactly 25 — was found (from the rendered
 screenshot, not just the query) and fixed in the most recent pass.
 
+#### Alerting: Prometheus rules → Alertmanager → Telegram
+
+Prometheus evaluates the rules in `monitoring/alerting/alert_rules.yml` every 15 seconds; Alertmanager
+(`:9093`) groups the alerts and sends them to a Telegram chat. The decision is never made by the
+application: the serving pods only expose their verdicts, and alerts keep firing whether or not
+anyone has the control panel open, including when the panel itself is down.
+
+| Alert | Fires when | Severity |
+|---|---|---|
+| `AnomalyDetected` | a machine is anomalous on two consecutive readings (1 min) | info |
+| `AnomalyPersistent` | a machine is anomalous for 10 minutes | warning |
+| `FleetAnomalySurge` | at least 20 machines anomalous at once, and more than twice the 6-hour average, for 2 min | critical |
+| `LayerDown` | a platform layer stops answering its HTTP probe for 2 min: Docker registry, Jenkins, SonarQube, MLflow, MinIO, Grafana, the cluster NodePort | critical |
+| `ScrapeTargetDown` | the node exporter, the Kubernetes exporter or the control panel cannot be scraped for 2 min | critical |
+| `BlackboxExporterDown` | the probing exporter itself is down (the layer checks would be blind) | critical |
+| `ServingPodNotScraped`, `PodNotReady`, `ServingReplicasMissing`, `KubernetesUnreachable` | a serving pod, the database pod, the replica count or the Kubernetes API is unhealthy | critical / warning |
+| `PredictionsStopped` | no prediction served for 5 min (the traffic agent or the serving path stopped) | warning |
+| `DiskAlmostFull`, `MemoryLow` | root disk above 90% (SonarQube turns read-only at 95%), less than 1.5 GB of memory free | warning |
+
+The anomaly alerts read the same state as the Fleet tab: each machine's verdict from the replica that
+served it last, and only for machines that reported in the last 5 minutes, so a stale replica or a
+machine that went silent does not alert. Alertmanager batches machine anomalies into one message every
+10 minutes (at most 15 machines listed), does not repeat a machine already covered by
+`AnomalyPersistent`, and holds back the per-pod alerts while the Kubernetes API itself is down.
+
+**How it is checked.** `scripts/check_alerting.sh` runs `promtool check rules`, `promtool test rules` on
+`monitoring/alerting/alert_rules_test.yml` (every alert fires in its scenario and stays silent otherwise,
+including a stale replica, a silent machine, a 5-to-25 jump against a steady 25, and a counter that stops),
+`promtool check config` and `amtool check-config`. Breaking the rules on purpose (dropping the freshness
+join, ignoring silent machines, removing the surge baseline, changing a threshold or a `for:`) makes the
+unit tests fail. `tests/test_alerting.py` checks in CI that every metric a rule uses is exported by this
+project, that every layer the Status tab checks has an alert, and that no Telegram secret is in the
+repository. The message format was checked end to end with the real Alertmanager against a stand-in
+Telegram server.
+
+**Installing it** (on the VM, as root): `sudo bash scripts/setup_alerting.sh`. It asks for the bot token
+once (not echoed, checked with Telegram's `getMe`, stored root-only in
+`/etc/devsecmlops/alertmanager/telegram_token`), finds the chat id from a message sent to the bot, runs
+the checks above and stops before changing anything if one fails, starts Alertmanager and the blackbox
+exporter as containers that restart with Docker, restarts Prometheus, shows each layer's probe result and
+sends a test alert. `sudo bash scripts/setup_alerting.sh --test` sends only the test alert.
+
+**Limits.** Prometheus cannot alert about itself: if it stops, nothing fires (the Status tab still
+shows it). Notifications need the VM's internet access to reach Telegram. The containers are started by
+the setup script, not yet by the Ansible playbook. The router-level reasoning of the Fleet tab
+(suspected gray failure) is not an alert; `FleetAnomalySurge` covers the many-machines-at-once case.
+
 #### Machine roster
 
 `docs/machine_roster.txt`: all 200 simulated machines, name/type/role — 40
@@ -1788,7 +1836,10 @@ mlflow server --host 0.0.0.0 --port 5001 \
 | `monitoring/k8s_exporter.py` | Pod readiness, restarts, replica counts, HPA state. |
 | `monitoring/prometheus.yml` | Scrape configuration — per-pod discovery through the Kubernetes API server. |
 | `monitoring/grafana/provisioning/` | Fixed-UID datasource and dashboard-loading configuration, mounted read-only. |
-| `monitoring/grafana/dashboards/devsecmlops-fleet.json` | The 30-panel dashboard, provisioned from the repository. |
+| `monitoring/grafana/dashboards/devsecmlops-fleet.json` | The dashboard (25 panels in 5 rows), provisioned from the repository. |
+| `monitoring/alerting/alert_rules.yml`, `alert_rules_test.yml` | The alert rules and their promtool unit tests. |
+| `monitoring/alerting/alertmanager.yml.tmpl`, `telegram.tmpl`, `blackbox.yml` | Alertmanager routing (template, no secret), the Telegram message, the layer probes. |
+| `scripts/check_alerting.sh`, `scripts/setup_alerting.sh` | Validate the alerting configuration; install it on the VM (Telegram, Alertmanager, blackbox exporter). |
 | `monitoring/replay_exporter.py`, `anomaly_bridge.py` | Earlier traffic designs, kept and functional, not started by default. |
 | `docs/machine_roster.txt` | All 200 machines: 40 web, 35 app, 30 db, 20 cache, 20 queue, 15 batch, 15 edge, 8 router, 7 firewall, 5 dns, 5 voip. |
 
@@ -2702,7 +2753,7 @@ this project.)
 
 ## Testing
 
-**188 tests** in 18 files (up from 15), `pytest`, in `tests/`:
+**192 tests** in 19 files (up from 15), `pytest`, in `tests/`:
 
 - `test_api.py` (47 tests) — every endpoint, input validation (NaN/inf
   rejection, including raw `NaN`/`Infinity` tokens answered with 422 rather than 500, reserved `__` machine names, physical-range rejection (cpu=150 is a 422), the opt-in feedback token, machine length, metrics count, history shape), v3/v4
@@ -2749,6 +2800,8 @@ this project.)
   outside output folders, empty table, `kubectl` failure.
 - `test_sampler_source.py` (2) — the panel's sampler never reads the test fleet.
 - `test_ci_config.py` (3) — `scripts/ci_config.py` against a fake Jenkins and SonarQube.
+- `test_alerting.py` (4) — the alerting configuration: files wired together, every metric a rule uses
+  exported by this project, every Status-tab layer covered by an alert, no Telegram secret in the repository.
 
 ```bash
 pip install -r requirements-dev.txt
@@ -2891,9 +2944,10 @@ python monitoring/k8s_exporter.py &
 - **A TCP retransmission feature** — the next step from Decision 9c: the retransmission ratio
   node_exporter already exposes (`node_netstat_Tcp_RetransSegs` over `node_netstat_Tcp_OutSegs`),
   emitted by the generator too, so gray failures leave a signal the model can learn. Not built.
-- **Alertmanager integration** — wiring real Slack/email notifications when
-  `/root-cause` identifies a `likely_root_cause`, closing the loop from
-  detection to human notification. Not built.
+- **Alerting, next steps** — alerts reach Telegram today (see
+  [Alerting](#alerting-prometheus-rules--alertmanager--telegram)). Not built yet: an alert for the Fleet
+  tab's router-level conclusions (suspected gray failure, a named `likely_root_cause`), the containers in
+  the Ansible playbook, and an external watchdog that notices when Prometheus itself stops.
 - **No further validation against real, external infrastructure telemetry**
   beyond the existing SMD comparison. The Server Machine Dataset adapter
   (`ml-model/load_smd.py`) supports this; a next step would be a similarly

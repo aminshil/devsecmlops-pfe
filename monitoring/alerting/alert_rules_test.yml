@@ -1,0 +1,496 @@
+# promtool unit tests for alert_rules.yml: every alert fires in its scenario and stays silent otherwise.
+# Run: promtool test rules monitoring/alerting/alert_rules_test.yml   (scripts/check_alerting.sh does it)
+rule_files:
+  - alert_rules.yml
+evaluation_interval: 15s
+tests:
+  - name: anomaly alerts use the freshest replica and ignore silent machines
+    interval: 1m
+    input_series:
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="web-01",machine_type="web"}'
+        values: '1x20'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="web-01"}'
+        values: '0+60x20'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="db-02",machine_type="db"}'
+        values: '0x20'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="db-02"}'
+        values: '0+60x20'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="app-03",machine_type="app"}'
+        values: '1x20'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="app-03"}'
+        values: '0x20'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p2",machine="app-03",machine_type="app"}'
+        values: '0x20'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p2",machine="app-03"}'
+        values: '0+60x20'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="cache-04",machine_type="cache"}'
+        values: '1x20'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="cache-04"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: AnomalyDetected
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: AnomalyDetected
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              machine: web-01
+              machine_type: web
+            exp_annotations:
+              summary: "web-01 (web) is anomalous"
+              description: "The served model flagged web-01 on its last readings."
+          - exp_labels:
+              severity: info
+              machine: cache-04
+              machine_type: cache
+            exp_annotations:
+              summary: "cache-04 (cache) is anomalous"
+              description: "The served model flagged cache-04 on its last readings."
+      - eval_time: 11m
+        alertname: AnomalyDetected
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              machine: web-01
+              machine_type: web
+            exp_annotations:
+              summary: "web-01 (web) is anomalous"
+              description: "The served model flagged web-01 on its last readings."
+      - eval_time: 5m
+        alertname: AnomalyPersistent
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: AnomalyPersistent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              machine: web-01
+              machine_type: web
+            exp_annotations:
+              summary: "web-01 (web) anomalous for 10+ minutes"
+              description: "Persistent anomaly on web-01: check the machine (Review tab: Details)."
+  - name: a jump from 5 to 25 anomalous machines is a surge
+    interval: 1m
+    input_series:
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-00",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-00"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-01",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-01"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-02",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-02"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-03",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-03"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-04",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-04"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-05",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-05"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-06",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-06"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-07",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-07"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-08",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-08"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-09",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-09"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-10",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-10"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-11",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-11"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-12",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-12"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-13",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-13"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-14",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-14"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-15",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-15"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-16",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-16"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-17",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-17"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-18",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-18"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-19",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-19"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-20",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-20"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-21",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-21"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-22",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-22"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-23",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-23"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-24",machine_type="web"}'
+        values: '0x359 1x10'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-24"}'
+        values: '0+60x370'
+    alert_rule_test:
+      - eval_time: 359m
+        alertname: FleetAnomalySurge
+        exp_alerts: []
+      - eval_time: 364m
+        alertname: FleetAnomalySurge
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "25 machines anomalous at once (more than twice the usual level)"
+              description: "A fleet-wide or router incident is likely: open the Fleet tab."
+  - name: a steady 25 anomalous machines is the usual level, not a surge
+    interval: 1m
+    input_series:
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-00",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-00"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-01",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-01"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-02",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-02"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-03",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-03"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-04",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-04"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-05",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-05"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-06",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-06"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-07",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-07"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-08",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-08"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-09",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-09"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-10",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-10"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-11",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-11"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-12",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-12"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-13",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-13"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-14",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-14"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-15",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-15"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-16",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-16"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-17",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-17"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-18",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-18"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-19",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-19"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-20",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-20"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-21",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-21"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-22",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-22"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-23",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-23"}'
+        values: '0+60x370'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-24",machine_type="web"}'
+        values: '1x370'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-24"}'
+        values: '0+60x370'
+    alert_rule_test:
+      - eval_time: 364m
+        alertname: FleetAnomalySurge
+        exp_alerts: []
+  - name: a layer that stops answering is down; one that answers is not
+    interval: 1m
+    input_series:
+      - series: 'probe_success{job="blackbox-layers",layer="Jenkins",instance="http://localhost:8080/login"}'
+        values: '1 1 0 0 0 0 0'
+      - series: 'probe_success{job="blackbox-layers",layer="SonarQube",instance="http://localhost:9000/api/system/status"}'
+        values: '1x6'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: LayerDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: LayerDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox-layers
+              layer: Jenkins
+              instance: http://localhost:8080/login
+            exp_annotations:
+              summary: "Jenkins is down"
+              description: "Jenkins did not answer http://localhost:8080/login for 2 minutes."
+  - name: a host exporter that cannot be scraped is down
+    interval: 1m
+    input_series:
+      - series: 'up{job="k8s-exporter",instance="localhost:9400"}'
+        values: '1 0 0 0 0 0'
+      - series: 'up{job="node-exporter",instance="localhost:9100"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ScrapeTargetDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ScrapeTargetDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: k8s-exporter
+              instance: localhost:9400
+            exp_annotations:
+              summary: "k8s-exporter is down"
+              description: "Prometheus could not scrape k8s-exporter (localhost:9400) for 2 minutes."
+  - name: the blackbox exporter itself down is reported
+    interval: 1m
+    input_series:
+      - series: 'up{job="blackbox-layers",instance="http://localhost:5000/v2/",layer="Docker registry"}'
+        values: '0x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: BlackboxExporterDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: BlackboxExporterDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox-layers
+              instance: http://localhost:5000/v2/
+              layer: Docker registry
+            exp_annotations:
+              summary: "blackbox exporter is down: layer checks are blind"
+              description: "Prometheus cannot reach the blackbox exporter on :9115."
+  - name: a serving pod that stops answering /metrics
+    interval: 1m
+    input_series:
+      - series: 'up{job="anomaly-api-pods",pod="anomaly-api-7f",instance="192.168.49.2:8443"}'
+        values: '0x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ServingPodNotScraped
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: ServingPodNotScraped
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: anomaly-api-pods
+              pod: anomaly-api-7f
+              instance: 192.168.49.2:8443
+            exp_annotations:
+              summary: "serving pod anomaly-api-7f is not answering /metrics"
+              description: "Prometheus could not scrape pod anomaly-api-7f for 2 minutes."
+  - name: fewer available replicas than desired
+    interval: 1m
+    input_series:
+      - series: 'k8s_deployment_replicas_available{job="k8s-exporter",deployment="anomaly-api"}'
+        values: '1x8'
+      - series: 'k8s_deployment_replicas_desired{job="k8s-exporter",deployment="anomaly-api"}'
+        values: '2x8'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ServingReplicasMissing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ServingReplicasMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: k8s-exporter
+              deployment: anomaly-api
+            exp_annotations:
+              summary: "anomaly-api has 1 available replicas, fewer than desired"
+              description: "Some serving replicas have been unavailable for 5 minutes."
+  - name: a pod that is not Ready
+    interval: 1m
+    input_series:
+      - series: 'k8s_pod_ready{job="k8s-exporter",namespace="ml-serving",pod="postgres-0"}'
+        values: '0x6'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: PodNotReady
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: PodNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: k8s-exporter
+              namespace: ml-serving
+              pod: postgres-0
+            exp_annotations:
+              summary: "pod postgres-0 is not Ready"
+              description: "Pod postgres-0 in ml-serving has not been Ready for 3 minutes."
+  - name: the Kubernetes API not answering
+    interval: 1m
+    input_series:
+      - series: 'k8s_exporter_up{job="k8s-exporter",instance="localhost:9400"}'
+        values: '0x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: KubernetesUnreachable
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: KubernetesUnreachable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: k8s-exporter
+              instance: localhost:9400
+            exp_annotations:
+              summary: "the Kubernetes API is not answering"
+              description: "kubectl calls from the k8s exporter have failed for 2 minutes (Minikube down?)."
+  - name: no predictions for 5 minutes
+    interval: 1m
+    input_series:
+      - series: 'api_predictions_total{job="anomaly-api-pods",pod="p1",model="telecom_v4_rolling",machine_type="web",is_anomaly="0",likely_cause="normal"}'
+        values: '0+10x10 100x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: PredictionsStopped
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: PredictionsStopped
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "no predictions served for 5 minutes"
+              description: "The traffic agent or the serving path has stopped."
+  - name: root disk above 90%
+    interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{job="node-exporter",mountpoint="/",instance="localhost:9100"}'
+        values: '5x8'
+      - series: 'node_filesystem_size_bytes{job="node-exporter",mountpoint="/",instance="localhost:9100"}'
+        values: '100x8'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DiskAlmostFull
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: DiskAlmostFull
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: node-exporter
+              mountpoint: /
+              instance: localhost:9100
+            exp_annotations:
+              summary: "root disk above 90% full"
+              description: "Free space on / is 5%; SonarQube goes read-only at 95%."
+  - name: less than 1.5 GB of memory available
+    interval: 1m
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{job="node-exporter",instance="localhost:9100"}'
+        values: '1e9x8'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MemoryLow
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MemoryLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: node-exporter
+              instance: localhost:9100
+            exp_annotations:
+              summary: "less than 1.5 GB of memory available"
+              description: "Available memory is 953.7MiB; training needs about 11 GB."

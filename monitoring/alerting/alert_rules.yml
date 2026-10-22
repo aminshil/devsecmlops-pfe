@@ -1,0 +1,163 @@
+# Alert rules for the DevSecMLOps platform. Prometheus evaluates them every 15 s; Alertmanager groups
+# and delivers the alerts (Telegram). Unit-tested by promtool (alert_rules_test.yml), run by
+# scripts/check_alerting.sh and by scripts/setup_alerting.sh before anything is installed.
+#
+# Freshness: each serving replica only knows the machines IT served, and its gauge keeps the last
+# value. So, as in the control panel's Fleet tab (api/app.py, _freshest), a machine's state is taken
+# from the replica that saw it last, and only for machines that reported in the last 5 minutes.
+
+groups:
+  - name: anomalies
+    rules:
+      - record: fleet:machine_anomalous:fresh
+        # 1 or 0 per machine: the latest verdict, from the replica that served the machine last
+        expr: |
+          max by (machine, machine_type) (
+            api_currently_anomalous{job="anomaly-api-pods"}
+            and on (pod, machine)
+            (api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods"}
+              == on (machine) group_left ()
+              max by (machine) (api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods"}))
+          )
+          and on (machine)
+          (time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods"}) < 300)
+
+      - record: fleet:anomalous_machines:count
+        expr: count(fleet:machine_anomalous:fresh == 1) or vector(0)
+
+      - alert: AnomalyDetected
+        # two consecutive anomalous verdicts (readings arrive every 30 s), so a single blip does not page
+        expr: fleet:machine_anomalous:fresh == 1
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.machine }} ({{ $labels.machine_type }}) is anomalous"
+          description: "The served model flagged {{ $labels.machine }} on its last readings."
+
+      - alert: AnomalyPersistent
+        # an episode, not a blip: anomalous on every reading for 10 minutes
+        expr: fleet:machine_anomalous:fresh == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.machine }} ({{ $labels.machine_type }}) anomalous for 10+ minutes"
+          description: "Persistent anomaly on {{ $labels.machine }}: check the machine (Review tab: Details)."
+
+      - alert: FleetAnomalySurge
+        # many machines at once points upstream (a router, a shared dependency). Self-calibrating:
+        # at least twice the 6-hour average AND at least 20 machines (10% of the fleet), for 2 minutes
+        expr: |
+          fleet:anomalous_machines:count >= 20
+          and fleet:anomalous_machines:count > 2 * avg_over_time(fleet:anomalous_machines:count[6h])
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $value }} machines anomalous at once (more than twice the usual level)"
+          description: "A fleet-wide or router incident is likely: open the Fleet tab."
+
+  - name: platform
+    rules:
+      - alert: LayerDown
+        # HTTP probe of each platform layer by the blackbox exporter (see prometheus.yml, blackbox-layers)
+        expr: probe_success{job="blackbox-layers"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.layer }} is down"
+          description: "{{ $labels.layer }} did not answer {{ $labels.instance }} for 2 minutes."
+
+      - alert: ScrapeTargetDown
+        # the host exporters and the control panel, scraped directly by Prometheus
+        expr: up{job=~"node-exporter|k8s-exporter|anomaly-api-host"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is down"
+          description: "Prometheus could not scrape {{ $labels.job }} ({{ $labels.instance }}) for 2 minutes."
+
+      - alert: BlackboxExporterDown
+        # without it, LayerDown cannot fire: report it on its own
+        expr: up{job="blackbox-layers"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "blackbox exporter is down: layer checks are blind"
+          description: "Prometheus cannot reach the blackbox exporter on :9115."
+
+      - alert: ServingPodNotScraped
+        expr: up{job="anomaly-api-pods"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "serving pod {{ $labels.pod }} is not answering /metrics"
+          description: "Prometheus could not scrape pod {{ $labels.pod }} for 2 minutes."
+
+      - alert: ServingReplicasMissing
+        expr: |
+          k8s_deployment_replicas_available{deployment="anomaly-api"}
+          < k8s_deployment_replicas_desired{deployment="anomaly-api"}
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "anomaly-api has {{ $value }} available replicas, fewer than desired"
+          description: "Some serving replicas have been unavailable for 5 minutes."
+
+      - alert: PodNotReady
+        expr: k8s_pod_ready{namespace="ml-serving"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "pod {{ $labels.pod }} is not Ready"
+          description: "Pod {{ $labels.pod }} in ml-serving has not been Ready for 3 minutes."
+
+      - alert: KubernetesUnreachable
+        expr: k8s_exporter_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "the Kubernetes API is not answering"
+          description: "kubectl calls from the k8s exporter have failed for 2 minutes (Minikube down?)."
+
+      - alert: PredictionsStopped
+        # the production agent (or the whole serving path) stopped: no prediction served for 5 minutes
+        expr: |
+          sum(rate(api_predictions_total{job="anomaly-api-pods"}[5m])) == 0
+          or absent(api_predictions_total{job="anomaly-api-pods"})
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "no predictions served for 5 minutes"
+          description: "The traffic agent or the serving path has stopped."
+
+      - alert: DiskAlmostFull
+        # SonarQube's Elasticsearch turns read-only at 95% (README, L3 run 6): warn at 90%
+        expr: |
+          node_filesystem_avail_bytes{job="node-exporter",mountpoint="/"}
+          / node_filesystem_size_bytes{job="node-exporter",mountpoint="/"} < 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "root disk above 90% full"
+          description: "Free space on / is {{ $value | humanizePercentage }}; SonarQube goes read-only at 95%."
+
+      - alert: MemoryLow
+        # the VM froze once under memory pressure during training (README, Real bugs)
+        expr: node_memory_MemAvailable_bytes{job="node-exporter"} < 1.5e9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "less than 1.5 GB of memory available"
+          description: "Available memory is {{ $value | humanize1024 }}B; training needs about 11 GB."

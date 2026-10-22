@@ -1,0 +1,9 @@
+# Blackbox exporter modules used by the blackbox-layers job in monitoring/prometheus.yml.
+modules:
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      preferred_ip_protocol: ip4
+      valid_status_codes: []        # any 2xx
+      follow_redirects: true
