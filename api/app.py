@@ -53,7 +53,7 @@ from fastapi.exceptions import RequestValidationError
 from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
 import math
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ROOT       = Path(__file__).resolve().parent.parent
 MODELS_DIR = ROOT / "models"
@@ -2167,3 +2167,120 @@ def ui_fix_progress(layer: str, lines: int = 12):
         return {"lines": tail, "exists": True}
     except Exception as e:
         return {"lines": [f"(could not read log: {e})"], "exists": True}
+
+
+# ---------------------------------------------------------------------------
+# Notifications: mute and unmute the Telegram messages from the Infrastructure tab. A mute is an
+# Alertmanager silence (reversible, timed, visible on :9093 with its author); alerts keep being
+# evaluated by Prometheus, only their delivery stops. Unmuting expires the panel's own silences.
+# ---------------------------------------------------------------------------
+_AM_URL = (os.environ.get("ALERTMANAGER_URL") or "http://localhost:9093").rstrip("/")
+_SILENCE_AUTHOR = "control-panel"
+_AM_DOWN = {"description": "Alertmanager did not answer as expected"}
+_SILENCE_SCOPES = {
+    "anomalies": {"label": "the anomaly list",
+                  "matchers": [{"name": "alertname", "value": "AnomalyDetected", "isRegex": False, "isEqual": True}]},
+    "all": {"label": "every notification",
+            "matchers": [{"name": "alertname", "value": ".+", "isRegex": True, "isEqual": True}]},
+}
+
+
+class _AlertmanagerError(RuntimeError):
+    pass
+
+
+def _am_call(method: str, path: str, body: dict | None = None, timeout: int = 5):
+    """Call Alertmanager's v2 API on this host; any failure is an _AlertmanagerError."""
+    data = json.dumps(body).encode() if body is not None else None
+    req = _ur.Request(_AM_URL + path, method=method, data=data, headers={"Content-Type": "application/json"})
+    try:
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode()
+    except OSError as e:   # URLError and HTTPError are OSErrors
+        raise _AlertmanagerError(f"Alertmanager {method} {path} failed: {e}") from e
+    return json.loads(raw) if raw.strip() else {}
+
+
+def _matcher_key(matchers: list) -> list:
+    return [(m.get("name"), m.get("value"), bool(m.get("isRegex"))) for m in matchers]
+
+
+def _silence_scope(silence: dict) -> str | None:
+    """Which panel scope a silence implements, or None if it is not one of ours."""
+    key = _matcher_key(silence.get("matchers") or [])
+    for scope, spec in _SILENCE_SCOPES.items():
+        if key == _matcher_key(spec["matchers"]):
+            return scope
+    return None
+
+
+def _panel_silences() -> dict:
+    """Active silences this panel created, grouped by scope."""
+    out = {}
+    for s in _am_call("GET", "/api/v2/silences") or []:
+        if s.get("createdBy") != _SILENCE_AUTHOR or (s.get("status") or {}).get("state") != "active":
+            continue
+        scope = _silence_scope(s)
+        if scope:
+            out.setdefault(scope, []).append(s)
+    return out
+
+
+class _MuteRequest(BaseModel):
+    scope: Literal["anomalies", "all"]
+    hours: int = Field(default=1, ge=1, le=720)   # up to 30 days ("until I unmute")
+
+
+class _UnmuteRequest(BaseModel):
+    scope: Literal["anomalies", "all"]
+
+
+@app.get("/ui/alerting", responses={502: _AM_DOWN})
+def ui_alerting():
+    """Notification state for the Infrastructure tab: what the panel has muted, and the alerts
+    Alertmanager currently holds (firing, including muted ones), counted by name."""
+    try:
+        silences = _panel_silences()
+        alerts = _am_call("GET", "/api/v2/alerts") or []
+    except _AlertmanagerError as e:
+        raise _HTTPException(status_code=502, detail=str(e)) from e
+    firing = {}
+    for a in alerts:
+        if (a.get("status") or {}).get("state") in ("active", "suppressed"):
+            name = (a.get("labels") or {}).get("alertname", "?")
+            firing[name] = firing.get(name, 0) + 1
+    muted = {scope: {"until": max(s["endsAt"] for s in group), "ids": [s["id"] for s in group]}
+             for scope, group in silences.items()}
+    return {"alertmanager": _AM_URL, "firing": firing, "muted": muted,
+            "scopes": {k: v["label"] for k, v in _SILENCE_SCOPES.items()}}
+
+
+@app.post("/ui/alerting/mute", responses={502: _AM_DOWN})
+def ui_alerting_mute(body: _MuteRequest):
+    """Mute one scope for `hours`, as an Alertmanager silence created by this panel."""
+    spec = _SILENCE_SCOPES[body.scope]
+    now = _dt.datetime.now(_dt.timezone.utc)
+    until = now + _dt.timedelta(hours=body.hours)
+    comment = f"muted {spec['label']} for {body.hours} h from the control panel"
+    silence = {"matchers": spec["matchers"], "startsAt": now.isoformat(), "endsAt": until.isoformat(),
+               "createdBy": _SILENCE_AUTHOR, "comment": comment}
+    try:
+        res = _am_call("POST", "/api/v2/silences", silence)
+    except _AlertmanagerError as e:
+        raise _HTTPException(status_code=502, detail=str(e)) from e
+    _log_fix_action("Notifications", "mute " + body.scope, True, comment)
+    return {"silence_id": res.get("silenceID"), "until": until.isoformat()}
+
+
+@app.post("/ui/alerting/unmute", responses={502: _AM_DOWN})
+def ui_alerting_unmute(body: _UnmuteRequest):
+    """Unmute one scope: expire every active silence this panel created for it."""
+    try:
+        ids = [s["id"] for s in _panel_silences().get(body.scope, [])]
+        for sid in ids:
+            _am_call("DELETE", "/api/v2/silence/" + _up.quote(str(sid), safe=""))
+    except _AlertmanagerError as e:
+        raise _HTTPException(status_code=502, detail=str(e)) from e
+    _log_fix_action("Notifications", "unmute " + body.scope, True, f"{len(ids)} silence(s) expired")
+    return {"expired": len(ids)}
+

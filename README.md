@@ -46,7 +46,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Weakest cause | `cascade`, recall 0.268 (label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7755** · precision 0.7202 · recall 0.84. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on the 19 October model; not rerun on the 21 October retrain (offline F1 +0.0001) | `scripts/live_k8s_validation.py`, run on 19 October |
 | Latest green pipeline | Build `2.20.3-b112` (commit `aaf947ff`, 21 October: the external-review fixes, HTTP 500 on NaN/Infinity and on reserved machine names now 422): all 11 stages green, 188 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS). Before it: b111 (`bd0fdd67`), started by the model pipeline after it promoted the retrained model | [L3 run history](#l3--cicd) |
-| Tests | 192 passing, in 19 files (b112 ran 188; the 4 new ones check the alerting configuration, which runs on the host, not in the image) | `pytest tests/` (stage 1b) |
+| Tests | 202 passing, in 20 files (b112 ran 188; the 14 newer ones check the alerting configuration and the panel's Notifications card) | `pytest tests/` (stage 1b) |
 | Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, persistent, fleet surge), any layer down, pods, Kubernetes, traffic stopped, disk and memory. 15 rules unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
 | Dashboard | 25 Grafana panels in 5 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-21: the model promoted by Jenkins `devsecmlops-model` build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, model files read back from MinIO, committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); the current image `2.20.3-b112` carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
@@ -1250,7 +1250,9 @@ A single web console served by the API at `/ui` that drives the entire
 platform by clicking, not commands — built as the live-demo and operator
 interface. It calls the existing `/predict`, `/root-cause`, `/machines`,
 and `/feedback` endpoints (it does not alter any serving logic) plus small
-read-only support endpoints (`/ui/status`, `/ui/metrics`, `/ui/infra`, `/ui/fleet`).
+read-only support endpoints (`/ui/status`, `/ui/metrics`, `/ui/infra`, `/ui/fleet`), and
+`/ui/alerting` (with `/mute`, `/unmute`) for the Notifications card, which talks to Alertmanager on
+`localhost:9093` (`ALERTMANAGER_URL` overrides it).
 
 **Access is now gated.** `/ui/*` returns `404` unless `ENABLE_OPS_UI=1` is
 explicitly set — never set on the Kubernetes serving pods — and requires
@@ -1274,8 +1276,10 @@ Tabs:
   model live: a table of real-vs-predicted with a TP/TN/FP/FN verdict per
   row, a running precision/recall/accuracy scorebar, and an expandable
   per-prediction detail.
-- **Infrastructure** — Docker containers and images, Kubernetes pods (image
-  tags, restart counts), `kubectl top`, HPA status, Prometheus target
+- **Infrastructure** — a Notifications card that mutes or unmutes the Telegram messages (the anomaly
+  list alone, or everything) for 1 hour, 8 hours, 24 hours or until unmuted (see
+  [Alerting](#alerting-prometheus-rules--alertmanager--telegram)); Docker containers and images,
+  Kubernetes pods (image tags, restart counts), `kubectl top`, HPA status, Prometheus target
   health, and the machines currently flagged anomalous.
 - **Fleet** — the live topology: every router and its dependents, with an equipment icon, coloured
   by the pods' own verdicts (red anomalous, green normal, dashed when it stopped reporting, greyed out
@@ -1752,9 +1756,20 @@ that just cleared. The list is capped at 60 machines (plus 15 cleared) so the me
 Telegram's 4096-character limit in a fleet-wide incident (checked with 139 machines: 2,495 characters).
 Each failing layer is its own message. Per-pod alerts are held back while the Kubernetes API itself is
 down. The list is re-sent about 50 times an hour (the fleet starts and ends about 25 anomaly episodes an
-hour); it can be muted from the Alertmanager page (Silences) without muting the down alerts. The list
+hour); it can be muted on its own without muting the down alerts (below). The list
 needs Alertmanager 0.28 or later (`since`, `humanizeDuration` in templates); the image is pinned to
 `prom/alertmanager:v0.28.1`.
+
+**Muting from the panel.** The Notifications card on the Infrastructure tab has two rows, "the anomaly
+list" and "every notification", each with Mute (1 hour, 8 hours, 24 hours, or until unmuted, at most 30
+days) or Unmute. A mute is an Alertmanager silence (`POST /api/v2/silences`, author `control-panel`), so
+it ends by itself, shows on the Alertmanager page with its author and comment, and only delivery stops:
+Prometheus keeps evaluating every alert, and the card shows what is firing meanwhile. Unmute expires the
+panel's own silences for that row and leaves silences made by hand on :9093 alone. Each mute and unmute
+is written to the panel's action log. `tests/test_ui_alerting.py` checks what the panel sends to
+Alertmanager; the routes were also run against the real Alertmanager 0.28.1: muting the anomaly list
+suppressed `AnomalyDetected` and left `LayerDown` active, muting everything suppressed both, and unmuting
+made them active again.
 
 **Time to Telegram.** Prometheus probes the layers and evaluates the rules every 5 seconds, and
 Alertmanager sends critical alerts and anomalies 1 second after they fire. A stopped layer reaches the
@@ -2771,7 +2786,7 @@ this project.)
 
 ## Testing
 
-**192 tests** in 19 files (up from 15), `pytest`, in `tests/`:
+**202 tests** in 20 files (up from 15), `pytest`, in `tests/`:
 
 - `test_api.py` (47 tests) — every endpoint, input validation (NaN/inf
   rejection, including raw `NaN`/`Infinity` tokens answered with 422 rather than 500, reserved `__` machine names, physical-range rejection (cpu=150 is a 422), the opt-in feedback token, machine length, metrics count, history shape), v3/v4
@@ -2820,6 +2835,10 @@ this project.)
 - `test_ci_config.py` (3) — `scripts/ci_config.py` against a fake Jenkins and SonarQube.
 - `test_alerting.py` (4) — the alerting configuration: files wired together, every metric a rule uses
   exported by this project, every Status-tab layer covered by an alert, no Telegram secret in the repository.
+- `test_ui_alerting.py` (10) — the Notifications card with Alertmanager replaced by a recorder: the
+  routes need the ops credentials, the state shows only the panel's active silences, a mute sends the
+  right matchers, author and duration (bad scope or duration refused), an unmute expires only the
+  panel's silences for that row, and Alertmanager down is a 502.
 
 ```bash
 pip install -r requirements-dev.txt

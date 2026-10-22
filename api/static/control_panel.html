@@ -266,6 +266,11 @@
 
   <div class="tabpage" id="infra">
     <div class="card" style="margin-bottom:16px">
+      <h3>Notifications (Telegram) <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshAlerting">↻ Refresh</button></h3>
+      <div class="sub">Mute or unmute the alert messages sent to Telegram. A mute is an Alertmanager <b>silence</b>: it ends by itself at the chosen time, shows on the Alertmanager page (:9093) with its author, and Prometheus keeps evaluating every alert meanwhile; only the delivery stops. Unmute ends the panel's silences at once.</div>
+      <div id="alerting_body"><div class="hint"><span class="spin"></span> loading…</div></div>
+    </div>
+    <div class="card" style="margin-bottom:16px">
       <h3>Infrastructure <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshInfra">↻ Refresh</button></h3>
       <div class="sub">Live Docker containers, images, Kubernetes pods, resource usage, autoscaling, Prometheus targets, and active anomalies.</div>
       <div id="infra_body"><div class="hint"><span class="spin"></span> loading…</div></div>
@@ -670,7 +675,7 @@
     if(id==="ct"){ loadCt(); }
     if(id==="review"){ loadReview(); }
     if(id==="fleet"){ loadFleet(); }
-    if(id==="infra"){ loadInfra(); loadPipeline(); }
+    if(id==="infra"){ loadInfra(); loadPipeline(); loadAlerting(); }
     if(id==="training"){ loadDatasets(); loadRuns(); }
     if(id==="summary"){ loadSummary(); }
   }
@@ -1043,6 +1048,43 @@
     h+=infraAnomalies(d.live_anomalies||[]);
     return h;
   }
+  const AL_DURATIONS=[[1,"1 hour"],[8,"8 hours"],[24,"24 hours"],[720,"until I unmute (30 days max)"]];
+  function alDurationSelect(scope){
+    const opts=AL_DURATIONS.map(function(d){ return '<option value="'+d[0]+'">'+d[1]+'</option>'; }).join("");
+    return '<select id="aldur_'+scope+'" aria-label="Mute duration">'+opts+'</select>';
+  }
+  function alRow(scope,label,muted){
+    let state='<span class="tag norm">🔔 on</span>';
+    let action=alDurationSelect(scope)+' <button type="button" class="btn sec small" data-alact="mute" data-scope="'+scope+'">Mute</button>';
+    if(muted){
+      state='<span class="tag anom">🔕 muted until '+ctEsc(rvLocal(muted.until))+'</span>';
+      action='<button type="button" class="btn small" data-alact="unmute" data-scope="'+scope+'">Unmute</button>';
+    }
+    return '<tr><td>'+ctEsc(label)+'</td><td>'+state+'</td><td>'+action+'</td></tr>';
+  }
+  function alFiring(firing){
+    const names=Object.keys(firing||{}).sort();
+    if(!names.length){ return '<span class="hint">no alert firing</span>'; }
+    return names.map(function(n){ return '<span class="tag de">'+ctEsc(n)+' '+firing[n]+'</span>'; }).join(" ");
+  }
+  function renderAlerting(d){
+    const scopes=d.scopes||{}, muted=d.muted||{};
+    const rows=Object.keys(scopes).map(function(k){ return alRow(k,scopes[k],muted[k]); }).join("");
+    return '<div style="margin-bottom:8px">Alertmanager: <span class="mono">'+ctEsc(d.alertmanager)+'</span> · firing now: '+alFiring(d.firing)+'</div>'
+      +'<table><thead><tr><th>Messages</th><th>State</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>'
+      +'<div id="alerting_msg" class="hint"></div>';
+  }
+  async function loadAlerting(){
+    const body=document.getElementById("alerting_body");
+    try{ body.innerHTML=renderAlerting(await getJSON(API+"/ui/alerting")); }
+    catch(e){ body.innerHTML='<div class="hint" style="color:var(--red)">Alertmanager not reachable: '+ctEsc(e.message)+' (installed by scripts/setup_alerting.sh)</div>'; }
+  }
+  async function alAct(kind,scope){
+    const payload={scope:scope};
+    if(kind==="mute"){ payload.hours=Number(document.getElementById("aldur_"+scope).value); }
+    try{ await getJSON(API+"/ui/alerting/"+kind,{method:"POST",headers:CT_JSON,body:JSON.stringify(payload)}); await loadAlerting(); }
+    catch(e){ const m=document.getElementById("alerting_msg"); if(m){ m.textContent="Could not "+kind+": "+e.message; } }
+  }
   async function loadInfra(){
     const body=document.getElementById("infra_body");
     body.innerHTML='<div class="hint"><span class="spin"></span> loading…</div>';
@@ -1143,6 +1185,11 @@
   document.querySelectorAll("[data-batch]").forEach(function(b){ b.addEventListener("click", function(){ sendTestBatch(Number(b.dataset.batch)); }); });
   document.getElementById("btnRefreshStatus").addEventListener("click", refreshStatus);
   document.getElementById("btnRefreshInfra").addEventListener("click", loadInfra);
+  document.getElementById("btnRefreshAlerting").addEventListener("click", loadAlerting);
+  document.getElementById("alerting_body").addEventListener("click", function(e){
+    const b=e.target.closest("button[data-alact]");
+    if(b){ alAct(b.dataset.alact,b.dataset.scope); }
+  });
   document.getElementById("btnPredict").addEventListener("click", doPredict);
   document.getElementById("btnCascade").addEventListener("click", injectCascade);
   document.getElementById("btnClearRC").addEventListener("click", function(){ document.getElementById("rc_result").classList.remove("show"); });

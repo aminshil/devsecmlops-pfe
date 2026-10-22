@@ -63,10 +63,10 @@ The original VM was set up at `~/devsecmlops-pfe` as root. If you use another pa
 cd /root/devsecmlops-pfe
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
-python3 -m pytest -q tests          # expect: 192 passed
+python3 -m pytest -q tests          # expect: 202 passed
 ```
 
-If `192 passed` does not appear, stop here. Nothing else will work reliably.
+If `202 passed` does not appear, stop here. Nothing else will work reliably.
 
 ---
 
@@ -252,7 +252,7 @@ The README states the expected results.
 
 ### Optional hardening (written, apply by hand; not part of the default run)
 
-**Alerting (Telegram).** Create a bot with @BotFather, then on the VM: `sudo bash scripts/setup_alerting.sh`. It asks for the token once (not echoed, stored root-only), finds the chat id from a message you send to the bot, validates the rules (`scripts/check_alerting.sh`) before installing anything, starts Alertmanager (:9093) and the blackbox exporter (:9115), restarts Prometheus and sends a test alert. Re-send a test alert any time with `sudo bash scripts/setup_alerting.sh --test`.
+**Alerting (Telegram).** Create a bot with @BotFather, then on the VM: `sudo bash scripts/setup_alerting.sh`. It asks for the token once (not echoed, stored root-only), finds the chat id from a message you send to the bot, validates the rules (`scripts/check_alerting.sh`) before installing anything, starts Alertmanager (:9093) and the blackbox exporter (:9115), restarts Prometheus and sends a test alert. Re-send a test alert any time with `sudo bash scripts/setup_alerting.sh --test`. To pause the messages, use the Notifications card on the control panel's Infrastructure tab (mute the anomaly list or everything, for a set time or until unmuted).
 
 **NetworkPolicy check.** `kubernetes/networkpolicy.yaml` lets only the API pods reach PostgreSQL. It takes effect only if the cluster's network plugin enforces policies, so prove it:
 
