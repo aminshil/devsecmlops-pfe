@@ -2,7 +2,7 @@
 # Run: promtool test rules monitoring/alerting/alert_rules_test.yml   (scripts/check_alerting.sh does it)
 rule_files:
   - alert_rules.yml
-evaluation_interval: 15s
+evaluation_interval: 5s
 tests:
   - name: anomaly alerts use the freshest replica and ignore silent machines
     interval: 1m
@@ -304,7 +304,7 @@ tests:
       - eval_time: 1m
         alertname: LayerDown
         exp_alerts: []
-      - eval_time: 5m
+      - eval_time: 3m
         alertname: LayerDown
         exp_alerts:
           - exp_labels:
@@ -314,7 +314,7 @@ tests:
               instance: http://localhost:8080/login
             exp_annotations:
               summary: "Jenkins is down"
-              description: "Jenkins did not answer http://localhost:8080/login for 2 minutes."
+              description: "Jenkins did not answer http://localhost:8080/login for 30 seconds."
   - name: a host exporter that cannot be scraped is down
     interval: 1m
     input_series:
@@ -326,7 +326,7 @@ tests:
       - eval_time: 1m
         alertname: ScrapeTargetDown
         exp_alerts: []
-      - eval_time: 4m
+      - eval_time: 3m
         alertname: ScrapeTargetDown
         exp_alerts:
           - exp_labels:
@@ -335,17 +335,17 @@ tests:
               instance: localhost:9400
             exp_annotations:
               summary: "k8s-exporter is down"
-              description: "Prometheus could not scrape k8s-exporter (localhost:9400) for 2 minutes."
+              description: "Prometheus could not scrape k8s-exporter (localhost:9400) for 1 minute."
   - name: the blackbox exporter itself down is reported
     interval: 1m
     input_series:
       - series: 'up{job="blackbox-layers",instance="http://localhost:5000/v2/",layer="Docker registry"}'
         values: '0x5'
     alert_rule_test:
-      - eval_time: 1m
+      - eval_time: 10s
         alertname: BlackboxExporterDown
         exp_alerts: []
-      - eval_time: 3m
+      - eval_time: 1m
         alertname: BlackboxExporterDown
         exp_alerts:
           - exp_labels:
@@ -362,10 +362,10 @@ tests:
       - series: 'up{job="anomaly-api-pods",pod="anomaly-api-7f",instance="192.168.49.2:8443"}'
         values: '0x5'
     alert_rule_test:
-      - eval_time: 1m
+      - eval_time: 30s
         alertname: ServingPodNotScraped
         exp_alerts: []
-      - eval_time: 3m
+      - eval_time: 2m
         alertname: ServingPodNotScraped
         exp_alerts:
           - exp_labels:
@@ -375,7 +375,7 @@ tests:
               instance: 192.168.49.2:8443
             exp_annotations:
               summary: "serving pod anomaly-api-7f is not answering /metrics"
-              description: "Prometheus could not scrape pod anomaly-api-7f for 2 minutes."
+              description: "Prometheus could not scrape pod anomaly-api-7f for 1 minute."
   - name: fewer available replicas than desired
     interval: 1m
     input_series:
@@ -384,10 +384,10 @@ tests:
       - series: 'k8s_deployment_replicas_desired{job="k8s-exporter",deployment="anomaly-api"}'
         values: '2x8'
     alert_rule_test:
-      - eval_time: 4m
+      - eval_time: 1m
         alertname: ServingReplicasMissing
         exp_alerts: []
-      - eval_time: 6m
+      - eval_time: 3m
         alertname: ServingReplicasMissing
         exp_alerts:
           - exp_labels:
@@ -396,7 +396,7 @@ tests:
               deployment: anomaly-api
             exp_annotations:
               summary: "anomaly-api has 1 available replicas, fewer than desired"
-              description: "Some serving replicas have been unavailable for 5 minutes."
+              description: "Some serving replicas have been unavailable for 2 minutes (longer than a rollout)."
   - name: a pod that is not Ready
     interval: 1m
     input_series:
@@ -406,7 +406,7 @@ tests:
       - eval_time: 1m
         alertname: PodNotReady
         exp_alerts: []
-      - eval_time: 4m
+      - eval_time: 3m
         alertname: PodNotReady
         exp_alerts:
           - exp_labels:
@@ -416,17 +416,17 @@ tests:
               pod: postgres-0
             exp_annotations:
               summary: "pod postgres-0 is not Ready"
-              description: "Pod postgres-0 in ml-serving has not been Ready for 3 minutes."
+              description: "Pod postgres-0 in ml-serving has not been Ready for 2 minutes (longer than a rollout)."
   - name: the Kubernetes API not answering
     interval: 1m
     input_series:
       - series: 'k8s_exporter_up{job="k8s-exporter",instance="localhost:9400"}'
         values: '0x5'
     alert_rule_test:
-      - eval_time: 1m
+      - eval_time: 30s
         alertname: KubernetesUnreachable
         exp_alerts: []
-      - eval_time: 3m
+      - eval_time: 2m
         alertname: KubernetesUnreachable
         exp_alerts:
           - exp_labels:
@@ -435,7 +435,7 @@ tests:
               instance: localhost:9400
             exp_annotations:
               summary: "the Kubernetes API is not answering"
-              description: "kubectl calls from the k8s exporter have failed for 2 minutes (Minikube down?)."
+              description: "kubectl calls from the k8s exporter have failed for 1 minute (Minikube down?)."
   - name: no predictions for 5 minutes
     interval: 1m
     input_series:
@@ -494,3 +494,25 @@ tests:
             exp_annotations:
               summary: "less than 1.5 GB of memory available"
               description: "Available memory is 953.7MiB; training needs about 11 GB."
+  - name: a layer down is alerted within 45 seconds, and a blip is not
+    interval: 5s
+    input_series:
+      - series: 'probe_success{job="blackbox-layers",layer="Grafana",instance="http://localhost:3000/api/health"}'
+        values: '1 1 0x20'
+      - series: 'probe_success{job="blackbox-layers",layer="MLflow",instance="http://localhost:5001/health"}'
+        values: '1 1 0 0 0 1x16'
+    alert_rule_test:
+      - eval_time: 35s
+        alertname: LayerDown
+        exp_alerts: []
+      - eval_time: 45s
+        alertname: LayerDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: blackbox-layers
+              layer: Grafana
+              instance: http://localhost:3000/api/health
+            exp_annotations:
+              summary: "Grafana is down"
+              description: "Grafana did not answer http://localhost:3000/api/health for 30 seconds."

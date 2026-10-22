@@ -1735,10 +1735,11 @@ anyone has the control panel open, including when the panel itself is down.
 | `AnomalyDetected` | a machine is anomalous on two consecutive readings (1 min) | info |
 | `AnomalyPersistent` | a machine is anomalous for 10 minutes | warning |
 | `FleetAnomalySurge` | at least 20 machines anomalous at once, and more than twice the 6-hour average, for 2 min | critical |
-| `LayerDown` | a platform layer stops answering its HTTP probe for 2 min: Docker registry, Jenkins, SonarQube, MLflow, MinIO, Grafana, the cluster NodePort | critical |
-| `ScrapeTargetDown` | the node exporter, the Kubernetes exporter or the control panel cannot be scraped for 2 min | critical |
-| `BlackboxExporterDown` | the probing exporter itself is down (the layer checks would be blind) | critical |
-| `ServingPodNotScraped`, `PodNotReady`, `ServingReplicasMissing`, `KubernetesUnreachable` | a serving pod, the database pod, the replica count or the Kubernetes API is unhealthy | critical / warning |
+| `LayerDown` | a platform layer fails its HTTP probe (every 5 s) for 30 s: Docker registry, Jenkins, SonarQube, MLflow, MinIO, Grafana, the cluster NodePort | critical |
+| `ScrapeTargetDown` | the node exporter, the Kubernetes exporter or the control panel cannot be scraped for 1 min | critical |
+| `BlackboxExporterDown` | the probing exporter itself is down for 30 s (the layer checks would be blind) | critical |
+| `ServingPodNotScraped`, `KubernetesUnreachable` | a serving pod not answering, or the Kubernetes API down, for 1 min | critical |
+| `PodNotReady`, `ServingReplicasMissing` | a pod not Ready, or fewer replicas than desired, for 2 min (longer than a rollout or an HPA scale-up) | critical / warning |
 | `PredictionsStopped` | no prediction served for 5 min (the traffic agent or the serving path stopped) | warning |
 | `DiskAlmostFull`, `MemoryLow` | root disk above 90% (SonarQube turns read-only at 95%), less than 1.5 GB of memory free | warning |
 
@@ -1747,6 +1748,14 @@ served it last, and only for machines that reported in the last 5 minutes, so a 
 machine that went silent does not alert. Alertmanager batches machine anomalies into one message every
 10 minutes (at most 15 machines listed), does not repeat a machine already covered by
 `AnomalyPersistent`, and holds back the per-pod alerts while the Kubernetes API itself is down.
+
+**Time to Telegram.** Critical alerts (something down) are sent 5 seconds after they fire and updated
+every minute; Prometheus evaluates the rules every 5 seconds and probes the layers every 5 seconds. A
+stopped layer therefore reaches the phone in about 45 seconds (30 s of failed probes, then delivery); a
+probe that fails once or twice does not page (unit test: "a layer down is alerted within 45 seconds,
+and a blip is not"). Warnings are sent 30 seconds after firing; machine anomalies are batched every
+10 minutes. The waits are set from how often each signal arrives (pod readiness waits 2 minutes so
+that a normal rollout does not page).
 
 **How it is checked.** `scripts/check_alerting.sh` runs `promtool check rules`, `promtool test rules` on
 `monitoring/alerting/alert_rules_test.yml` (every alert fires in its scenario and stays silent otherwise,

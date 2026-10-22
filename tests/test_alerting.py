@@ -27,10 +27,12 @@ def test_prometheus_loads_the_rules_and_sends_to_alertmanager():
     tmpl = yaml.safe_load((ALERTING / "alertmanager.yml.tmpl").read_text().replace("__TELEGRAM_CHAT_ID__", "1"))
     names = {r["name"] for r in tmpl["receivers"]}
     assert tmpl["route"]["receiver"] in names and all(rt["receiver"] in names for rt in tmpl["route"]["routes"])
-    alerts = {r["alert"] for r in _rules() if "alert" in r}
+    known = {"alertname": {r["alert"] for r in _rules() if "alert" in r},
+             "severity": {r["labels"]["severity"] for r in _rules() if "alert" in r}}
     for route in tmpl["route"]["routes"]:
         for m in route["matchers"]:
-            assert m.split('"')[1] in alerts, m        # a route must not point at an alert that does not exist
+            label, value = m.split("=", 1)[0], m.split('"')[1]
+            assert value in known[label], m   # a route must not point at an alert or severity that does not exist
 
 
 def test_every_metric_in_the_rules_is_exported_by_this_project():

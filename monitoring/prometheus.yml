@@ -1,6 +1,6 @@
 global:
   scrape_interval: 15s
-  evaluation_interval: 15s
+  evaluation_interval: 5s      # alert rules: a down layer is noticed within seconds of its probe
 
 # Alerting: rules evaluated here every 15 s, delivered by Alertmanager (Telegram).
 # Unit-tested by promtool: scripts/check_alerting.sh. Installed by scripts/setup_alerting.sh.
@@ -16,6 +16,7 @@ scrape_configs:
   # Every platform layer the Status tab checks, probed over HTTP by the blackbox exporter (:9115),
   # so LayerDown fires whether or not anyone has the control panel open.
   - job_name: "blackbox-layers"
+    scrape_interval: 5s
     metrics_path: /probe
     params:
       module: [http_2xx]

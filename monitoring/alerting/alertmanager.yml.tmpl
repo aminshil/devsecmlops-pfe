@@ -19,6 +19,12 @@ route:
       receiver: telegram-anomalies
       group_interval: 10m
       repeat_interval: 6h
+    # something is down: send at once, and update within a minute if more goes down
+    - matchers: ['severity="critical"']
+      receiver: telegram
+      group_wait: 5s
+      group_interval: 1m
+      repeat_interval: 2h
 
 inhibit_rules:
   # a persistent anomaly already says the machine is anomalous

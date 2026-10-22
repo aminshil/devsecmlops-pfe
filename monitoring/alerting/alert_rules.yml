@@ -61,29 +61,29 @@ groups:
   - name: platform
     rules:
       - alert: LayerDown
-        # HTTP probe of each platform layer by the blackbox exporter (see prometheus.yml, blackbox-layers)
+        # HTTP probe of each platform layer every 5 s (prometheus.yml, blackbox-layers): six failures in a row
         expr: probe_success{job="blackbox-layers"} == 0
-        for: 2m
+        for: 30s
         labels:
           severity: critical
         annotations:
           summary: "{{ $labels.layer }} is down"
-          description: "{{ $labels.layer }} did not answer {{ $labels.instance }} for 2 minutes."
+          description: "{{ $labels.layer }} did not answer {{ $labels.instance }} for 30 seconds."
 
       - alert: ScrapeTargetDown
         # the host exporters and the control panel, scraped directly by Prometheus
         expr: up{job=~"node-exporter|k8s-exporter|anomaly-api-host"} == 0
-        for: 2m
+        for: 1m
         labels:
           severity: critical
         annotations:
           summary: "{{ $labels.job }} is down"
-          description: "Prometheus could not scrape {{ $labels.job }} ({{ $labels.instance }}) for 2 minutes."
+          description: "Prometheus could not scrape {{ $labels.job }} ({{ $labels.instance }}) for 1 minute."
 
       - alert: BlackboxExporterDown
         # without it, LayerDown cannot fire: report it on its own
         expr: up{job="blackbox-layers"} == 0
-        for: 2m
+        for: 30s
         labels:
           severity: critical
         annotations:
@@ -92,41 +92,41 @@ groups:
 
       - alert: ServingPodNotScraped
         expr: up{job="anomaly-api-pods"} == 0
-        for: 2m
+        for: 1m
         labels:
           severity: critical
         annotations:
           summary: "serving pod {{ $labels.pod }} is not answering /metrics"
-          description: "Prometheus could not scrape pod {{ $labels.pod }} for 2 minutes."
+          description: "Prometheus could not scrape pod {{ $labels.pod }} for 1 minute."
 
       - alert: ServingReplicasMissing
         expr: |
           k8s_deployment_replicas_available{deployment="anomaly-api"}
           < k8s_deployment_replicas_desired{deployment="anomaly-api"}
-        for: 5m
+        for: 2m
         labels:
           severity: warning
         annotations:
           summary: "anomaly-api has {{ $value }} available replicas, fewer than desired"
-          description: "Some serving replicas have been unavailable for 5 minutes."
+          description: "Some serving replicas have been unavailable for 2 minutes (longer than a rollout)."
 
       - alert: PodNotReady
         expr: k8s_pod_ready{namespace="ml-serving"} == 0
-        for: 3m
-        labels:
-          severity: critical
-        annotations:
-          summary: "pod {{ $labels.pod }} is not Ready"
-          description: "Pod {{ $labels.pod }} in ml-serving has not been Ready for 3 minutes."
-
-      - alert: KubernetesUnreachable
-        expr: k8s_exporter_up == 0
         for: 2m
         labels:
           severity: critical
         annotations:
+          summary: "pod {{ $labels.pod }} is not Ready"
+          description: "Pod {{ $labels.pod }} in ml-serving has not been Ready for 2 minutes (longer than a rollout)."
+
+      - alert: KubernetesUnreachable
+        expr: k8s_exporter_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
           summary: "the Kubernetes API is not answering"
-          description: "kubectl calls from the k8s exporter have failed for 2 minutes (Minikube down?)."
+          description: "kubectl calls from the k8s exporter have failed for 1 minute (Minikube down?)."
 
       - alert: PredictionsStopped
         # the production agent (or the whole serving path) stopped: no prediction served for 5 minutes
