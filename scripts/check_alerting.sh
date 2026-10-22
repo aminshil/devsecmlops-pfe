@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PROM_IMG=prom/prometheus:v2.53.2
-AM_IMG=prom/alertmanager:v0.27.0
+AM_IMG=prom/alertmanager:v0.28.1
 
 run_promtool() {
   if command -v promtool >/dev/null 2>&1; then promtool "$@"

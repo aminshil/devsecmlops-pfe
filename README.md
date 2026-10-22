@@ -1732,7 +1732,7 @@ anyone has the control panel open, including when the panel itself is down.
 
 | Alert | Fires when | Severity |
 |---|---|---|
-| `AnomalyDetected` | a machine's first anomalous verdict (direct: one message per machine, about 20 s after the reading); held 2 min after its last anomalous verdict so a flickering verdict gives one message | info |
+| `AnomalyDetected` | a machine's first anomalous verdict, held 2 min after its last anomalous verdict so a flickering verdict counts once; delivered as one running list (below) | info |
 | `AnomalyPersistent` | a machine is anomalous for 10 minutes | warning |
 | `FleetAnomalySurge` | at least 20 machines anomalous at once, and more than twice the 6-hour average, for 2 min | critical |
 | `LayerDown` | a platform layer fails two HTTP probes in a row (every 5 s, so 10 s): Docker registry, Jenkins, SonarQube, MLflow, MinIO, Grafana, the cluster NodePort; one message per layer | critical |
@@ -1745,18 +1745,24 @@ anyone has the control panel open, including when the panel itself is down.
 
 The anomaly alerts read the same state as the Fleet tab: each machine's verdict from the replica that
 served it last, and only for machines that reported in the last 5 minutes, so a stale replica or a
-machine that went silent does not alert. Alertmanager sends each anomalous machine and each failing
-layer as its own message, does not repeat a machine already covered by `AnomalyPersistent`, and holds
-back the per-pod alerts while the Kubernetes API itself is down. The fleet starts about 25 anomaly
-episodes an hour, so expect about that many anomaly messages; they can be muted from the Alertmanager
-page (Silences) without muting the down alerts.
+machine that went silent does not alert. Machine anomalies arrive as **one running list**, re-sent
+within 20 seconds whenever it changes: every machine anomalous now, alphabetical, with how long each has
+been anomalous; `🆕 +` marks a machine that turned anomalous in the last minute, and `✅ −` the machines
+that just cleared. The list is capped at 60 machines (plus 15 cleared) so the message stays under
+Telegram's 4096-character limit in a fleet-wide incident (checked with 139 machines: 2,495 characters).
+Each failing layer is its own message. Per-pod alerts are held back while the Kubernetes API itself is
+down. The list is re-sent about 50 times an hour (the fleet starts and ends about 25 anomaly episodes an
+hour); it can be muted from the Alertmanager page (Silences) without muting the down alerts. The list
+needs Alertmanager 0.28 or later (`since`, `humanizeDuration` in templates); the image is pinned to
+`prom/alertmanager:v0.28.1`.
 
 **Time to Telegram.** Prometheus probes the layers and evaluates the rules every 5 seconds, and
 Alertmanager sends critical alerts and anomalies 1 second after they fire. A stopped layer reaches the
 phone in about 15 seconds (two failed probes, then delivery); a single failed probe does not page (unit
 test: "a layer down is alerted within 25 seconds, and a single failed probe is not"). An anomaly arrives
-about 20 seconds after the reading (the pods are scraped every 15 s); unit tests check that a machine
-turning anomalous is alerted at once and that a verdict flickering 1-0-1-0 gives one alert. Warnings are
+in the list about 20 to 40 seconds after the reading (pods scraped every 15 s, list updated every
+20 s); unit tests check that a machine turning anomalous is alerted at once and that a verdict
+flickering 1-0-1-0 gives one alert. Warnings are
 sent 30 seconds after firing. The waits are set from how often each signal arrives (pod readiness waits 2 minutes so
 that a normal rollout does not page).
 

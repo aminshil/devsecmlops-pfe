@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 REPO="$PWD"
 CONF=/etc/devsecmlops/alertmanager
 ENVF=/etc/devsecmlops/alerting.env
-AM_IMG=prom/alertmanager:v0.27.0
+AM_IMG=prom/alertmanager:v0.28.1
 BB_IMG=prom/blackbox-exporter:v0.25.0
 TG=https://api.telegram.org
 
