@@ -10,7 +10,8 @@ groups:
   - name: anomalies
     rules:
       - record: fleet:machine_anomalous:fresh
-        # 1 or 0 per machine: the latest verdict, from the replica that served the machine last
+        # 1 or 0 per machine: the latest verdict, from the replica that served the machine last (if two
+        # replicas saw it at the very same instant, max keeps 'anomalous': the safer side)
         expr: |
           max by (machine, machine_type) (
             api_currently_anomalous{job="anomaly-api-pods"}
@@ -26,9 +27,9 @@ groups:
         expr: count(fleet:machine_anomalous:fresh == 1) or vector(0)
 
       - alert: AnomalyDetected
-        # two consecutive anomalous verdicts (readings arrive every 30 s), so a single blip does not page
-        expr: fleet:machine_anomalous:fresh == 1
-        for: 1m
+        # direct: fires on the first anomalous verdict, and stays firing until the machine has been normal
+        # for 2 minutes, so verdicts that flicker (1, 0, 1, 0) give one alert, not one per flip
+        expr: max_over_time(fleet:machine_anomalous:fresh[2m]) == 1
         labels:
           severity: info
         annotations:
@@ -61,29 +62,30 @@ groups:
   - name: platform
     rules:
       - alert: LayerDown
-        # HTTP probe of each platform layer every 5 s (prometheus.yml, blackbox-layers): six failures in a row
+        # HTTP probe of each platform layer every 5 s (prometheus.yml, blackbox-layers): fires on the second
+        # failure in a row (10 s); a single slow answer does not page
         expr: probe_success{job="blackbox-layers"} == 0
-        for: 30s
+        for: 10s
         labels:
           severity: critical
         annotations:
           summary: "{{ $labels.layer }} is down"
-          description: "{{ $labels.layer }} did not answer {{ $labels.instance }} for 30 seconds."
+          description: "{{ $labels.layer }} did not answer {{ $labels.instance }} for 10 seconds (two probes in a row)."
 
       - alert: ScrapeTargetDown
         # the host exporters and the control panel, scraped directly by Prometheus
         expr: up{job=~"node-exporter|k8s-exporter|anomaly-api-host"} == 0
-        for: 1m
+        for: 30s
         labels:
           severity: critical
         annotations:
           summary: "{{ $labels.job }} is down"
-          description: "Prometheus could not scrape {{ $labels.job }} ({{ $labels.instance }}) for 1 minute."
+          description: "Prometheus could not scrape {{ $labels.job }} ({{ $labels.instance }}) for 30 seconds."
 
       - alert: BlackboxExporterDown
         # without it, LayerDown cannot fire: report it on its own
         expr: up{job="blackbox-layers"} == 0
-        for: 30s
+        for: 10s
         labels:
           severity: critical
         annotations:
@@ -92,12 +94,12 @@ groups:
 
       - alert: ServingPodNotScraped
         expr: up{job="anomaly-api-pods"} == 0
-        for: 1m
+        for: 30s
         labels:
           severity: critical
         annotations:
           summary: "serving pod {{ $labels.pod }} is not answering /metrics"
-          description: "Prometheus could not scrape pod {{ $labels.pod }} for 1 minute."
+          description: "Prometheus could not scrape pod {{ $labels.pod }} for 30 seconds."
 
       - alert: ServingReplicasMissing
         expr: |
@@ -121,12 +123,12 @@ groups:
 
       - alert: KubernetesUnreachable
         expr: k8s_exporter_up == 0
-        for: 1m
+        for: 30s
         labels:
           severity: critical
         annotations:
           summary: "the Kubernetes API is not answering"
-          description: "kubectl calls from the k8s exporter have failed for 1 minute (Minikube down?)."
+          description: "kubectl calls from the k8s exporter have failed for 30 seconds (Minikube down?)."
 
       - alert: PredictionsStopped
         # the production agent (or the whole serving path) stopped: no prediction served for 5 minutes

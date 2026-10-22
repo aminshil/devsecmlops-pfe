@@ -22,16 +22,21 @@ tests:
       - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p2",machine="app-03",machine_type="app"}'
         values: '0x20'
       - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p2",machine="app-03"}'
-        values: '0+60x20'
+        values: '30+60x20'
       - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="cache-04",machine_type="cache"}'
         values: '1x20'
       - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="cache-04"}'
         values: '0x20'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="edge-05",machine_type="edge"}'
+        values: '0x4 1x16'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="edge-05"}'
+        values: '0+60x20'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="cdn-06",machine_type="edge"}'
+        values: '1 0 1 0 1 0x15'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="cdn-06"}'
+        values: '0+60x20'
     alert_rule_test:
-      - eval_time: 30s
-        alertname: AnomalyDetected
-        exp_alerts: []
-      - eval_time: 2m
+      - eval_time: 10s
         alertname: AnomalyDetected
         exp_alerts:
           - exp_labels:
@@ -48,6 +53,68 @@ tests:
             exp_annotations:
               summary: "cache-04 (cache) is anomalous"
               description: "The served model flagged cache-04 on its last readings."
+          - exp_labels:
+              severity: info
+              machine: cdn-06
+              machine_type: edge
+            exp_annotations:
+              summary: "cdn-06 (edge) is anomalous"
+              description: "The served model flagged cdn-06 on its last readings."
+      - eval_time: 3m30s
+        alertname: AnomalyDetected
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              machine: web-01
+              machine_type: web
+            exp_annotations:
+              summary: "web-01 (web) is anomalous"
+              description: "The served model flagged web-01 on its last readings."
+          - exp_labels:
+              severity: info
+              machine: cache-04
+              machine_type: cache
+            exp_annotations:
+              summary: "cache-04 (cache) is anomalous"
+              description: "The served model flagged cache-04 on its last readings."
+          - exp_labels:
+              severity: info
+              machine: cdn-06
+              machine_type: edge
+            exp_annotations:
+              summary: "cdn-06 (edge) is anomalous"
+              description: "The served model flagged cdn-06 on its last readings."
+      - eval_time: 5m15s
+        alertname: AnomalyDetected
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              machine: web-01
+              machine_type: web
+            exp_annotations:
+              summary: "web-01 (web) is anomalous"
+              description: "The served model flagged web-01 on its last readings."
+          - exp_labels:
+              severity: info
+              machine: edge-05
+              machine_type: edge
+            exp_annotations:
+              summary: "edge-05 (edge) is anomalous"
+              description: "The served model flagged edge-05 on its last readings."
+          - exp_labels:
+              severity: info
+              machine: cache-04
+              machine_type: cache
+            exp_annotations:
+              summary: "cache-04 (cache) is anomalous"
+              description: "The served model flagged cache-04 on its last readings."
+          - exp_labels:
+              severity: info
+              machine: cdn-06
+              machine_type: edge
+            exp_annotations:
+              summary: "cdn-06 (edge) is anomalous"
+              description: "The served model flagged cdn-06 on its last readings."
       - eval_time: 11m
         alertname: AnomalyDetected
         exp_alerts:
@@ -58,6 +125,13 @@ tests:
             exp_annotations:
               summary: "web-01 (web) is anomalous"
               description: "The served model flagged web-01 on its last readings."
+          - exp_labels:
+              severity: info
+              machine: edge-05
+              machine_type: edge
+            exp_annotations:
+              summary: "edge-05 (edge) is anomalous"
+              description: "The served model flagged edge-05 on its last readings."
       - eval_time: 5m
         alertname: AnomalyPersistent
         exp_alerts: []
@@ -314,7 +388,7 @@ tests:
               instance: http://localhost:8080/login
             exp_annotations:
               summary: "Jenkins is down"
-              description: "Jenkins did not answer http://localhost:8080/login for 30 seconds."
+              description: "Jenkins did not answer http://localhost:8080/login for 10 seconds (two probes in a row)."
   - name: a host exporter that cannot be scraped is down
     interval: 1m
     input_series:
@@ -326,7 +400,7 @@ tests:
       - eval_time: 1m
         alertname: ScrapeTargetDown
         exp_alerts: []
-      - eval_time: 3m
+      - eval_time: 2m
         alertname: ScrapeTargetDown
         exp_alerts:
           - exp_labels:
@@ -335,17 +409,17 @@ tests:
               instance: localhost:9400
             exp_annotations:
               summary: "k8s-exporter is down"
-              description: "Prometheus could not scrape k8s-exporter (localhost:9400) for 1 minute."
+              description: "Prometheus could not scrape k8s-exporter (localhost:9400) for 30 seconds."
   - name: the blackbox exporter itself down is reported
     interval: 1m
     input_series:
       - series: 'up{job="blackbox-layers",instance="http://localhost:5000/v2/",layer="Docker registry"}'
         values: '0x5'
     alert_rule_test:
-      - eval_time: 10s
+      - eval_time: 5s
         alertname: BlackboxExporterDown
         exp_alerts: []
-      - eval_time: 1m
+      - eval_time: 30s
         alertname: BlackboxExporterDown
         exp_alerts:
           - exp_labels:
@@ -362,10 +436,10 @@ tests:
       - series: 'up{job="anomaly-api-pods",pod="anomaly-api-7f",instance="192.168.49.2:8443"}'
         values: '0x5'
     alert_rule_test:
-      - eval_time: 30s
+      - eval_time: 20s
         alertname: ServingPodNotScraped
         exp_alerts: []
-      - eval_time: 2m
+      - eval_time: 1m
         alertname: ServingPodNotScraped
         exp_alerts:
           - exp_labels:
@@ -375,7 +449,7 @@ tests:
               instance: 192.168.49.2:8443
             exp_annotations:
               summary: "serving pod anomaly-api-7f is not answering /metrics"
-              description: "Prometheus could not scrape pod anomaly-api-7f for 1 minute."
+              description: "Prometheus could not scrape pod anomaly-api-7f for 30 seconds."
   - name: fewer available replicas than desired
     interval: 1m
     input_series:
@@ -423,10 +497,10 @@ tests:
       - series: 'k8s_exporter_up{job="k8s-exporter",instance="localhost:9400"}'
         values: '0x5'
     alert_rule_test:
-      - eval_time: 30s
+      - eval_time: 20s
         alertname: KubernetesUnreachable
         exp_alerts: []
-      - eval_time: 2m
+      - eval_time: 1m
         alertname: KubernetesUnreachable
         exp_alerts:
           - exp_labels:
@@ -435,7 +509,7 @@ tests:
               instance: localhost:9400
             exp_annotations:
               summary: "the Kubernetes API is not answering"
-              description: "kubectl calls from the k8s exporter have failed for 1 minute (Minikube down?)."
+              description: "kubectl calls from the k8s exporter have failed for 30 seconds (Minikube down?)."
   - name: no predictions for 5 minutes
     interval: 1m
     input_series:
@@ -494,18 +568,18 @@ tests:
             exp_annotations:
               summary: "less than 1.5 GB of memory available"
               description: "Available memory is 953.7MiB; training needs about 11 GB."
-  - name: a layer down is alerted within 45 seconds, and a blip is not
+  - name: a layer down is alerted within 25 seconds, and a single failed probe is not
     interval: 5s
     input_series:
       - series: 'probe_success{job="blackbox-layers",layer="Grafana",instance="http://localhost:3000/api/health"}'
         values: '1 1 0x20'
       - series: 'probe_success{job="blackbox-layers",layer="MLflow",instance="http://localhost:5001/health"}'
-        values: '1 1 0 0 0 1x16'
+        values: '1 1 0 1x18'
     alert_rule_test:
-      - eval_time: 35s
+      - eval_time: 15s
         alertname: LayerDown
         exp_alerts: []
-      - eval_time: 45s
+      - eval_time: 25s
         alertname: LayerDown
         exp_alerts:
           - exp_labels:
@@ -515,4 +589,4 @@ tests:
               instance: http://localhost:3000/api/health
             exp_annotations:
               summary: "Grafana is down"
-              description: "Grafana did not answer http://localhost:3000/api/health for 30 seconds."
+              description: "Grafana did not answer http://localhost:3000/api/health for 10 seconds (two probes in a row)."

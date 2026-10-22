@@ -14,16 +14,19 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
-    # machine anomalies are frequent: batch them, and do not send a message when each one clears
+    # direct: one message per anomalous machine, sent at once; no message when it clears
     - matchers: ['alertname="AnomalyDetected"']
       receiver: telegram-anomalies
-      group_interval: 10m
+      group_by: ['...']
+      group_wait: 1s
+      group_interval: 5m
       repeat_interval: 6h
-    # something is down: send at once, and update within a minute if more goes down
+    # something is down: one message per failing layer or target, sent at once
     - matchers: ['severity="critical"']
       receiver: telegram
-      group_wait: 5s
-      group_interval: 1m
+      group_by: ['...']
+      group_wait: 1s
+      group_interval: 30s
       repeat_interval: 2h
 
 inhibit_rules:

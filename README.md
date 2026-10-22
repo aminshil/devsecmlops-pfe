@@ -1732,29 +1732,32 @@ anyone has the control panel open, including when the panel itself is down.
 
 | Alert | Fires when | Severity |
 |---|---|---|
-| `AnomalyDetected` | a machine is anomalous on two consecutive readings (1 min) | info |
+| `AnomalyDetected` | a machine's first anomalous verdict (direct: one message per machine, about 20 s after the reading); held 2 min after its last anomalous verdict so a flickering verdict gives one message | info |
 | `AnomalyPersistent` | a machine is anomalous for 10 minutes | warning |
 | `FleetAnomalySurge` | at least 20 machines anomalous at once, and more than twice the 6-hour average, for 2 min | critical |
-| `LayerDown` | a platform layer fails its HTTP probe (every 5 s) for 30 s: Docker registry, Jenkins, SonarQube, MLflow, MinIO, Grafana, the cluster NodePort | critical |
-| `ScrapeTargetDown` | the node exporter, the Kubernetes exporter or the control panel cannot be scraped for 1 min | critical |
-| `BlackboxExporterDown` | the probing exporter itself is down for 30 s (the layer checks would be blind) | critical |
-| `ServingPodNotScraped`, `KubernetesUnreachable` | a serving pod not answering, or the Kubernetes API down, for 1 min | critical |
+| `LayerDown` | a platform layer fails two HTTP probes in a row (every 5 s, so 10 s): Docker registry, Jenkins, SonarQube, MLflow, MinIO, Grafana, the cluster NodePort; one message per layer | critical |
+| `ScrapeTargetDown` | the node exporter, the Kubernetes exporter or the control panel cannot be scraped for 30 s | critical |
+| `BlackboxExporterDown` | the probing exporter itself is down for 10 s (the layer checks would be blind) | critical |
+| `ServingPodNotScraped`, `KubernetesUnreachable` | a serving pod not answering, or the Kubernetes API down, for 30 s | critical |
 | `PodNotReady`, `ServingReplicasMissing` | a pod not Ready, or fewer replicas than desired, for 2 min (longer than a rollout or an HPA scale-up) | critical / warning |
 | `PredictionsStopped` | no prediction served for 5 min (the traffic agent or the serving path stopped) | warning |
 | `DiskAlmostFull`, `MemoryLow` | root disk above 90% (SonarQube turns read-only at 95%), less than 1.5 GB of memory free | warning |
 
 The anomaly alerts read the same state as the Fleet tab: each machine's verdict from the replica that
 served it last, and only for machines that reported in the last 5 minutes, so a stale replica or a
-machine that went silent does not alert. Alertmanager batches machine anomalies into one message every
-10 minutes (at most 15 machines listed), does not repeat a machine already covered by
-`AnomalyPersistent`, and holds back the per-pod alerts while the Kubernetes API itself is down.
+machine that went silent does not alert. Alertmanager sends each anomalous machine and each failing
+layer as its own message, does not repeat a machine already covered by `AnomalyPersistent`, and holds
+back the per-pod alerts while the Kubernetes API itself is down. The fleet starts about 25 anomaly
+episodes an hour, so expect about that many anomaly messages; they can be muted from the Alertmanager
+page (Silences) without muting the down alerts.
 
-**Time to Telegram.** Critical alerts (something down) are sent 5 seconds after they fire and updated
-every minute; Prometheus evaluates the rules every 5 seconds and probes the layers every 5 seconds. A
-stopped layer therefore reaches the phone in about 45 seconds (30 s of failed probes, then delivery); a
-probe that fails once or twice does not page (unit test: "a layer down is alerted within 45 seconds,
-and a blip is not"). Warnings are sent 30 seconds after firing; machine anomalies are batched every
-10 minutes. The waits are set from how often each signal arrives (pod readiness waits 2 minutes so
+**Time to Telegram.** Prometheus probes the layers and evaluates the rules every 5 seconds, and
+Alertmanager sends critical alerts and anomalies 1 second after they fire. A stopped layer reaches the
+phone in about 15 seconds (two failed probes, then delivery); a single failed probe does not page (unit
+test: "a layer down is alerted within 25 seconds, and a single failed probe is not"). An anomaly arrives
+about 20 seconds after the reading (the pods are scraped every 15 s); unit tests check that a machine
+turning anomalous is alerted at once and that a verdict flickering 1-0-1-0 gives one alert. Warnings are
+sent 30 seconds after firing. The waits are set from how often each signal arrives (pod readiness waits 2 minutes so
 that a normal rollout does not page).
 
 **How it is checked.** `scripts/check_alerting.sh` runs `promtool check rules`, `promtool test rules` on
