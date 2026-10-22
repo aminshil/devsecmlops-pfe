@@ -590,3 +590,52 @@ tests:
             exp_annotations:
               summary: "Grafana is down"
               description: "Grafana did not answer http://localhost:3000/api/health for 10 seconds (two probes in a row)."
+
+  - name: the Grafana list shows the same machines as the Telegram list, with each one's status
+    # web-01 anomalous throughout; db-01 normal for the last minute (still held); db-02 always normal;
+    # edge-01 stopped reporting about a minute ago while anomalous (still held); app-01 has not reported
+    # for 10 minutes (in neither list). The expressions are the dashboard's, with $machine_type = .*
+    # (tests/test_alerting.py checks they are copied verbatim).
+    interval: 15s
+    input_series:
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="web-01",machine_type="web"}'
+        values: '1x40'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="web-01",machine_type="web"}'
+        values: '0+15x40'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="db-01",machine_type="db"}'
+        values: '1x36 0x4'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="db-01",machine_type="db"}'
+        values: '0+15x40'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="db-02",machine_type="db"}'
+        values: '0x40'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="db-02",machine_type="db"}'
+        values: '0+15x40'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="edge-01",machine_type="edge"}'
+        values: '1x40'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="edge-01",machine_type="edge"}'
+        values: '0+15x16 240x24'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="app-01",machine_type="app"}'
+        values: '1x40'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="app-01",machine_type="app"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AnomalyDetected
+        exp_alerts:
+          - exp_labels: {severity: info, machine: db-01, machine_type: db}
+            exp_annotations: {summary: "db-01 (db) is anomalous", description: "The served model flagged db-01 on its last readings."}
+          - exp_labels: {severity: info, machine: edge-01, machine_type: edge}
+            exp_annotations: {summary: "edge-01 (edge) is anomalous", description: "The served model flagged edge-01 on its last readings."}
+          - exp_labels: {severity: info, machine: web-01, machine_type: web}
+            exp_annotations: {summary: "web-01 (web) is anomalous", description: "The served model flagged web-01 on its last readings."}
+    promql_expr_test:
+      - expr: "(fleet:machine_anomalous:fresh{machine_type=~\".*\"} and on(machine) (max_over_time(fleet:machine_anomalous:fresh{machine_type=~\".*\"}[2m]) == 1)) or on(machine) ((max_over_time(fleet:machine_anomalous:fresh{machine_type=~\".*\"}[2m]) == 1) * 0 - 1)"
+        eval_time: 10m
+        exp_samples:
+          - {labels: 'fleet:machine_anomalous:fresh{machine="web-01",machine_type="web"}', value: 1}
+          - {labels: 'fleet:machine_anomalous:fresh{machine="db-01",machine_type="db"}', value: 0}
+          - {labels: '{machine="edge-01",machine_type="edge"}', value: -1}
+      - expr: "count(fleet:machine_anomalous:fresh{machine_type=~\".*\"} == 1) or vector(0)"
+        eval_time: 10m
+        exp_samples:
+          - {labels: '{}', value: 1}

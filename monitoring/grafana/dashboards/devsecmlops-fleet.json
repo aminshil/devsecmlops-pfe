@@ -296,7 +296,7 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
-          "expr": "count((api_currently_anomalous{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) == 1) or vector(0)",
+          "expr": "count(fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"} == 1) or vector(0)",
           "legendFormat": "anomalous machines"
         }
       ]
@@ -305,22 +305,68 @@
       "type": "table",
       "fieldConfig": {
         "defaults": {},
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Status"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "text": "anomalous now",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "0": {
+                        "text": "normal again (held 2 min)",
+                        "color": "orange",
+                        "index": 1
+                      },
+                      "-1": {
+                        "text": "stopped reporting (held 2 min)",
+                        "color": "text",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
       },
-      "options": {},
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
       "id": 11,
-      "title": "Currently anomalous machines",
+      "title": "Anomalous machines (the Telegram list)",
       "datasource": {
         "type": "prometheus",
         "uid": "devsecmlops-prom"
       },
       "gridPos": {
-        "h": 8,
+        "h": 10,
         "w": 12,
         "x": 0,
         "y": 32
       },
-      "description": "The actual list behind the count above: every machine whose most recent prediction was anomalous, right now, per the freshest pod that has reported on it.",
+      "description": "The same machines as the Telegram anomaly list: anomalous now, or anomalous in the last 2 minutes (the hold that stops a flickering verdict from paging on every flip). Status says which: anomalous now, normal again (still held), or stopped reporting (still held). A machine's state comes from the pod that served it last, and only machines that reported in the last 5 minutes count (fleet:machine_anomalous:fresh). The count above is the 'anomalous now' rows only. The Telegram message is a snapshot from up to 20 seconds before it arrived; this panel refreshes every 30 seconds.",
       "targets": [
         {
           "datasource": {
@@ -328,10 +374,43 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
-          "expr": "(api_currently_anomalous{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) == 1",
+          "expr": "(fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"} and on(machine) (max_over_time(fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"}[2m]) == 1)) or on(machine) ((max_over_time(fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"}[2m]) == 1) * 0 - 1)",
           "legendFormat": "",
           "instant": true,
           "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            },
+            "indexByName": {
+              "machine": 0,
+              "machine_type": 1,
+              "Value": 2
+            },
+            "renameByName": {
+              "machine": "Machine",
+              "machine_type": "Type",
+              "Value": "Status"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Status",
+                "desc": true
+              }
+            ]
+          }
         }
       ]
     },
@@ -509,7 +588,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 40
+        "y": 42
       },
       "description": "Average of the raw CPU % each machine's most recent request actually reported (not a synthetic value -- literally what the API received). Purely descriptive of current fleet load; there is no fixed 'bad' threshold here since machine types have very different normal baselines (a database server idles hotter than a web server, by design of the synthetic generator).",
       "targets": [
@@ -541,7 +620,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 40
+        "y": 42
       },
       "description": "Average of the raw network MB/s each machine's most recent request reported. Same caveat as CPU: descriptive only, no universal threshold, since normal ranges differ by machine type.",
       "targets": [
@@ -573,7 +652,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 48
+        "y": 50
       },
       "description": "Average of the raw load-average value each machine's most recent request reported. Same caveat: descriptive, not a threshold -- a machine's OWN per-machine, per-time-window baseline (not this fleet-wide average) is what the model actually scores it against.",
       "targets": [
@@ -597,7 +676,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 56
+        "y": 58
       },
       "panels": []
     },
@@ -618,7 +697,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 57
+        "y": 59
       },
       "description": "Machines the /root-cause endpoint identified as the LIKELY ORIGIN of a correlated failure (not just anomalous themselves) in the last 5 minutes. Structurally, only machines with real downstream dependents in dependency_graph.json can appear here -- in this project, that means routers. Empty is the normal state; a router appearing here means multiple dependent machines are anomalous at once and this is the one the graph points to as the cause.",
       "targets": [
@@ -650,7 +729,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 63
+        "y": 65
       },
       "description": "The same signal as the spotlight above, over time, so a recurring root cause (the same machine repeatedly implicated) stands out from a one-off.",
       "targets": [
@@ -682,7 +761,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 71
+        "y": 73
       },
       "description": "How many DIFFERENT machines have been anomalous at least once since the current pods started (a Counter, so it only grows -- unlike the 'currently anomalous' panels above). Resets to 0 on every rollout. High relative to 200 over a long session is expected; a high value within minutes of startup would be unusual.",
       "targets": [
@@ -714,7 +793,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 71
+        "y": 73
       },
       "description": "Same idea as the panel to its left, but for root-cause incidents specifically: how many distinct machines have been identified as a likely root cause since the pods started.",
       "targets": [
@@ -738,7 +817,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 77
+        "y": 79
       },
       "panels": []
     },
@@ -750,7 +829,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 78
+        "y": 80
       },
       "datasource": {
         "type": "prometheus",
@@ -787,7 +866,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 78
+        "y": 80
       },
       "datasource": {
         "type": "prometheus",
@@ -823,7 +902,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 86
+        "y": 88
       },
       "datasource": {
         "type": "prometheus",
@@ -862,7 +941,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 86
+        "y": 88
       },
       "datasource": {
         "type": "prometheus",
@@ -893,7 +972,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 92
+        "y": 94
       },
       "panels": []
     },
@@ -905,7 +984,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 93
+        "y": 95
       },
       "datasource": {
         "type": "prometheus",
@@ -952,7 +1031,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 93
+        "y": 95
       },
       "datasource": {
         "type": "prometheus",
@@ -999,7 +1078,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 101
+        "y": 103
       },
       "datasource": {
         "type": "prometheus",
@@ -1043,7 +1122,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 101
+        "y": 103
       },
       "datasource": {
         "type": "prometheus",

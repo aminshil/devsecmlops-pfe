@@ -74,3 +74,15 @@ def test_no_telegram_secret_in_the_repository():
     token_shape = re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b")
     for p in list(ALERTING.iterdir()) + [ROOT / "scripts" / "setup_alerting.sh", ROOT / "monitoring" / "prometheus.yml"]:
         assert not token_shape.search(p.read_text()), f"something shaped like a bot token in {p.name}"
+
+
+def test_the_grafana_anomaly_panels_are_the_ones_unit_tested_against_the_telegram_list():
+    import json
+    dash = json.loads((ROOT / "monitoring" / "grafana" / "dashboards" / "devsecmlops-fleet.json").read_text())
+    panels = {p.get("title"): p for p in dash["panels"]}
+    tested = {t["expr"] for case in yaml.safe_load((ALERTING / "alert_rules_test.yml").read_text())["tests"]
+              for t in case.get("promql_expr_test", [])}
+    for title in ("Anomalous machines (the Telegram list)", "Anomalous machines over time"):
+        expr = panels[title]["targets"][0]["expr"].replace("$machine_type", ".*")
+        assert "fleet:machine_anomalous:fresh" in expr, title          # same state as the alerts
+        assert expr in tested, f"{title}: the dashboard query is not the one alert_rules_test.yml checks"
