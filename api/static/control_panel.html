@@ -161,6 +161,7 @@
     <button type="button" data-tab="demo">Demo</button>
     <button type="button" data-tab="infra">Infrastructure</button>
     <button type="button" data-tab="fleet">Fleet</button>
+    <button type="button" data-tab="history">History</button>
     <button type="button" data-tab="training">Training</button>
     <button type="button" data-tab="ct">Continuous training</button>
     <button type="button" data-tab="review">Review</button>
@@ -287,6 +288,20 @@
       <div class="sub">Every machine grouped under the router it depends on, coloured by <b>what the models currently say</b> &mdash; the serving pods' own <span class="mono">api_currently_anomalous</span> gauge, which is 1 when that machine's most recent prediction was flagged. This is the live model verdict, not a dataset label. Each router card also says what the pattern means, the way network monitoring reasons: dependents that <b>stop reporting</b> (dashed, no report for 2 minutes) are <b>unreachable</b> and point at the router, not at the machines; many dependents <b>degraded together</b> point upstream even when the router's own metrics look normal (a <b>gray failure</b>: silent packet loss the router does not report); a busy router with healthy machines is a control-plane event or a failure still propagating. Measured on realistic data: it names every hard-down router within about 30 s, but catches gray failures only when they are strong (README, section 9c). Machines the pods have never scored are greyed out.</div>
       <label style="display:block;margin-top:10px;font-size:13px"><input type="checkbox" id="fl_auto" style="width:auto;display:inline;margin-right:6px">auto-refresh every 10s</label>
       <div id="fleet_body"><div class="hint">Open this tab to load.</div></div>
+    </div>
+  </div>
+
+  <div class="tabpage" id="history">
+    <div class="card">
+      <h3>Anomaly history <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshHistory">↻ Refresh</button></h3>
+      <div class="sub">Past anomalies, from Prometheus: the same verdict as the Telegram list and the Grafana table (each machine's latest verdict from the pod that served it last, among machines that reported in the last 5 minutes). An <b>episode</b> is one stretch of anomalous verdicts; it ends on the first normal one, so a machine flickering around the threshold shows several short episodes. Times are in your local time, at the resolution shown (15 s up to 41 hours, coarser for 7 days); Prometheus keeps 15 days.</div>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px;font-size:13px">
+        <label for="hs_hours">Window</label>
+        <select id="hs_hours" style="width:auto"><option value="1">last hour</option><option value="6" selected>last 6 hours</option><option value="24">last 24 hours</option><option value="168">last 7 days</option></select>
+        <label for="hs_filter">Filter</label>
+        <input id="hs_filter" type="text" placeholder="machine or type, e.g. web-17 or router" style="width:260px">
+      </div>
+      <div id="history_body"><div class="hint">Open this tab to load.</div></div>
     </div>
   </div>
 
@@ -675,6 +690,7 @@
     if(id==="ct"){ loadCt(); }
     if(id==="review"){ loadReview(); }
     if(id==="fleet"){ loadFleet(); }
+    if(id==="history"){ loadHistory(); }
     if(id==="infra"){ loadInfra(); loadPipeline(); loadAlerting(); }
     if(id==="training"){ loadDatasets(); loadRuns(); }
     if(id==="summary"){ loadSummary(); }
@@ -1085,6 +1101,49 @@
     try{ await getJSON(API+"/ui/alerting/"+kind,{method:"POST",headers:CT_JSON,body:JSON.stringify(payload)}); await loadAlerting(); }
     catch(e){ const m=document.getElementById("alerting_msg"); if(m){ m.textContent="Could not "+kind+": "+e.message; } }
   }
+  let HS_DATA=null;
+  function hsDur(s){
+    const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
+    if(h){ return h+"h "+rvPad(m)+"m"; }
+    if(m){ return m+"m "+rvPad(sec)+"s"; }
+    return sec+"s";
+  }
+  function hsMatch(row,f){ return !f || row.machine.toLowerCase().includes(f) || String(row.type).toLowerCase().includes(f); }
+  function hsEnd(row){ return row.ongoing?'<span class="tag anom">ongoing</span>':ctEsc(rvLocal(row.end*1000)); }
+  function hsMachines(rows){
+    const body=rows.map(function(r){
+      const last=r.ongoing?'<span class="tag anom">now</span>':ctEsc(rvLocal(r.last_end*1000));
+      return '<tr><td class="mono">'+ctEsc(r.machine)+'</td><td>'+ctEsc(r.type)+'</td><td class="mono">'+r.episodes+'</td><td class="mono">'+hsDur(r.anomalous_s)+'</td><td class="mono">'+hsDur(r.longest_s)+'</td><td class="mono">'+last+'</td></tr>';
+    }).join("");
+    return '<h4 style="margin:14px 0 6px">By machine (most time anomalous first)</h4><table><thead><tr><th>Machine</th><th>Type</th><th>Episodes</th><th>Time anomalous</th><th>Longest</th><th>Last anomalous</th></tr></thead><tbody>'+body+'</tbody></table>';
+  }
+  function hsEpisodes(rows){
+    const shown=rows.slice(0,300);
+    const body=shown.map(function(e){
+      return '<tr><td class="mono">'+ctEsc(e.machine)+'</td><td>'+ctEsc(e.type)+'</td><td class="mono">'+ctEsc(rvLocal(e.start*1000))+'</td><td class="mono">'+hsEnd(e)+'</td><td class="mono">'+hsDur(e.duration_s)+'</td></tr>';
+    }).join("");
+    const more=rows.length>shown.length?'<div class="hint">'+shown.length+' of '+rows.length+' episodes shown: filter by machine or type to see the others.</div>':'';
+    return '<h4 style="margin:14px 0 6px">Episodes (newest first)</h4><table><thead><tr><th>Machine</th><th>Type</th><th>Started</th><th>Ended</th><th>Duration</th></tr></thead><tbody>'+body+'</tbody></table>'+more;
+  }
+  function renderHistory(){
+    const body=document.getElementById("history_body");
+    if(!HS_DATA){ return; }
+    const f=document.getElementById("hs_filter").value.trim().toLowerCase();
+    const machines=HS_DATA.machines.filter(function(r){ return hsMatch(r,f); });
+    const episodes=HS_DATA.episodes.filter(function(e){ return hsMatch(e,f); });
+    const ongoing=machines.filter(function(r){ return r.ongoing; }).length;
+    const cut=HS_DATA.truncated?' · the '+HS_DATA.truncated+' oldest episodes are not listed (choose a shorter window)':'';
+    if(!machines.length){ body.innerHTML='<div class="hint">No anomaly in this window'+(f?' for this filter':'')+'.</div>'; return; }
+    body.innerHTML='<div style="margin-top:10px">'+episodes.length+' episode(s) on '+machines.length+' machine(s) · '+ongoing+' anomalous now · resolution '+HS_DATA.step_s+' s'+cut+'</div>'
+      +hsMachines(machines)+hsEpisodes(episodes);
+  }
+  async function loadHistory(){
+    const body=document.getElementById("history_body");
+    body.innerHTML='<div class="hint"><span class="spin"></span> loading…</div>';
+    const hours=document.getElementById("hs_hours").value;
+    try{ HS_DATA=await getJSON(API+"/ui/history?hours="+encodeURIComponent(hours)); renderHistory(); }
+    catch(e){ HS_DATA=null; body.innerHTML='<div class="hint" style="color:var(--red)">Failed to load: '+ctEsc(e.message)+'</div>'; }
+  }
   async function loadInfra(){
     const body=document.getElementById("infra_body");
     body.innerHTML='<div class="hint"><span class="spin"></span> loading…</div>';
@@ -1186,6 +1245,9 @@
   document.getElementById("btnRefreshStatus").addEventListener("click", refreshStatus);
   document.getElementById("btnRefreshInfra").addEventListener("click", loadInfra);
   document.getElementById("btnRefreshAlerting").addEventListener("click", loadAlerting);
+  document.getElementById("btnRefreshHistory").addEventListener("click", loadHistory);
+  document.getElementById("hs_hours").addEventListener("change", loadHistory);
+  document.getElementById("hs_filter").addEventListener("input", renderHistory);
   document.getElementById("alerting_body").addEventListener("click", function(e){
     const b=e.target.closest("button[data-alact]");
     if(b){ alAct(b.dataset.alact,b.dataset.scope); }

@@ -2284,3 +2284,100 @@ def ui_alerting_unmute(body: _UnmuteRequest):
     _log_fix_action("Notifications", "unmute " + body.scope, True, f"{len(ids)} silence(s) expired")
     return {"expired": len(ids)}
 
+
+
+# ---------------------------------------------------------------------------
+# History tab: past anomaly episodes, from Prometheus. The verdict over time is the alert's own state
+# (monitoring/alerting/alert_rules.yml, fleet:machine_anomalous:fresh), evaluated here from the raw pod
+# metrics, so the whole Prometheus retention is covered, not only the time since the rule was loaded.
+# tests/test_ui_history.py checks the two expressions are the same, and alert_rules_test.yml runs the
+# history query against the alert on the same data.
+# ---------------------------------------------------------------------------
+from fastapi import Query as _Query
+
+_PROM_RANGE_URL = "http://localhost:9090/api/v1/query_range"
+_PROM_DOWN = {"description": "Prometheus did not answer as expected"}
+_FRESH_VERDICT_EXPR = (
+    'max by (machine, machine_type) ('
+    'api_currently_anomalous{job="anomaly-api-pods"} and on (pod, machine) '
+    '(api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods"} == on (machine) group_left () '
+    'max by (machine) (api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods"}))'
+    ') and on (machine) '
+    '(time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods"}) < 300)'
+)
+# anomalous samples only; the parentheses matter: `and` binds looser than `==`
+_HISTORY_EXPR = "(" + _FRESH_VERDICT_EXPR + ") == 1"
+_HISTORY_MAX_POINTS = 10000      # Prometheus refuses more than 11,000 points per series
+_HISTORY_MAX_EPISODES = 2000
+
+
+class _PrometheusError(RuntimeError):
+    pass
+
+
+def _prom_range(expr: str, start: float, end: float, step: int, timeout: int = 30) -> list:
+    """Prometheus range query on this host; returns the matrix, or raises _PrometheusError."""
+    query = _up.urlencode({"query": expr, "start": f"{start:.3f}", "end": f"{end:.3f}", "step": str(step)})
+    try:
+        with _ur.urlopen(_PROM_RANGE_URL + "?" + query, timeout=timeout) as r:
+            payload = json.loads(r.read())
+    except (OSError, ValueError) as e:
+        raise _PrometheusError(f"Prometheus range query failed: {e}") from e
+    if payload.get("status") != "success":
+        raise _PrometheusError("Prometheus: " + str(payload.get("error") or payload.get("status")))
+    return payload["data"]["result"]
+
+
+def _history_step(hours: int) -> int:
+    """Smallest multiple of 15 s (the pods' scrape interval) that keeps every series under the point limit."""
+    return 15 * math.ceil(hours * 3600 / 15 / _HISTORY_MAX_POINTS)
+
+
+def _episodes(series: dict, step: int, end: float) -> list:
+    """Consecutive anomalous samples of one machine, as episodes. A gap longer than one step ends an
+    episode; each sample stands for one step, so a single anomalous sample lasts `step` seconds."""
+    times = sorted(float(t) for t, _ in series.get("values", []))
+    labels = series.get("metric", {})
+    out, first, prev = [], None, None
+    for t in times:
+        if first is not None and t - prev > 1.5 * step:
+            out.append((first, prev))
+            first = None
+        if first is None:
+            first = t
+        prev = t
+    if first is not None:
+        out.append((first, prev))
+    return [{"machine": labels.get("machine", "?"), "type": labels.get("machine_type", ""),
+             "start": a, "end": b + step, "duration_s": int(b - a + step),
+             "ongoing": end - b <= 1.5 * step} for a, b in out]
+
+
+def _history_by_machine(episodes: list) -> list:
+    rows = {}
+    for e in episodes:
+        r = rows.setdefault(e["machine"], {"machine": e["machine"], "type": e["type"], "episodes": 0,
+                                           "anomalous_s": 0, "longest_s": 0, "last_end": 0.0, "ongoing": False})
+        r["episodes"] += 1
+        r["anomalous_s"] += e["duration_s"]
+        r["longest_s"] = max(r["longest_s"], e["duration_s"])
+        r["last_end"] = max(r["last_end"], e["end"])
+        r["ongoing"] = r["ongoing"] or e["ongoing"]
+    return sorted(rows.values(), key=lambda r: (-r["anomalous_s"], r["machine"]))
+
+
+@app.get("/ui/history", responses={502: _PROM_DOWN})
+def ui_history(hours: Annotated[int, _Query(ge=1, le=168)] = 6):
+    """Past anomaly episodes over the last `hours` (1 to 168): one row per episode, newest first, and one
+    row per machine (episodes, time anomalous, longest episode), from the same state as the alerts."""
+    end = time.time()
+    step = _history_step(hours)
+    try:
+        matrix = _prom_range(_HISTORY_EXPR, end - hours * 3600, end, step)
+    except _PrometheusError as e:
+        raise _HTTPException(status_code=502, detail=str(e)) from e
+    episodes = [e for s in matrix for e in _episodes(s, step, end)]
+    episodes.sort(key=lambda e: (-e["start"], e["machine"]))
+    return {"hours": hours, "step_s": step, "from": end - hours * 3600, "to": end,
+            "total_episodes": len(episodes), "machines": _history_by_machine(episodes),
+            "episodes": episodes[:_HISTORY_MAX_EPISODES], "truncated": max(0, len(episodes) - _HISTORY_MAX_EPISODES)}

@@ -657,3 +657,13 @@ tests:
         eval_time: 10m
         exp_samples:
           - {labels: '{}', value: 1}
+      # the control panel's History tab (api/app.py, _HISTORY_EXPR): the same machines, from the raw metrics
+      - expr: "(max by (machine, machine_type) (api_currently_anomalous{job=\"anomaly-api-pods\"} and on (pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on (machine) group_left () max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) and on (machine) (time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}) < 300)) == 1"
+        eval_time: 10m
+        exp_samples:
+          - {labels: '{machine="web-01",machine_type="web"}', value: 1}
+      - expr: "(max by (machine, machine_type) (api_currently_anomalous{job=\"anomaly-api-pods\"} and on (pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on (machine) group_left () max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) and on (machine) (time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}) < 300)) == 1"
+        eval_time: 9m
+        exp_samples:
+          - {labels: '{machine="web-01",machine_type="web"}', value: 1}
+          - {labels: '{machine="db-01",machine_type="db"}', value: 1}
