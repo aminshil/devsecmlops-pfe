@@ -27,9 +27,10 @@ groups:
         expr: count(fleet:machine_anomalous:fresh == 1) or vector(0)
 
       - alert: AnomalyDetected
-        # direct: fires on the first anomalous verdict, and stays firing until the machine has been normal
-        # for 2 minutes, so verdicts that flicker (1, 0, 1, 0) give one alert, not one per flip
-        expr: max_over_time(fleet:machine_anomalous:fresh[2m]) == 1
+        # direct, both ways: fires on the first anomalous verdict and resolves on the first normal one
+        # (no hold), so the Telegram list is exactly the machines anomalous now; a verdict that flickers
+        # (1, 0, 1, 0) comes and goes with it. Alertmanager batches changes into one message per 20 s.
+        expr: fleet:machine_anomalous:fresh == 1
         labels:
           severity: info
         annotations:

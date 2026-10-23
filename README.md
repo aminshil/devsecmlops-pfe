@@ -1736,7 +1736,7 @@ anyone has the control panel open, including when the panel itself is down.
 
 | Alert | Fires when | Severity |
 |---|---|---|
-| `AnomalyDetected` | a machine's first anomalous verdict, held 2 min after its last anomalous verdict so a flickering verdict counts once; delivered as one running list (below) | info |
+| `AnomalyDetected` | a machine's latest verdict is anomalous; it resolves on the first normal verdict (no hold); delivered as one running list (below) | info |
 | `AnomalyPersistent` | a machine is anomalous for 10 minutes | warning |
 | `FleetAnomalySurge` | at least 20 machines anomalous at once, and more than twice the 6-hour average, for 2 min | critical |
 | `LayerDown` | a platform layer fails two HTTP probes in a row (every 5 s, so 10 s): Docker registry, Jenkins, SonarQube, MLflow, MinIO, Grafana, the cluster NodePort; one message per layer | critical |
@@ -1750,16 +1750,17 @@ anyone has the control panel open, including when the panel itself is down.
 The anomaly alerts read the same state as the Fleet tab: each machine's verdict from the replica that
 served it last, and only for machines that reported in the last 5 minutes, so a stale replica or a
 machine that went silent does not alert. Machine anomalies arrive as **one running list**, re-sent
-within 20 seconds whenever it changes: every machine anomalous now or in the last 2 minutes (the hold that
-makes a verdict flickering 1-0-1-0 one alert, not one per flip), alphabetical, with how long each has
+within 20 seconds whenever it changes: every machine anomalous now, alphabetical, with how long each has
 been anomalous; `🆕 +` marks a machine that turned anomalous in the last minute, and `✅ −` the machines
-that just cleared. The list is capped at 60 machines (plus 15 cleared) so the message stays under
-Telegram's 4096-character limit in a fleet-wide incident (checked with 139 machines: 2,495 characters).
-The Grafana panel "Anomalous machines (the Telegram list)" shows the same machines with each one's status
-(anomalous now; normal again, still held; stopped reporting, still held), and the "Anomalous machines over
-time" count is the anomalous-now rows only, so the Telegram list can be longer than that count; a promtool
+back to normal since the previous message. A machine leaves the list on its first normal verdict (there
+is no hold), so a verdict flickering around the threshold comes and goes with it; Alertmanager still
+sends at most one message per 20 seconds. The list is capped at 60 machines and 15 back-to-normal lines,
+with a "… 60 of N listed" line when it is cut, so the message stays under Telegram's 4096-character
+limit in a fleet-wide incident (checked end to end with the real Alertmanager and a stand-in Telegram:
+99 anomalous plus 40 back to normal gives 2,510 characters). The Grafana table "Anomalous machines now
+(the Telegram list)" and the "Anomalous machines over time" curve show the same machines; a promtool
 test runs both dashboard queries against the alert on the same data. (Before this, the dashboard table
-used its own query: the anomalous-now machines, plus machines that had stopped reporting.) Each failing layer is its own message. Per-pod alerts are held back while the Kubernetes API itself is
+used its own query, which also counted machines that had stopped reporting.) Each failing layer is its own message. Per-pod alerts are held back while the Kubernetes API itself is
 down. The list is re-sent about 50 times an hour (the fleet starts and ends about 25 anomaly episodes an
 hour); it can be muted on its own without muting the down alerts (below). The list
 needs Alertmanager 0.28 or later (`since`, `humanizeDuration` in templates); the image is pinned to
@@ -1781,8 +1782,8 @@ Alertmanager sends critical alerts and anomalies 1 second after they fire. A sto
 phone in about 15 seconds (two failed probes, then delivery); a single failed probe does not page (unit
 test: "a layer down is alerted within 25 seconds, and a single failed probe is not"). An anomaly arrives
 in the list about 20 to 40 seconds after the reading (pods scraped every 15 s, list updated every
-20 s); unit tests check that a machine turning anomalous is alerted at once and that a verdict
-flickering 1-0-1-0 gives one alert. Warnings are
+20 s), and leaves it as fast; unit tests check that a machine is listed on its first anomalous verdict,
+removed on its first normal one, and listed again when it flips back. Warnings are
 sent 30 seconds after firing. The waits are set from how often each signal arrives (pod readiness waits 2 minutes so
 that a normal rollout does not page).
 
@@ -1805,7 +1806,10 @@ exporter as containers that restart with Docker, restarts Prometheus, shows each
 sends a test alert. `sudo bash scripts/setup_alerting.sh --test` sends only the test alert.
 
 **Limits.** Prometheus cannot alert about itself: if it stops, nothing fires (the Status tab still
-shows it). Notifications need the VM's internet access to reach Telegram. The containers are started by
+shows it). For about a minute after Alertmanager restarts the anomaly list is incomplete: Alertmanager
+does not keep alerts across a restart, and Prometheus re-sends each firing alert once a minute. A
+machine that stops reporting while anomalous leaves the list 5 minutes later as "back to normal"; a
+wider stop is reported by `PredictionsStopped` and `ServingPodNotScraped`. Notifications need the VM's internet access to reach Telegram. The containers are started by
 the setup script, not yet by the Ansible playbook. The router-level reasoning of the Fleet tab
 (suspected gray failure) is not an alert; `FleetAnomalySurge` covers the many-machines-at-once case.
 

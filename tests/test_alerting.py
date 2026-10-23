@@ -82,7 +82,7 @@ def test_the_grafana_anomaly_panels_are_the_ones_unit_tested_against_the_telegra
     panels = {p.get("title"): p for p in dash["panels"]}
     tested = {t["expr"] for case in yaml.safe_load((ALERTING / "alert_rules_test.yml").read_text())["tests"]
               for t in case.get("promql_expr_test", [])}
-    for title in ("Anomalous machines (the Telegram list)", "Anomalous machines over time"):
+    for title in ("Anomalous machines now (the Telegram list)", "Anomalous machines over time"):
         expr = panels[title]["targets"][0]["expr"].replace("$machine_type", ".*")
         assert "fleet:machine_anomalous:fresh" in expr, title          # same state as the alerts
         assert expr in tested, f"{title}: the dashboard query is not the one alert_rules_test.yml checks"

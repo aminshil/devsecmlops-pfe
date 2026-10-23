@@ -305,47 +305,7 @@
       "type": "table",
       "fieldConfig": {
         "defaults": {},
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Status"
-            },
-            "properties": [
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "1": {
-                        "text": "anomalous now",
-                        "color": "red",
-                        "index": 0
-                      },
-                      "0": {
-                        "text": "normal again (held 2 min)",
-                        "color": "orange",
-                        "index": 1
-                      },
-                      "-1": {
-                        "text": "stopped reporting (held 2 min)",
-                        "color": "text",
-                        "index": 2
-                      }
-                    }
-                  }
-                ]
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "showHeader": true,
@@ -355,7 +315,7 @@
         }
       },
       "id": 11,
-      "title": "Anomalous machines (the Telegram list)",
+      "title": "Anomalous machines now (the Telegram list)",
       "datasource": {
         "type": "prometheus",
         "uid": "devsecmlops-prom"
@@ -366,7 +326,7 @@
         "x": 0,
         "y": 32
       },
-      "description": "The same machines as the Telegram anomaly list: anomalous now, or anomalous in the last 2 minutes (the hold that stops a flickering verdict from paging on every flip). Status says which: anomalous now, normal again (still held), or stopped reporting (still held). A machine's state comes from the pod that served it last, and only machines that reported in the last 5 minutes count (fleet:machine_anomalous:fresh). The count above is the 'anomalous now' rows only. The Telegram message is a snapshot from up to 20 seconds before it arrived; this panel refreshes every 30 seconds.",
+      "description": "The same machines as the Telegram anomaly list: every machine whose latest verdict is anomalous, from the pod that served it last, among machines that reported in the last 5 minutes (fleet:machine_anomalous:fresh). A machine leaves the list on its first normal verdict. Its row count is the curve above. The Telegram message is a snapshot from up to 20 seconds before it arrived; this panel refreshes every 30 seconds.",
       "targets": [
         {
           "datasource": {
@@ -374,7 +334,7 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
-          "expr": "(fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"} and on(machine) (max_over_time(fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"}[2m]) == 1)) or on(machine) ((max_over_time(fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"}[2m]) == 1) * 0 - 1)",
+          "expr": "fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"} == 1",
           "legendFormat": "",
           "instant": true,
           "format": "table"
@@ -386,17 +346,16 @@
           "options": {
             "excludeByName": {
               "Time": true,
-              "__name__": true
+              "__name__": true,
+              "Value": true
             },
             "indexByName": {
               "machine": 0,
-              "machine_type": 1,
-              "Value": 2
+              "machine_type": 1
             },
             "renameByName": {
               "machine": "Machine",
-              "machine_type": "Type",
-              "Value": "Status"
+              "machine_type": "Type"
             }
           }
         },
@@ -406,8 +365,7 @@
             "fields": {},
             "sort": [
               {
-                "field": "Status",
-                "desc": true
+                "field": "Machine"
               }
             ]
           }

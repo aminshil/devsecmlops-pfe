@@ -12,10 +12,11 @@ DevSecMLOps · Alertmanager :9093
      the last minute; the machines that just cleared follow. At most 60 + 15 lines, so the message stays
      under Telegram's 4096-character limit even in a fleet-wide incident. Needs Alertmanager >= 0.28. */}}
 {{ define "devsecmlops.anomalies" -}}
-{{ if .Alerts.Firing }}📋 <b>Anomalies</b> · {{ len .Alerts.Firing }} machine(s) anomalous now or in the last 2 min{{ else }}✅ <b>Anomalies</b> · all clear{{ end }}
+{{ if .Alerts.Firing }}📋 <b>Anomalies</b> · {{ len .Alerts.Firing }} machine(s) anomalous now{{ else }}✅ <b>Anomalies</b> · all clear{{ end }}
 {{ range $i, $a := .Alerts.Firing }}{{ if lt $i 60 }}{{ if lt (since $a.StartsAt).Seconds 60.0 }}🆕 <b>+ {{ $a.Labels.machine }}</b> ({{ $a.Labels.machine_type }}) · new
 {{ else }}• {{ $a.Labels.machine }} ({{ $a.Labels.machine_type }}) · {{ humanizeDuration (since $a.StartsAt).Seconds }}
 {{ end }}{{ end }}{{ end }}{{ if gt (len .Alerts.Firing) 60 }}… 60 of {{ len .Alerts.Firing }} listed
-{{ end }}{{ range $i, $a := .Alerts.Resolved }}{{ if lt $i 15 }}✅ − {{ $a.Labels.machine }} ({{ $a.Labels.machine_type }}) cleared
-{{ end }}{{ end }}DevSecMLOps · Alertmanager :9093
+{{ end }}{{ range $i, $a := .Alerts.Resolved }}{{ if lt $i 15 }}✅ − {{ $a.Labels.machine }} ({{ $a.Labels.machine_type }}) back to normal
+{{ end }}{{ end }}{{ if gt (len .Alerts.Resolved) 15 }}… 15 of {{ len .Alerts.Resolved }} back to normal listed
+{{ end }}DevSecMLOps · Alertmanager :9093
 {{- end }}

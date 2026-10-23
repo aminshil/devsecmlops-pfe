@@ -36,7 +36,51 @@ tests:
       - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="cdn-06"}'
         values: '0+60x20'
     alert_rule_test:
+      # first anomalous verdict: alerted at once
       - eval_time: 10s
+        alertname: AnomalyDetected
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              machine: web-01
+              machine_type: web
+            exp_annotations:
+              summary: "web-01 (web) is anomalous"
+              description: "The served model flagged web-01 on its last readings."
+          - exp_labels:
+              severity: info
+              machine: cache-04
+              machine_type: cache
+            exp_annotations:
+              summary: "cache-04 (cache) is anomalous"
+              description: "The served model flagged cache-04 on its last readings."
+          - exp_labels:
+              severity: info
+              machine: cdn-06
+              machine_type: edge
+            exp_annotations:
+              summary: "cdn-06 (edge) is anomalous"
+              description: "The served model flagged cdn-06 on its last readings."
+      # cdn-06 normal again: off the list at once
+      - eval_time: 1m30s
+        alertname: AnomalyDetected
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              machine: web-01
+              machine_type: web
+            exp_annotations:
+              summary: "web-01 (web) is anomalous"
+              description: "The served model flagged web-01 on its last readings."
+          - exp_labels:
+              severity: info
+              machine: cache-04
+              machine_type: cache
+            exp_annotations:
+              summary: "cache-04 (cache) is anomalous"
+              description: "The served model flagged cache-04 on its last readings."
+      # cdn-06 anomalous again: back on the list
+      - eval_time: 2m30s
         alertname: AnomalyDetected
         exp_alerts:
           - exp_labels:
@@ -77,13 +121,7 @@ tests:
             exp_annotations:
               summary: "cache-04 (cache) is anomalous"
               description: "The served model flagged cache-04 on its last readings."
-          - exp_labels:
-              severity: info
-              machine: cdn-06
-              machine_type: edge
-            exp_annotations:
-              summary: "cdn-06 (edge) is anomalous"
-              description: "The served model flagged cdn-06 on its last readings."
+      # cache-04 silent for 5 minutes: dropped; edge-05 turned anomalous at 4m
       - eval_time: 5m15s
         alertname: AnomalyDetected
         exp_alerts:
@@ -101,20 +139,6 @@ tests:
             exp_annotations:
               summary: "edge-05 (edge) is anomalous"
               description: "The served model flagged edge-05 on its last readings."
-          - exp_labels:
-              severity: info
-              machine: cache-04
-              machine_type: cache
-            exp_annotations:
-              summary: "cache-04 (cache) is anomalous"
-              description: "The served model flagged cache-04 on its last readings."
-          - exp_labels:
-              severity: info
-              machine: cdn-06
-              machine_type: edge
-            exp_annotations:
-              summary: "cdn-06 (edge) is anomalous"
-              description: "The served model flagged cdn-06 on its last readings."
       - eval_time: 11m
         alertname: AnomalyDetected
         exp_alerts:
@@ -591,10 +615,10 @@ tests:
               summary: "Grafana is down"
               description: "Grafana did not answer http://localhost:3000/api/health for 10 seconds (two probes in a row)."
 
-  - name: the Grafana list shows the same machines as the Telegram list, with each one's status
-    # web-01 anomalous throughout; db-01 normal for the last minute (still held); db-02 always normal;
-    # edge-01 stopped reporting about a minute ago while anomalous (still held); app-01 has not reported
-    # for 10 minutes (in neither list). The expressions are the dashboard's, with $machine_type = .*
+  - name: the Grafana list and count show the same machines as the Telegram list
+    # web-01 anomalous throughout; db-01 normal for the last minute; db-02 always normal; edge-01 stopped
+    # reporting 6 minutes ago while anomalous; app-01 has not reported for 10 minutes. Only web-01 is
+    # anomalous now, in all three. The expressions are the dashboard's, with $machine_type = .*
     # (tests/test_alerting.py checks they are copied verbatim).
     interval: 15s
     input_series:
@@ -622,19 +646,13 @@ tests:
       - eval_time: 10m
         alertname: AnomalyDetected
         exp_alerts:
-          - exp_labels: {severity: info, machine: db-01, machine_type: db}
-            exp_annotations: {summary: "db-01 (db) is anomalous", description: "The served model flagged db-01 on its last readings."}
-          - exp_labels: {severity: info, machine: edge-01, machine_type: edge}
-            exp_annotations: {summary: "edge-01 (edge) is anomalous", description: "The served model flagged edge-01 on its last readings."}
           - exp_labels: {severity: info, machine: web-01, machine_type: web}
             exp_annotations: {summary: "web-01 (web) is anomalous", description: "The served model flagged web-01 on its last readings."}
     promql_expr_test:
-      - expr: "(fleet:machine_anomalous:fresh{machine_type=~\".*\"} and on(machine) (max_over_time(fleet:machine_anomalous:fresh{machine_type=~\".*\"}[2m]) == 1)) or on(machine) ((max_over_time(fleet:machine_anomalous:fresh{machine_type=~\".*\"}[2m]) == 1) * 0 - 1)"
+      - expr: "fleet:machine_anomalous:fresh{machine_type=~\".*\"} == 1"
         eval_time: 10m
         exp_samples:
           - {labels: 'fleet:machine_anomalous:fresh{machine="web-01",machine_type="web"}', value: 1}
-          - {labels: 'fleet:machine_anomalous:fresh{machine="db-01",machine_type="db"}', value: 0}
-          - {labels: '{machine="edge-01",machine_type="edge"}', value: -1}
       - expr: "count(fleet:machine_anomalous:fresh{machine_type=~\".*\"} == 1) or vector(0)"
         eval_time: 10m
         exp_samples:
