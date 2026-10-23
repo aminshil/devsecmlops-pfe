@@ -156,7 +156,7 @@ def _remember_label(row, result):
     except (KeyError, TypeError, ValueError):
         return
     cause = row.get("anomaly_type") or ("normal" if label == 0 else "anomaly")
-    demo_labels.record(result["prediction_id"], label, cause, "production agent", row.get("timestamp"))
+    demo_labels.record(result["prediction_id"], label, cause, "production agent", row.get("timestamp"), row.get("machine"))
 
 
 def send_one(base_url, row, history=None):

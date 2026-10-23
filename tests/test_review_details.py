@@ -61,6 +61,21 @@ def test_label_store_round_trip_and_rejections():
     assert got[PID2]["label"] == 0 and got[PID2]["source"] == "production agent"
 
 
+def test_label_store_finds_a_machines_labels_in_a_time_window(labels_file, monkeypatch):
+    for i, (machine, t) in enumerate([("web-01", 100.0), ("web-01", 200.0), ("db-02", 150.0), ("web-01", 400.0)]):
+        monkeypatch.setattr(demo_labels.time, "time", lambda t=t: t)
+        assert demo_labels.record(f"id-{i}", 1, "cpu_spike", "production agent", f"2026-01-01 0{i}:00:00", machine)
+    with labels_file_path().open("a") as f:     # a line written before machines were recorded
+        f.write(json.dumps({"id": "old", "label": 1, "cause": "x", "source": "demo tab", "time": ""}) + "\n")
+    got = demo_labels.for_machine("web-01", 150, 450)
+    assert [e["id"] for e in got] == ["id-1", "id-3"] and got[0]["time"] == "2026-01-01 01:00:00"
+    assert demo_labels.for_machine("web-01", 500, 600) == [] and demo_labels.for_machine("", 0, 1e12) == []
+
+
+def labels_file_path():
+    return demo_labels.labels_path()
+
+
 def test_label_store_survives_garbage_and_missing_file(labels_file):
     assert demo_labels.load() == {}
     labels_file.write_text("not json\n" + json.dumps({"id": PID, "label": 1}) + "\n[1]\n")

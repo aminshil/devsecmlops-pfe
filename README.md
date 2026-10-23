@@ -46,7 +46,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Weakest cause | `cascade`, recall 0.268 (label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7755** · precision 0.7202 · recall 0.84. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on the 19 October model; not rerun on the 21 October retrain (offline F1 +0.0001) | `scripts/live_k8s_validation.py`, run on 19 October |
 | Latest green pipeline | Build `2.20.3-b112` (commit `aaf947ff`, 21 October: the external-review fixes, HTTP 500 on NaN/Infinity and on reserved machine names now 422): all 11 stages green, 188 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS). Before it: b111 (`bd0fdd67`), started by the model pipeline after it promoted the retrained model | [L3 run history](#l3--cicd) |
-| Tests | 214 passing, in 21 files (b112 ran 188; the 26 newer ones check the alerting configuration and the panel's Notifications card and History tab) | `pytest tests/` (stage 1b) |
+| Tests | 222 passing, in 21 files (b112 ran 188; the 34 newer ones check the alerting configuration and the panel's Notifications card and History tab) | `pytest tests/` (stage 1b) |
 | Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, persistent, fleet surge), any layer down, pods, Kubernetes, traffic stopped, disk and memory. 15 rules unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
 | Dashboard | 25 Grafana panels in 5 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-21: the model promoted by Jenkins `devsecmlops-model` build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, model files read back from MinIO, committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); the current image `2.20.3-b112` carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
@@ -1299,6 +1299,17 @@ Tabs:
   the mocked tests could not: `A and on(machine) (B < 300) == 1` applies `== 1` to the freshness term
   only (`==` binds tighter than `and`), so the query returned nothing; it is now parenthesised and run
   by promtool against the alert.
+  **Details** on an episode opens a window like the Review tab's: the start and end in your time and in
+  UTC, the duration, the **reading time** (the dataset row's own timestamp) of the first and last readings
+  flagged during it and their **real label** (true anomaly or false alarm), and the machine's input
+  metrics, classifier P(anomaly), IsolationForest score and likely cause from 2 minutes before to 2
+  minutes after the episode, with the episode shaded (`/ui/history/episode`). The charts come from
+  Prometheus, from the pod that served the machine last, so they exist for any episode in the retention.
+  The reading time and real label come from `api/demo_labels.py`, which now also records the machine and
+  when each flagged reading was logged; they exist only for readings sent by the Demo tab or the
+  production agent since that change, and the store keeps about the last 8 hours (30,000 lines, about 60
+  flagged readings a minute). Checked against a real Prometheus with two pods reporting the same machine:
+  the stale pod's values never appear.
 - **Continuous training** — read-only view of the retraining loop: predictions logged by the cluster and how many an operator judged, the model the cluster serves (from its `/health`), the model in the repository manifest, the recent retraining runs, and links to the Jenkins job and MLflow. The retraining itself runs in Jenkins (`Jenkinsfile.model`).
 - **Training** — the training console, see [below](#training-console-interactive-mlops-train-and-verify).
 - **Review** — the anomalies the pods flagged that nobody has judged yet. *Real* or *False alarm*
@@ -1415,7 +1426,7 @@ found and fixed in the most recent security pass; see
 | `api/app.py` | The FastAPI application — every endpoint above, input validation, Prometheus metrics, artifact-integrity checking before unpickling, and the ops-UI guard. |
 | `api/feedback_db.py` | PostgreSQL access for logging predictions and recording operator verdicts. |
 | `api/fleet_rules.py` | The Fleet tab's group rule (pure logic, no I/O), shared by `/ui/fleet` and the offline scripts that measure it. |
-| `api/demo_labels.py` | Keeps the true label of replayed readings beside the cluster's prediction id, for the Review tab's real-label column. |
+| `api/demo_labels.py` | Keeps the true label of replayed readings beside the cluster's prediction id, for the Review tab's real-label column, with the machine and the time it was logged, for the History tab's episode details. |
 | `api/training.py` | Backend for the training console — dataset selection (with the path-traversal fix), representative sampling, comparing a candidate against production. |
 | `api/static/control_panel.html` | The mission-control UI, served at `/ui`. |
 | `tests/test_api.py` (47 tests), `test_decision.py`, `test_training_console.py`, `test_ui_cluster.py`, `test_ui_fleet.py`, `test_review_details.py` | Covered in full in [Testing](#testing) below. |
@@ -2809,7 +2820,7 @@ this project.)
 
 ## Testing
 
-**214 tests** in 21 files (up from 15), `pytest`, in `tests/`:
+**222 tests** in 21 files (up from 15), `pytest`, in `tests/`:
 
 - `test_api.py` (47 tests) — every endpoint, input validation (NaN/inf
   rejection, including raw `NaN`/`Infinity` tokens answered with 422 rather than 500, reserved `__` machine names, physical-range rejection (cpu=150 is a 422), the opt-in feedback token, machine length, metrics count, history shape), v3/v4
@@ -2841,8 +2852,9 @@ this project.)
   by `Restart=always`; a Fix must not start a second copy).
 - `test_ui_fleet.py` (10) — the Fleet tab: topology, colours from the pods' verdicts, staleness, and
   every state of the group rule.
-- `test_review_details.py` (12) — the Review tab's details and real-label column: the label store,
-  the review payload, and the production agent recording labels.
+- `test_review_details.py` (13) — the Review tab's details and real-label column: the label store
+  (including finding a machine's labels in a time window), the review payload, and the production agent
+  recording labels.
 - `test_failure_model_v3.py` (8) — the v3 generator: one incident drives the router and its
   dependents, gray / down / control-plane behave as documented, labels follow impact, and the
   realism report finds nothing unexplained.
@@ -2863,11 +2875,13 @@ this project.)
   routes need the ops credentials, the state shows only the panel's active silences, a mute sends the
   right matchers, author and duration (bad scope or duration refused), an unmute expires only the
   panel's silences for that row, and Alertmanager down is a 502.
-- `test_ui_history.py` (11) — the History tab with Prometheus replaced by a recorder: the route needs the
+- `test_ui_history.py` (18) — the History tab with Prometheus replaced by a recorder: the route needs the
   ops credentials, episodes split on a gap and the last one is ongoing, the per-machine summary, the step
   keeps every series under Prometheus's point limit, a window outside 1–168 hours is refused, the list
   cap says how many are left out, Prometheus down is a 502, and the query is the alert rule's expression
-  and the one promtool runs against the alert.
+  and the one promtool runs against the alert. Episode details: every query reads that machine from the
+  pod that served it last, the cause time counts only the episode, the recorded labels are the ones logged
+  during it, and a machine name that could inject PromQL or a bad window is refused.
 
 ```bash
 pip install -r requirements-dev.txt

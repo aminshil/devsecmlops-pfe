@@ -1740,7 +1740,8 @@ def ui_cluster_predict(body: _ClusterPredict):
     except _ClusterError as e:
         raise _HTTPException(status_code=502, detail=str(e)) from e
     if body.true_label is not None and result.get("is_anomaly") == 1:
-        _demo_labels.record(result.get("prediction_id"), body.true_label, body.true_cause, "demo tab", body.true_time)
+        _demo_labels.record(result.get("prediction_id"), body.true_label, body.true_cause, "demo tab", body.true_time,
+                            body.machine)
     return result
 
 
@@ -2381,3 +2382,57 @@ def ui_history(hours: Annotated[int, _Query(ge=1, le=168)] = 6):
     return {"hours": hours, "step_s": step, "from": end - hours * 3600, "to": end,
             "total_episodes": len(episodes), "machines": _history_by_machine(episodes),
             "episodes": episodes[:_HISTORY_MAX_EPISODES], "truncated": max(0, len(episodes) - _HISTORY_MAX_EPISODES)}
+
+
+# Episode details (History tab, Details): what the pods reported for one machine around one episode,
+# from Prometheus (any age within its retention), plus the flagged readings the demo sources recorded
+# for it (reading time and true label, api/demo_labels.py; kept for about the last 8 hours).
+_EPISODE_PAD_S = 120             # the charts start 2 minutes before the episode and end 2 minutes after
+_EPISODE_MAX_SPAN_S = 8 * 86400
+_EPISODE_POINTS = 600
+_EPISODE_BAD = {"description": "Machine name or time window not valid"}
+
+
+def _episode_selector(machine: str) -> tuple:
+    """Series selector for one machine, and the join that keeps the replica that served it last."""
+    sel = '{job="anomaly-api-pods",machine="' + machine + '"}'
+    seen = "api_machine_last_seen_timestamp_seconds" + sel
+    return sel, " and on (pod, machine) (" + seen + " == on (machine) group_left () max by (machine) (" + seen + "))"
+
+
+def _points(series: dict) -> list:
+    return [[float(t), float(v)] for t, v in series.get("values", [])]
+
+
+def _episode_queries(machine: str) -> dict:
+    sel, fresh = _episode_selector(machine)
+    return {"metrics": "max by (feature) (api_input_metric" + sel + fresh + ")",
+            "p_anomaly": "max(api_classifier_p_anomaly" + sel + fresh + ")",
+            "iso_score": "max(api_iso_score" + sel + fresh + ")",
+            "causes": "max by (cause) (api_anomaly_cause_p" + sel + fresh + ")"}
+
+
+@app.get("/ui/history/episode", responses={400: _EPISODE_BAD, 502: _PROM_DOWN})
+def ui_history_episode(machine: Annotated[str, _Query(pattern=r"^[A-Za-z0-9_.-]{1,64}$")], start: float, end: float):
+    """One episode in detail: the machine's input metrics, P(anomaly), IsolationForest score and likely
+    cause from 2 minutes before to 2 minutes after it, and the flagged readings recorded during it."""
+    if not 0 < end - start <= _EPISODE_MAX_SPAN_S:
+        raise _HTTPException(status_code=400, detail="end must be after start, at most 8 days later")
+    lo, hi = start - _EPISODE_PAD_S, min(end + _EPISODE_PAD_S, time.time())
+    step = 15 * max(1, math.ceil((hi - lo) / 15 / _EPISODE_POINTS))
+    out = {"machine": machine, "start": start, "end": end, "from": lo, "to": hi, "step_s": step}
+    try:
+        res = {k: _prom_range(q, lo, hi, step) for k, q in _episode_queries(machine).items()}
+    except _PrometheusError as e:
+        raise _HTTPException(status_code=502, detail=str(e)) from e
+    out["metrics"] = {s["metric"].get("feature", "?"): _points(s) for s in res["metrics"]}
+    out["p_anomaly"] = _points(res["p_anomaly"][0]) if res["p_anomaly"] else []
+    out["iso_score"] = _points(res["iso_score"][0]) if res["iso_score"] else []
+    causes = [{"cause": s["metric"].get("cause", "?"),
+               "seconds": step * sum(1 for t, _ in s.get("values", []) if start <= float(t) < end)}
+              for s in res["causes"]]
+    out["causes"] = sorted((c for c in causes if c["seconds"]), key=lambda c: -c["seconds"])
+    out["readings"] = [{"logged": e["logged"], "reading_time": e.get("time") or "", "label": e.get("label"),
+                        "cause": e.get("cause") or "", "source": e.get("source") or ""}
+                       for e in _demo_labels.for_machine(machine, start - 60, end + 15)]
+    return out

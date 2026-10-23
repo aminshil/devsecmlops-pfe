@@ -132,6 +132,7 @@
   .rvzv{width:64px;text-align:right;font-weight:700}
   .rvzv.far{color:var(--red)}
   .rvspark polyline{fill:none;stroke:var(--teal);stroke-width:2;stroke-linejoin:round}
+  .rvspark .hsband{fill:rgba(255,107,107,.16)}
   .rvhist{margin:8px 0}
   .rvhist .rvk{display:flex;justify-content:space-between}
   .rvbig{font-size:18px;font-weight:700;margin-bottom:4px}
@@ -294,7 +295,7 @@
   <div class="tabpage" id="history">
     <div class="card">
       <h3>Anomaly history <button type="button" class="btn sec small" style="margin-left:auto" id="btnRefreshHistory">↻ Refresh</button></h3>
-      <div class="sub">Past anomalies, from Prometheus: the same verdict as the Telegram list and the Grafana table (each machine's latest verdict from the pod that served it last, among machines that reported in the last 5 minutes). An <b>episode</b> is one stretch of anomalous verdicts; it ends on the first normal one, so a machine flickering around the threshold shows several short episodes. Times are in your local time, at the resolution shown (15 s up to 41 hours, coarser for 7 days); Prometheus keeps 15 days.</div>
+      <div class="sub">Past anomalies, from Prometheus: the same verdict as the Telegram list and the Grafana table (each machine's latest verdict from the pod that served it last, among machines that reported in the last 5 minutes). An <b>episode</b> is one stretch of anomalous verdicts; it ends on the first normal one, so a machine flickering around the threshold shows several short episodes. <b>Details</b> opens a window with the episode's times (your time and UTC), the <b>reading time</b> and <b>real label</b> of the readings flagged during it (Demo tab and production agent; kept about 8 hours), and the machine's metrics, P(anomaly), IsolationForest score and likely cause around it. Times are in your local time, at the resolution shown (15 s up to 41 hours, coarser for 7 days); Prometheus keeps 15 days.</div>
       <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px;font-size:13px">
         <label for="hs_hours">Window</label>
         <select id="hs_hours" style="width:auto"><option value="1">last hour</option><option value="6" selected>last 6 hours</option><option value="24">last 24 hours</option><option value="168">last 7 days</option></select>
@@ -1117,13 +1118,15 @@
     }).join("");
     return '<h4 style="margin:14px 0 6px">By machine (most time anomalous first)</h4><table><thead><tr><th>Machine</th><th>Type</th><th>Episodes</th><th>Time anomalous</th><th>Longest</th><th>Last anomalous</th></tr></thead><tbody>'+body+'</tbody></table>';
   }
+  let HS_SHOWN=[];
   function hsEpisodes(rows){
     const shown=rows.slice(0,300);
-    const body=shown.map(function(e){
-      return '<tr><td class="mono">'+ctEsc(e.machine)+'</td><td>'+ctEsc(e.type)+'</td><td class="mono">'+ctEsc(rvLocal(e.start*1000))+'</td><td class="mono">'+hsEnd(e)+'</td><td class="mono">'+hsDur(e.duration_s)+'</td></tr>';
+    HS_SHOWN=shown;
+    const body=shown.map(function(e,i){
+      return '<tr><td class="mono">'+ctEsc(e.machine)+'</td><td>'+ctEsc(e.type)+'</td><td class="mono">'+ctEsc(rvLocal(e.start*1000))+'</td><td class="mono">'+hsEnd(e)+'</td><td class="mono">'+hsDur(e.duration_s)+'</td><td><button type="button" class="btn sec small" data-hsdetail="'+i+'">Details</button></td></tr>';
     }).join("");
     const more=rows.length>shown.length?'<div class="hint">'+shown.length+' of '+rows.length+' episodes shown: filter by machine or type to see the others.</div>':'';
-    return '<h4 style="margin:14px 0 6px">Episodes (newest first)</h4><table><thead><tr><th>Machine</th><th>Type</th><th>Started</th><th>Ended</th><th>Duration</th></tr></thead><tbody>'+body+'</tbody></table>'+more;
+    return '<h4 style="margin:14px 0 6px">Episodes (newest first)</h4><table><thead><tr><th>Machine</th><th>Type</th><th>Started</th><th>Ended</th><th>Duration</th><th></th></tr></thead><tbody>'+body+'</tbody></table>'+more;
   }
   function renderHistory(){
     const body=document.getElementById("history_body");
@@ -1136,6 +1139,92 @@
     if(!machines.length){ body.innerHTML='<div class="hint">No anomaly in this window'+(f?' for this filter':'')+'.</div>'; return; }
     body.innerHTML='<div style="margin-top:10px">'+episodes.length+' episode(s) on '+machines.length+' machine(s) · '+ongoing+' anomalous now · resolution '+HS_DATA.step_s+' s'+cut+'</div>'
       +hsMachines(machines)+hsEpisodes(episodes);
+  }
+  function hsUtc(t){ return new Date(t*1000).toISOString().replace("T"," ").slice(0,19); }
+  function hsSpark(pts,ep,d){
+    const n=(pts||[]).filter(function(p){ return Number.isFinite(p[1]); });
+    if(n.length<2){ return ""; }
+    const v=n.map(function(p){ return p[1]; }), lo=Math.min.apply(null,v), span=(Math.max.apply(null,v)-lo)||1;
+    const w=240, h=46, t0=d.from, tw=(d.to-d.from)||1;
+    const x=function(t){ return Math.max(0,Math.min(w,(t-t0)/tw*w)).toFixed(1); };
+    const end=ep.ongoing?d.to:ep.end;
+    const band='<rect class="hsband" x="'+x(ep.start)+'" y="0" width="'+Math.max(1,x(end)-x(ep.start)).toFixed(1)+'" height="'+h+'"/>';
+    const line=n.map(function(p){ return x(p[0])+","+(h-5-((p[1]-lo)/span)*(h-10)).toFixed(1); }).join(" ");
+    return '<svg class="rvspark" viewBox="0 0 '+w+' '+h+'" width="100%" height="'+h+'" preserveAspectRatio="none" aria-hidden="true">'+band+'<polyline points="'+line+'"/></svg>';
+  }
+  function hsInEpisode(pts,ep){ return (pts||[]).filter(function(p){ return p[0]>=ep.start&&p[0]<ep.end; }).map(function(p){ return p[1]; }); }
+  function hsPeak(vals){ return vals.length?Math.max.apply(null,vals):null; }
+  function hsHead(ep){
+    const state=ep.ongoing?'<span class="tag anom">ongoing</span>':'<span class="tag norm">over</span>';
+    return '<header class="rvhead"><div><div class="rvtitle">'+ctEsc(ep.machine)+'</div><div class="rvsub">'+ctEsc(ep.type)+' · anomaly episode · '+hsDur(ep.duration_s)+'</div></div><div class="rvtags">'+state
+      +'</div><button type="button" class="btn sec small" data-rvclose="1" aria-label="Close this window">✕ Close</button></header>';
+  }
+  function hsTimes(ep,d){
+    const r=d.readings||[], first=r.length?r[0].reading_time:"", last=r.length?r[r.length-1].reading_time:"";
+    const ended=ep.ongoing?"ongoing":rvLocal(ep.end*1000), endedUtc=ep.ongoing?"ongoing":hsUtc(ep.end);
+    return kv("started (your time)",ctEsc(rvLocal(ep.start*1000)))+kv("ended (your time)",ctEsc(ended))
+      +kv("started (UTC)",ctEsc(hsUtc(ep.start)))+kv("ended (UTC)",ctEsc(endedUtc))+kv("duration",ctEsc(hsDur(ep.duration_s)))
+      +kv("reading time, first flagged",ctEsc(first||"not recorded"))+kv("reading time, last flagged",ctEsc(last||"not recorded"))
+      +kv("resolution",ctEsc(d.step_s+" s"));
+  }
+  function hsTruth(d){
+    const r=d.readings||[];
+    if(!r.length){ return '<div class="hint">not recorded: only readings flagged by the Demo tab or the production agent carry a true label, and the store keeps about the last 8 hours</div>'; }
+    const real=r.filter(function(x){ return x.label===1; }).length;
+    const rows=r.slice(-12).map(function(x){
+      const tag=x.label===1?'<span class="tag anom">anomaly'+(x.cause?' · '+ctEsc(x.cause):'')+'</span>':'<span class="tag norm">normal</span>';
+      return '<tr><td class="mono">'+ctEsc(rvLocal(x.logged*1000))+'</td><td class="mono">'+ctEsc(x.reading_time||"—")+'</td><td>'+tag+'</td></tr>';
+    }).join("");
+    return '<div class="rvbig">'+real+' of '+r.length+' flagged readings were real anomalies</div><div class="hint">'+(r.length-real)+' false alarm(s) · recorded by '+ctEsc(r[0].source)+'</div>'
+      +'<table><thead><tr><th>Logged (your time)</th><th>Reading time</th><th>Real label</th></tr></thead><tbody>'+rows+'</tbody></table>'
+      +(r.length>12?'<div class="hint">the last 12 of '+r.length+' shown</div>':'');
+  }
+  function hsScore(pts,ep,d,digits,what){
+    const inside=hsInEpisode(pts,ep), peak=hsPeak(inside);
+    if(!(pts||[]).length){ return '<div class="hint">no '+what+' in Prometheus for this window</div>'; }
+    return kv("peak during the episode",ctEsc(peak===null?"—":rvNum(peak,digits)))+kv("at the start",ctEsc(inside.length?rvNum(inside[0],digits):"—"))+hsSpark(pts,ep,d);
+  }
+  function hsCauses(d){
+    const c=d.causes||[];
+    if(!c.length){ return '<div class="hint">no cause recorded in Prometheus for this episode</div>'; }
+    const total=c.reduce(function(a,x){ return a+x.seconds; },0)||1;
+    return c.map(function(x){ return kv(ctEsc(x.cause),ctEsc(hsDur(x.seconds)+" · "+Math.round(100*x.seconds/total)+"%")); }).join("");
+  }
+  function hsMetrics(ep,d){
+    const m=d.metrics||{}, keys=Object.keys(m).sort();
+    if(!keys.length){ return '<div class="hint">no readings in Prometheus for this window</div>'; }
+    return keys.map(function(k){
+      const inside=hsInEpisode(m[k],ep), peak=hsPeak(inside);
+      const label=(inside.length?rvNum(inside[0],1):"—")+' → peak '+(peak===null?"—":rvNum(peak,1));
+      return '<div class="rvhist"><div class="rvk"><span>'+ctEsc(k)+'</span><span>'+ctEsc(label)+'</span></div>'+hsSpark(m[k],ep,d)+'</div>';
+    }).join("");
+  }
+  const HS_HOW='<div class="hint" style="margin-top:0">Charts run from 2 minutes before the episode to 2 minutes after it (or to now); the red band is the episode. Values come from the pod that served the machine last. Values are the pods\' last reading per scrape. Reading time and real label come from the flagged readings the Demo tab and the production agent recorded during the episode.</div>';
+  function hsModalHtml(ep,d){
+    return '<div class="rvwin">'+hsHead(ep)+'<div class="rvbody">'
+      +rvBox("Times",hsTimes(ep,d))+rvBox("Real label (demo)",hsTruth(d))
+      +rvBox("Classifier P(anomaly)",hsScore(d.p_anomaly,ep,d,3,"classifier score"))+rvBox("Likely cause (time in the episode)",hsCauses(d))
+      +rvBox("The readings (first in the episode → peak)",hsMetrics(ep,d),true)
+      +rvBox("IsolationForest score",hsScore(d.iso_score,ep,d,3,"IsolationForest score"))
+      +rvBox("How to read this",HS_HOW)+'</div></div>';
+  }
+  async function hsOpen(btn){
+    const ep=HS_SHOWN[Number(btn.dataset.hsdetail)];
+    if(!ep){ return; }
+    const old=document.getElementById("rvmodal");
+    if(old){ old.remove(); }
+    const m=document.createElement("div");
+    m.id="rvmodal"; m.className="rvmodal"; m.setAttribute("role","dialog"); m.setAttribute("aria-modal","true"); m.setAttribute("aria-label","Episode details");
+    m.innerHTML='<div class="rvwin">'+hsHead(ep)+'<div class="rvbody"><div class="hint"><span class="spin"></span> loading…</div></div></div>';
+    document.body.appendChild(m);
+    document.body.style.overflow="hidden";
+    RV_OPENER=btn;
+    m.querySelector("[data-rvclose]").focus();
+    const q="machine="+encodeURIComponent(ep.machine)+"&start="+ep.start+"&end="+(ep.ongoing?Date.now()/1000:ep.end);
+    try{ m.innerHTML=hsModalHtml(ep,await getJSON(API+"/ui/history/episode?"+q)); }
+    catch(e){ m.querySelector(".rvbody").innerHTML='<div class="hint" style="color:var(--red)">Failed to load: '+ctEsc(e.message)+'</div>'; }
+    const close=m.querySelector("[data-rvclose]");
+    if(close){ close.focus(); }
   }
   async function loadHistory(){
     const body=document.getElementById("history_body");
@@ -1248,6 +1337,7 @@
   document.getElementById("btnRefreshHistory").addEventListener("click", loadHistory);
   document.getElementById("hs_hours").addEventListener("change", loadHistory);
   document.getElementById("hs_filter").addEventListener("input", renderHistory);
+  document.getElementById("history_body").addEventListener("click", function(ev){ const b=ev.target.closest("button[data-hsdetail]"); if(b){ hsOpen(b); } });
   document.getElementById("alerting_body").addEventListener("click", function(e){
     const b=e.target.closest("button[data-alact]");
     if(b){ alAct(b.dataset.alact,b.dataset.scope); }

@@ -3,16 +3,19 @@
 The cluster database never learns a reading's true label (in real operation nobody knows it). The two
 demo sources do, because they replay labelled data: the control panel's Demo tab and the production
 agent. They record the flagged readings here, keyed by the cluster's prediction id, so the Review tab
-can show the truth next to the model's call. Demo only: serving, training and the guardrail never read this.
+can show the truth next to the model's call. Each line also carries the machine and when it was recorded,
+so the History tab can find the flagged readings of an anomaly episode (their reading time and true label).
+Demo only: serving, training and the guardrail never read this.
 """
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-MAX_BYTES = 4_000_000     # past this size the oldest lines are dropped
-KEEP_LINES = 5000
+MAX_BYTES = 8_000_000     # past this size the oldest lines are dropped
+KEEP_LINES = 30000        # about 8 hours of the production agent's flagged readings (~60 a minute)
 _LOCK = threading.Lock()
 
 
@@ -20,13 +23,14 @@ def labels_path() -> Path:
     return Path(os.environ.get("DEMO_LABELS_PATH") or ROOT / "data" / "demo_labels.jsonl")
 
 
-def record(prediction_id, label, cause, source, reading_time=None) -> bool:
+def record(prediction_id, label, cause, source, reading_time=None, machine=None) -> bool:
     """Append one label. Best effort: returns False instead of raising (a label is never worth a failed request)."""
     if not prediction_id or label not in (0, 1):
         return False
     line = json.dumps({"id": str(prediction_id), "label": int(label),
                        "cause": str(cause or "")[:60], "source": str(source)[:30],
-                       "time": str(reading_time or "")[:30]}) + "\n"
+                       "time": str(reading_time or "")[:30], "machine": str(machine or "")[:64],
+                       "logged": round(time.time(), 3)}) + "\n"
     path = labels_path()
     try:
         with _LOCK:
@@ -42,7 +46,8 @@ def record(prediction_id, label, cause, source, reading_time=None) -> bool:
 
 
 def load() -> dict:
-    """prediction id -> {"id", "label", "cause", "source"}; empty when nothing was recorded."""
+    """prediction id -> {"id", "label", "cause", "source", "time", "machine", "logged"} ("machine" and
+    "logged" only on lines written since they were added); empty when nothing was recorded."""
     out = {}
     try:
         text = labels_path().read_text()
@@ -55,3 +60,11 @@ def load() -> dict:
         except (ValueError, KeyError, TypeError):
             continue
     return out
+
+
+def for_machine(machine, since, until) -> list:
+    """The labels recorded for `machine` between `since` and `until` (Unix seconds), oldest first.
+    Lines written before the machine was recorded have no machine and never match."""
+    rows = [e for e in load().values()
+            if e.get("machine") == machine and isinstance(e.get("logged"), (int, float)) and since <= e["logged"] <= until]
+    return sorted(rows, key=lambda e: e["logged"])
