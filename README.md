@@ -1764,6 +1764,16 @@ listed, because a mute stops only the message). A promtool test runs the changed
 machine that stopped reporting (the old queries fail it), and `tests/test_alerting.py` checks that every
 per-machine panel applies the 5-minute rule and that the probe panel reads the `LayerDown` series.
 
+The two root-cause panels were also misleading. The production agent sends the anomalous machines to
+`/root-cause` every 20 seconds, and `api_root_cause_incidents_total` counts the checks that named each
+router. The spotlight ran as a range query with a `> 0` filter, so a router named earlier in the
+dashboard's time range kept its last value ("router-03: 1") after it stopped being named; it is now an
+instant query (routers named in the last 5 minutes, and how many times: at most 14, because
+`increase()` counts the 14 steps between 15 checks). The chart below it drew the raw counter, a total
+since the pods started; it now draws checks per minute that named each router (at most 3), so it shows
+when a router was the root cause. Both queries run in promtool on a router named only early and one
+named in every check.
+
 #### Alerting: Prometheus rules → Alertmanager → Telegram
 
 Prometheus evaluates the rules in `monitoring/alerting/alert_rules.yml` every 15 seconds; Alertmanager
@@ -2884,7 +2894,8 @@ this project.)
 - `test_alerting.py` (6) — the alerting configuration: files wired together, every metric a rule uses
   exported by this project, every Status-tab layer covered by an alert, no Telegram secret in the repository,
   the Grafana anomaly panels' queries are the ones `alert_rules_test.yml` checks against the Telegram list,
-  and every per-machine dashboard panel keeps only machines that reported in the last 5 minutes.
+  every per-machine dashboard panel keeps only machines that reported in the last 5 minutes, and the changed
+  dashboard queries (fleet averages, top 25, alerts firing, root cause) are the ones promtool runs.
 - `test_ui_alerting.py` (10) — the Notifications card with Alertmanager replaced by a recorder: the
   routes need the ops credentials, the state shows only the panel's active silences, a mute sends the
   right matchers, author and duration (bad scope or duration refused), an unmute expires only the

@@ -104,7 +104,8 @@ def test_every_per_machine_dashboard_panel_counts_only_machines_that_still_repor
                 assert fresh, f"{p['title']}: reads per-machine gauges without the 5-minute freshness rule"
     assert checked >= 6
     panels = {p.get("title"): p for p in dash["panels"]}
-    for title in ("Fleet-wide average CPU", "Classifier anomaly probability by machine (top 25)", "Alerts firing now"):
+    for title in ("Fleet-wide average CPU", "Classifier anomaly probability by machine (top 25)", "Alerts firing now",
+                  "Root cause spotlight (last 5 minutes)", "Root cause events over time"):
         assert panels[title]["targets"][0]["expr"].replace("$machine_type", ".*") in tested, title
     probes = panels["Platform layers (HTTP probe every 5 s)"]["targets"][0]["expr"]
     rule = next(r for g in RULES["groups"] for r in g["rules"] if r.get("alert") == "LayerDown")["expr"]

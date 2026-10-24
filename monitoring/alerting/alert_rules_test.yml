@@ -707,3 +707,29 @@ tests:
         eval_time: 4m
         exp_samples:
           - {labels: '{alertname="AnomalyDetected",severity="info"}', value: 1}
+
+  - name: the root-cause spotlight shows only routers named in the last 5 minutes, the chart when
+    # one check every 20 s (the production agent). router-03 was named in the first 2 minutes only (6 checks);
+    # router-08 in every check of the last 5 minutes: 15 checks, 14 steps between them, so 14 is the most. The expressions are the dashboard's
+    # (tests/test_alerting.py checks they are copied verbatim).
+    interval: 20s
+    input_series:
+      - series: 'api_root_cause_incidents_total{job="anomaly-api-pods",pod="p1",machine="router-03"}'
+        values: '0+1x6 6x24'
+      - series: 'api_root_cause_incidents_total{job="anomaly-api-pods",pod="p1",machine="router-08"}'
+        values: '0x15 0+1x15'
+    promql_expr_test:
+      - expr: "round(sum by (machine) (increase(api_root_cause_incidents_total{job=\"anomaly-api-pods\"}[5m])) > 0)"
+        eval_time: 10m
+        exp_samples:
+          - {labels: '{machine="router-08"}', value: 14}
+      - expr: "sum by (machine) (increase(api_root_cause_incidents_total{job=\"anomaly-api-pods\"}[1m]))"
+        eval_time: 10m
+        exp_samples:
+          - {labels: '{machine="router-03"}', value: 0}
+          - {labels: '{machine="router-08"}', value: 3}
+      - expr: "sum by (machine) (increase(api_root_cause_incidents_total{job=\"anomaly-api-pods\"}[1m]))"
+        eval_time: 1m
+        exp_samples:
+          - {labels: '{machine="router-03"}', value: 3}
+          - {labels: '{machine="router-08"}', value: 0}

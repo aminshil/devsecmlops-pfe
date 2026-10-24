@@ -806,10 +806,26 @@
     {
       "type": "stat",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "decimals": 0,
+          "unit": "none"
+        },
         "overrides": []
       },
-      "options": {},
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
       "id": 17,
       "title": "Root cause spotlight (last 5 minutes)",
       "datasource": {
@@ -822,7 +838,7 @@
         "x": 0,
         "y": 68
       },
-      "description": "Machines the /root-cause endpoint identified as the LIKELY ORIGIN of a correlated failure (not just anomalous themselves) in the last 5 minutes. Structurally, only machines with real downstream dependents in dependency_graph.json can appear here -- in this project, that means routers. Empty is the normal state; a router appearing here means multiple dependent machines are anomalous at once and this is the one the graph points to as the cause.",
+      "description": "Routers the /root-cause analysis named as the LIKELY ORIGIN of a correlated failure (not just anomalous themselves) in the last 5 minutes, and how many times. The production agent sends the currently anomalous machines to /root-cause every 20 seconds, so about 15 checks happen in 5 minutes and the most this can show is 14 (Prometheus counts the steps between checks): 14 means the router was named in every check, i.e. for the whole 5 minutes; 1 means one check. Calls from the control panel's Root Cause tab count too. Only machines with dependents in dependency_graph.json (the routers) can appear. Empty is the normal state. The value is for now (the last 5 minutes), not for the dashboard's time range; the chart below shows when.",
       "targets": [
         {
           "datasource": {
@@ -831,14 +847,25 @@
           },
           "refId": "A",
           "expr": "round(sum by (machine) (increase(api_root_cause_incidents_total{job=\"anomaly-api-pods\"}[5m])) > 0)",
-          "legendFormat": "{{machine}}"
+          "legendFormat": "{{machine}}",
+          "instant": true
         }
       ]
     },
     {
       "type": "timeseries",
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "decimals": 0,
+          "min": 0,
+          "unit": "none",
+          "custom": {
+            "axisLabel": "times named per minute",
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "fillOpacity": 10
+          }
+        },
         "overrides": []
       },
       "options": {},
@@ -854,7 +881,7 @@
         "x": 0,
         "y": 74
       },
-      "description": "The same signal as the spotlight above, over time, so a recurring root cause (the same machine repeatedly implicated) stands out from a one-off.",
+      "description": "When each router was named the likely root cause: how many /root-cause checks named it in each minute. The production agent checks every 20 seconds, so the most is about 3 per minute: a line at 3 means the router was the root cause the whole minute, 0 means not at all. A router that keeps coming back stands out from a one-off. (A pod restart does not show as a drop: increase() handles counter resets.)",
       "targets": [
         {
           "datasource": {
@@ -862,7 +889,7 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
-          "expr": "sum by (machine) (api_root_cause_incidents_total{job=\"anomaly-api-pods\"})",
+          "expr": "sum by (machine) (increase(api_root_cause_incidents_total{job=\"anomaly-api-pods\"}[1m]))",
           "legendFormat": "{{machine}}"
         }
       ]
