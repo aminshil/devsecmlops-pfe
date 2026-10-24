@@ -1172,7 +1172,8 @@
     if(!r.length){ return '<div class="hint">not recorded: only readings flagged by the Demo tab or the production agent carry a true label, and the store keeps about the last 8 hours</div>'; }
     const real=r.filter(function(x){ return x.label===1; }).length;
     const rows=r.slice(-12).map(function(x){
-      const tag=x.label===1?'<span class="tag anom">anomaly'+(x.cause?' · '+ctEsc(x.cause):'')+'</span>':'<span class="tag norm">normal</span>';
+      let tag='<span class="tag norm">normal</span>';
+      if(x.label===1){ tag='<span class="tag anom">anomaly'+(x.cause?' · '+ctEsc(x.cause):'')+'</span>'; }
       return '<tr><td class="mono">'+ctEsc(rvLocal(x.logged*1000))+'</td><td class="mono">'+ctEsc(x.reading_time||"—")+'</td><td>'+tag+'</td></tr>';
     }).join("");
     return '<div class="rvbig">'+real+' of '+r.length+' flagged readings were real anomalies</div><div class="hint">'+(r.length-real)+' false alarm(s) · recorded by '+ctEsc(r[0].source)+'</div>'
