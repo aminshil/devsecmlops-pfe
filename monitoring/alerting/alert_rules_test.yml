@@ -667,3 +667,43 @@ tests:
         exp_samples:
           - {labels: '{machine="web-01",machine_type="web"}', value: 1}
           - {labels: '{machine="db-01",machine_type="db"}', value: 1}
+
+  - name: the dashboard counts only machines that reported in the last 5 minutes, and lists the firing alerts
+    # web-01 reports and is anomalous (cpu 90, P(anomaly) 0.95); db-02 stopped reporting long ago with cpu 10 and
+    # P(anomaly) 0.99 still exported. The expressions are the dashboard's, with $machine_type = .*
+    # (tests/test_alerting.py checks they are copied verbatim).
+    interval: 15s
+    input_series:
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="web-01",machine_type="web"}'
+        values: '1x20'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="web-01"}'
+        values: '0+15x20'
+      - series: 'api_input_metric{job="anomaly-api-pods",pod="p1",machine="web-01",machine_type="web",feature="cpu"}'
+        values: '90x20'
+      - series: 'api_classifier_p_anomaly{job="anomaly-api-pods",pod="p1",machine="web-01",machine_type="web"}'
+        values: '0.95x20'
+      - series: 'api_anomaly_cause_p{job="anomaly-api-pods",pod="p1",machine="web-01",machine_type="web",cause="cpu_spike"}'
+        values: '0.95x20'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="db-02",machine_type="db"}'
+        values: '1x20'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="db-02"}'
+        values: '-1000x20'
+      - series: 'api_input_metric{job="anomaly-api-pods",pod="p1",machine="db-02",machine_type="db",feature="cpu"}'
+        values: '10x20'
+      - series: 'api_classifier_p_anomaly{job="anomaly-api-pods",pod="p1",machine="db-02",machine_type="db"}'
+        values: '0.99x20'
+      - series: 'api_predictions_total{job="anomaly-api-pods",pod="p1",model="telecom_v4_rolling"}'
+        values: '0+30x20'
+    promql_expr_test:
+      - expr: "avg((api_input_metric{job=\"anomaly-api-pods\",feature=\"cpu\",machine_type=~\".*\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) and on(machine) (time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}) < 300))"
+        eval_time: 4m
+        exp_samples:
+          - {labels: '{}', value: 90}
+      - expr: "sort_desc(topk(25, (max by (machine, cause) (api_anomaly_cause_p{job=\"anomaly-api-pods\",machine_type=~\".*\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) and on(machine) (time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}) < 300)) or on(machine) label_replace((max by (machine) (api_classifier_p_anomaly{job=\"anomaly-api-pods\",machine_type=~\".*\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) and on(machine) (time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}) < 300)), \"cause\", \"normal\", \"\", \"\")))"
+        eval_time: 4m
+        exp_samples:
+          - {labels: '{machine="web-01",cause="cpu_spike"}', value: 0.95}
+      - expr: "count by (alertname, severity) (ALERTS{alertstate=\"firing\"})"
+        eval_time: 4m
+        exp_samples:
+          - {labels: '{alertname="AnomalyDetected",severity="info"}', value: 1}

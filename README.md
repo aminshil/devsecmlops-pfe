@@ -46,9 +46,9 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Weakest cause | `cascade`, recall 0.268 (label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7755** · precision 0.7202 · recall 0.84. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on the 19 October model; not rerun on the 21 October retrain (offline F1 +0.0001) | `scripts/live_k8s_validation.py`, run on 19 October |
 | Latest green pipeline | Build `2.20.3-b112` (commit `aaf947ff`, 21 October: the external-review fixes, HTTP 500 on NaN/Infinity and on reserved machine names now 422): all 11 stages green, 188 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS). Before it: b111 (`bd0fdd67`), started by the model pipeline after it promoted the retrained model | [L3 run history](#l3--cicd) |
-| Tests | 222 passing, in 21 files (b112 ran 188; the 34 newer ones check the alerting configuration and the panel's Notifications card and History tab) | `pytest tests/` (stage 1b) |
+| Tests | 223 passing, in 21 files (b112 ran 188; the 35 newer ones check the alerting configuration, the dashboard queries, and the panel's Notifications card and History tab) | `pytest tests/` (stage 1b) |
 | Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, persistent, fleet surge), any layer down, pods, Kubernetes, traffic stopped, disk and memory. 15 rules unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
-| Dashboard | 25 Grafana panels in 5 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
+| Dashboard | 27 Grafana panels in 6 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-21: the model promoted by Jenkins `devsecmlops-model` build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, model files read back from MinIO, committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); the current image `2.20.3-b112` carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
 | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
 
@@ -106,7 +106,7 @@ Git push -> Jenkins (SonarQube -> repo+model gate -> Docker build ->
                             Kubernetes API server -- not the NodePort)
                                                   |
                                                   v
-                     Grafana (25 panels + 5 rows, provisioned)
+                     Grafana (27 panels + 6 rows, provisioned)
 ```
 
 Everything runs on a single self-hosted VM (Minikube) for the PFE. The image is built once and scanned once; moving to a multi-node cluster is a configuration change, not a code change: point `image:` at the registry Jenkins already pushes to and switch `imagePullPolicy` from `Never` (locally loaded images, the Minikube pattern used here) to `IfNotPresent`. That multi-node deployment has not been done in this project. Ansible brings the whole platform up from a bare provisioned VM in either profile (demo or production) — see [L6](#l6--ansible-infrastructure-as-code).
@@ -1672,7 +1672,7 @@ kubectl get pods -n ml-serving
 
 ## L5 — Observability and MLOps
 
-Prometheus + Grafana (25 panels in 5 rows) + realistic traffic replayed from the independent test set + Kubernetes
+Prometheus + Grafana (27 panels in 6 rows) + realistic traffic replayed from the independent test set + Kubernetes
 object monitoring.
 
 ### Monitoring
@@ -1735,7 +1735,7 @@ not started by default in favor of `production_agent.py`.
 `monitoring/k8s_exporter.py` publishes pod readiness, restart counts,
 deployment replica counts, and HPA CPU utilization as Prometheus metrics.
 
-#### Grafana dashboard (25 panels in 5 rows)
+#### Grafana dashboard (27 panels in 6 rows)
 
 Provisioned from the repository (`monitoring/grafana/`) — a fixed
 datasource UID plus the dashboard JSON, mounted read-only — rather than
@@ -1750,6 +1750,19 @@ display bug — a bar-gauge panel run as a range query instead of an instant
 one, causing `topk(25)` to return every machine ever in the top 25 across
 the whole time window instead of exactly 25 — was found (from the rendered
 screenshot, not just the query) and fixed in the most recent pass.
+
+A later review of the dashboard against the alerting fixed four disagreements and one gap. The
+anomaly-count description claimed a "5% base rate" and "single digits to ~15" as normal (the labelled
+data is 6.75%, and the alert compares the count with its own 6-hour average); the top-25 description
+still spoke of bars and did not say that P(anomaly) is flagged above 1 − threshold; the top-25 table and
+the fleet averages counted machines that had stopped reporting, unlike the alerts, the anomaly table and
+the History tab (all per-machine panels now keep only machines that reported in the last 5 minutes); and
+the RAM and disk panels did not name their alerts. The gap: nothing showed what Telegram is told. A first
+row, **Platform and alerts**, now shows each layer's HTTP probe (UP/DOWN, the series behind `LayerDown`)
+and every alert firing (Prometheus's `ALERTS`, counted by name and severity; a muted alert is still
+listed, because a mute stops only the message). A promtool test runs the changed and new queries with a
+machine that stopped reporting (the old queries fail it), and `tests/test_alerting.py` checks that every
+per-machine panel applies the 5-minute rule and that the probe panel reads the `LayerDown` series.
 
 #### Alerting: Prometheus rules → Alertmanager → Telegram
 
@@ -1903,7 +1916,7 @@ mlflow server --host 0.0.0.0 --port 5001 \
 | `monitoring/k8s_exporter.py` | Pod readiness, restarts, replica counts, HPA state. |
 | `monitoring/prometheus.yml` | Scrape configuration — per-pod discovery through the Kubernetes API server. |
 | `monitoring/grafana/provisioning/` | Fixed-UID datasource and dashboard-loading configuration, mounted read-only. |
-| `monitoring/grafana/dashboards/devsecmlops-fleet.json` | The dashboard (25 panels in 5 rows), provisioned from the repository. |
+| `monitoring/grafana/dashboards/devsecmlops-fleet.json` | The dashboard (27 panels in 6 rows), provisioned from the repository. |
 | `monitoring/alerting/alert_rules.yml`, `alert_rules_test.yml` | The alert rules and their promtool unit tests. |
 | `monitoring/alerting/alertmanager.yml.tmpl`, `telegram.tmpl`, `blackbox.yml` | Alertmanager routing (template, no secret), the Telegram message, the layer probes. |
 | `scripts/check_alerting.sh`, `scripts/setup_alerting.sh` | Validate the alerting configuration; install it on the VM (Telegram, Alertmanager, blackbox exporter). |
@@ -2820,7 +2833,7 @@ this project.)
 
 ## Testing
 
-**222 tests** in 21 files (up from 15), `pytest`, in `tests/`:
+**223 tests** in 21 files (up from 15), `pytest`, in `tests/`:
 
 - `test_api.py` (47 tests) — every endpoint, input validation (NaN/inf
   rejection, including raw `NaN`/`Infinity` tokens answered with 422 rather than 500, reserved `__` machine names, physical-range rejection (cpu=150 is a 422), the opt-in feedback token, machine length, metrics count, history shape), v3/v4
@@ -2868,9 +2881,10 @@ this project.)
   outside output folders, empty table, `kubectl` failure.
 - `test_sampler_source.py` (2) — the panel's sampler never reads the test fleet.
 - `test_ci_config.py` (3) — `scripts/ci_config.py` against a fake Jenkins and SonarQube.
-- `test_alerting.py` (5) — the alerting configuration: files wired together, every metric a rule uses
+- `test_alerting.py` (6) — the alerting configuration: files wired together, every metric a rule uses
   exported by this project, every Status-tab layer covered by an alert, no Telegram secret in the repository,
-  and the Grafana anomaly panels' queries are the ones `alert_rules_test.yml` checks against the Telegram list.
+  the Grafana anomaly panels' queries are the ones `alert_rules_test.yml` checks against the Telegram list,
+  and every per-machine dashboard panel keeps only machines that reported in the last 5 minutes.
 - `test_ui_alerting.py` (10) — the Notifications card with Alertmanager replaced by a recorder: the
   routes need the ops credentials, the state shows only the panel's active silences, a mute sends the
   right matchers, author and duration (bad scope or duration refused), an unmute expires only the

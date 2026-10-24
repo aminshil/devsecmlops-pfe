@@ -10,6 +10,171 @@
   "uid": "devsecmlops-fleet",
   "panels": [
     {
+      "type": "row",
+      "id": 31,
+      "title": "Platform and alerts (what Telegram is told)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "id": 32,
+      "title": "Platform layers (HTTP probe every 5 s)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "description": "The blackbox exporter's HTTP check of each platform layer, every 5 seconds (monitoring/alerting/blackbox.yml). These are the probes behind the LayerDown alert: a layer DOWN here for two probes in a row (10 s) is a Telegram message. Prometheus cannot show itself down here; the control panel's Status tab still does.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "probe_success{job=\"blackbox-layers\"}",
+          "legendFormat": "{{layer}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "UP",
+                  "color": "green",
+                  "index": 0
+                },
+                "0": {
+                  "text": "DOWN",
+                  "color": "red",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "table",
+      "id": 33,
+      "title": "Alerts firing now",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "description": "Every alert Prometheus has firing now, counted by name and severity (Prometheus's own ALERTS series, from monitoring/alerting/alert_rules.yml). AnomalyDetected counts the machines on the Telegram list. An alert muted from the control panel (Infrastructure tab, Notifications) is still listed here: a mute stops the Telegram message, not the alert.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "count by (alertname, severity) (ALERTS{alertstate=\"firing\"})",
+          "instant": true,
+          "format": "table",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "alertname": 0,
+              "severity": 1,
+              "Value": 2
+            },
+            "renameByName": {
+              "alertname": "Alert",
+              "severity": "Severity",
+              "Value": "Firing"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Firing",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
       "id": 1,
       "type": "row",
       "title": "Serving (Kubernetes pods, scraped individually)",
@@ -18,7 +183,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 0
+        "y": 9
       },
       "panels": []
     },
@@ -41,7 +206,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 1
+        "y": 10
       },
       "description": "Requests answered per second, split by which model served them. telecom_v4_rolling = the caller supplied a 10-reading history (rolling features used); telecom_v3 = no history yet, or the caller never sends one. A demo agent always starts on v3 and switches to v4 after its 10th reading -- v3-only forever means history is never reaching the API.",
       "targets": [
@@ -75,7 +240,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 1
+        "y": 10
       },
       "description": "Traffic per pod. Kubernetes' Service load-balances round-robin, so with N healthy pods each should carry roughly 1/N of total traffic. One pod flat at 0 while others show traffic usually means it failed readiness and was pulled from the Service, not that it is idle.",
       "targets": [
@@ -109,7 +274,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 9
+        "y": 18
       },
       "description": "95th-percentile time to answer one /predict call, per pod (inference + best-effort DB write). Normal is well under 200ms on this hardware. A sustained rise usually traces to the Feedback DB write p95 panel below -- PostgreSQL contention, not the model itself, is the usual cause.",
       "targets": [
@@ -143,7 +308,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 9
+        "y": 18
       },
       "description": "Share of requests answered with an error. 4xx = the request itself was invalid (e.g. history not exactly 10 finite values) -- a caller-side problem, not a service failure. ANY sustained 5xx is a real server-side problem and should be investigated immediately; 0% is the expected steady state.",
       "targets": [
@@ -175,7 +340,7 @@
         "h": 6,
         "w": 8,
         "x": 0,
-        "y": 17
+        "y": 26
       },
       "description": "How many serving pods Prometheus is currently able to reach. Should equal your replica count (kubectl get deploy anomaly-api -n ml-serving). Lower than that means a pod exists but Prometheus cannot scrape it -- check kubectl get pods and the Kubernetes API server connectivity.",
       "targets": [
@@ -207,7 +372,7 @@
         "h": 6,
         "w": 8,
         "x": 8,
-        "y": 17
+        "y": 26
       },
       "description": "Minutes since the OLDEST currently-running pod started. Resets to 0 on every rollout or pod restart -- this is informational, not a health signal by itself. A value that keeps resetting every few minutes without you deploying anything indicates pods are crash-looping.",
       "targets": [
@@ -241,7 +406,7 @@
         "h": 6,
         "w": 8,
         "x": 16,
-        "y": 17
+        "y": 26
       },
       "description": "95th-percentile time spent writing ONE prediction to PostgreSQL (a slice of total /predict latency, see the p95-per-pod panel). Typically a few ms to tens of ms. If this climbs, /predict latency climbs with it even though the model itself is unchanged.",
       "targets": [
@@ -265,7 +430,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 32
       },
       "panels": []
     },
@@ -286,9 +451,9 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 33
       },
-      "description": "How many of the 200 machines are CURRENTLY flagged anomalous (a Gauge, reflecting the latest verdict per machine -- not a running total). The synthetic generator injects anomalies at roughly a 5% base rate (README), so with the full fleet reporting, single digits to ~15 is ordinary background noise; a sustained spike well above that suggests a real correlated event worth checking in Root cause spotlight below.",
+      "description": "How many machines are anomalous right now (latest verdict per machine, from the pod that served it last, among machines that reported in the last 5 minutes: fleet:machine_anomalous:fresh). It is the row count of the table below and of the Telegram list. There is no fixed normal level: compare the curve with its own last hours. The FleetAnomalySurge alert fires when it is at least 20 and more than twice its 6-hour average for 2 minutes, which points at a router or a shared dependency (see Root cause below).",
       "targets": [
         {
           "datasource": {
@@ -324,7 +489,7 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 41
       },
       "description": "The same machines as the Telegram anomaly list: every machine whose latest verdict is anomalous, from the pod that served it last, among machines that reported in the last 5 minutes (fleet:machine_anomalous:fresh). A machine leaves the list on its first normal verdict. Its row count is the curve above. The Telegram message is a snapshot from up to 20 seconds before it arrived; this panel refreshes every 30 seconds.",
       "targets": [
@@ -381,12 +546,12 @@
         "uid": "devsecmlops-prom"
       },
       "gridPos": {
-        "h": 8,
+        "h": 10,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 41
       },
-      "description": "Each machine's most recent classifier P(anomaly) (green bar) and the model's likely cause (red) when its latest verdict is an anomaly; 'normal' = not flagged. The decision threshold is the one in the served model's manifest (see /health, model_lineage); the IsolationForest safety net can flag a machine even with a low bar ('safety-net only').",
+      "description": "The 25 machines with the highest classifier P(anomaly) on their latest reading (from the pod that served them last, among machines that reported in the last 5 minutes), with the likely cause when the latest verdict is an anomaly; 'normal' = not flagged. The classifier flags a reading when P(normal) is below the decision threshold, i.e. P(anomaly) above 1 - threshold (0.09 at the served threshold 0.91; the threshold is in the model manifest, see /health, model_lineage). The IsolationForest safety net can flag a machine with a low P(anomaly) too.",
       "targets": [
         {
           "datasource": {
@@ -397,7 +562,7 @@
           "instant": true,
           "range": false,
           "format": "table",
-          "expr": "sort_desc(topk(25, max by (machine, cause) (api_anomaly_cause_p{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) or on(machine) label_replace(max by (machine) (api_classifier_p_anomaly{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))), \"cause\", \"normal\", \"\", \"\")))",
+          "expr": "sort_desc(topk(25, (max by (machine, cause) (api_anomaly_cause_p{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) and on(machine) (time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}) < 300)) or on(machine) label_replace((max by (machine) (api_classifier_p_anomaly{job=\"anomaly-api-pods\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) and on(machine) (time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}) < 300)), \"cause\", \"normal\", \"\", \"\")))",
           "legendFormat": "__auto"
         }
       ],
@@ -546,9 +711,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 42
+        "y": 51
       },
-      "description": "Average of the raw CPU % each machine's most recent request actually reported (not a synthetic value -- literally what the API received). Purely descriptive of current fleet load; there is no fixed 'bad' threshold here since machine types have very different normal baselines (a database server idles hotter than a web server, by design of the synthetic generator).",
+      "description": "Average of the raw CPU % each machine's most recent request (machines that reported in the last 5 minutes) actually reported (not a synthetic value -- literally what the API received). Purely descriptive of current fleet load; there is no fixed 'bad' threshold here since machine types have very different normal baselines (a database server idles hotter than a web server, by design of the synthetic generator).",
       "targets": [
         {
           "datasource": {
@@ -556,7 +721,7 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
-          "expr": "avg((api_input_metric{job=\"anomaly-api-pods\",feature=\"cpu\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))))",
+          "expr": "avg((api_input_metric{job=\"anomaly-api-pods\",feature=\"cpu\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) and on(machine) (time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}) < 300))",
           "legendFormat": "avg cpu %"
         }
       ]
@@ -578,9 +743,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 42
+        "y": 51
       },
-      "description": "Average of the raw network MB/s each machine's most recent request reported. Same caveat as CPU: descriptive only, no universal threshold, since normal ranges differ by machine type.",
+      "description": "Average of the raw network MB/s each machine's most recent request (machines that reported in the last 5 minutes) reported. Same caveat as CPU: descriptive only, no universal threshold, since normal ranges differ by machine type.",
       "targets": [
         {
           "datasource": {
@@ -588,7 +753,7 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
-          "expr": "avg((api_input_metric{job=\"anomaly-api-pods\",feature=\"network\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))))",
+          "expr": "avg((api_input_metric{job=\"anomaly-api-pods\",feature=\"network\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) and on(machine) (time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}) < 300))",
           "legendFormat": "avg network MB/s"
         }
       ]
@@ -610,9 +775,9 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 59
       },
-      "description": "Average of the raw load-average value each machine's most recent request reported. Same caveat: descriptive, not a threshold -- a machine's OWN per-machine, per-time-window baseline (not this fleet-wide average) is what the model actually scores it against.",
+      "description": "Average of the raw load-average value each machine's most recent request (machines that reported in the last 5 minutes) reported. Same caveat: descriptive, not a threshold -- a machine's OWN per-machine, per-time-window baseline (not this fleet-wide average) is what the model actually scores it against.",
       "targets": [
         {
           "datasource": {
@@ -620,7 +785,7 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
-          "expr": "avg((api_input_metric{job=\"anomaly-api-pods\",feature=\"load_avg\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))))",
+          "expr": "avg((api_input_metric{job=\"anomaly-api-pods\",feature=\"load_avg\",machine_type=~\"$machine_type\"} and on(pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on(machine) group_left() max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) and on(machine) (time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}) < 300))",
           "legendFormat": "avg load"
         }
       ]
@@ -634,7 +799,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 58
+        "y": 67
       },
       "panels": []
     },
@@ -655,7 +820,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 59
+        "y": 68
       },
       "description": "Machines the /root-cause endpoint identified as the LIKELY ORIGIN of a correlated failure (not just anomalous themselves) in the last 5 minutes. Structurally, only machines with real downstream dependents in dependency_graph.json can appear here -- in this project, that means routers. Empty is the normal state; a router appearing here means multiple dependent machines are anomalous at once and this is the one the graph points to as the cause.",
       "targets": [
@@ -687,7 +852,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 65
+        "y": 74
       },
       "description": "The same signal as the spotlight above, over time, so a recurring root cause (the same machine repeatedly implicated) stands out from a one-off.",
       "targets": [
@@ -719,7 +884,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 73
+        "y": 82
       },
       "description": "How many DIFFERENT machines have been anomalous at least once since the current pods started (a Counter, so it only grows -- unlike the 'currently anomalous' panels above). Resets to 0 on every rollout. High relative to 200 over a long session is expected; a high value within minutes of startup would be unusual.",
       "targets": [
@@ -751,7 +916,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 73
+        "y": 82
       },
       "description": "Same idea as the panel to its left, but for root-cause incidents specifically: how many distinct machines have been identified as a likely root cause since the pods started.",
       "targets": [
@@ -775,7 +940,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 79
+        "y": 88
       },
       "panels": []
     },
@@ -787,7 +952,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 80
+        "y": 89
       },
       "datasource": {
         "type": "prometheus",
@@ -824,7 +989,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 80
+        "y": 89
       },
       "datasource": {
         "type": "prometheus",
@@ -850,7 +1015,7 @@
           }
         }
       },
-      "description": "Real RAM still available on the VM. This project has hit genuine out-of-memory failures before (documented in the README's operational incidents) -- treat low single-digit GB as a real warning, not just a number."
+      "description": "Real RAM still available on the VM. This project has hit genuine out-of-memory failures before (documented in the README's operational incidents) -- treat low single-digit GB as a real warning, not just a number. The MemoryLow alert (Telegram) fires below 1.5 GB available for 5 minutes."
     },
     {
       "id": 24,
@@ -860,7 +1025,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 88
+        "y": 97
       },
       "datasource": {
         "type": "prometheus",
@@ -889,7 +1054,7 @@
       "options": {
         "textMode": "value_and_name"
       },
-      "description": "Real free disk space on the VM's root filesystem. This has genuinely caused a real incident before: Elasticsearch (inside SonarQube) went read-only and failed the Quality Gate when this dropped too low, fixed with docker image/builder prune. Below a few GB free is a real, previously-experienced risk on this exact VM, not a theoretical one."
+      "description": "Real free disk space on the VM's root filesystem. This has genuinely caused a real incident before: Elasticsearch (inside SonarQube) went read-only and failed the Quality Gate when this dropped too low, fixed with docker image/builder prune. Below a few GB free is a real, previously-experienced risk on this exact VM, not a theoretical one. The DiskAlmostFull alert (Telegram) fires below 10% free for 5 minutes (this panel shows GB; the alert uses the percentage)."
     },
     {
       "id": 25,
@@ -899,7 +1064,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 88
+        "y": 97
       },
       "datasource": {
         "type": "prometheus",
@@ -930,7 +1095,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 94
+        "y": 103
       },
       "panels": []
     },
@@ -942,7 +1107,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 95
+        "y": 104
       },
       "datasource": {
         "type": "prometheus",
@@ -989,7 +1154,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 95
+        "y": 104
       },
       "datasource": {
         "type": "prometheus",
@@ -1036,7 +1201,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 103
+        "y": 112
       },
       "datasource": {
         "type": "prometheus",
@@ -1080,7 +1245,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 103
+        "y": 112
       },
       "datasource": {
         "type": "prometheus",

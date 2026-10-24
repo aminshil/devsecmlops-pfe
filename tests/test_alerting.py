@@ -86,3 +86,26 @@ def test_the_grafana_anomaly_panels_are_the_ones_unit_tested_against_the_telegra
         expr = panels[title]["targets"][0]["expr"].replace("$machine_type", ".*")
         assert "fleet:machine_anomalous:fresh" in expr, title          # same state as the alerts
         assert expr in tested, f"{title}: the dashboard query is not the one alert_rules_test.yml checks"
+
+
+def test_every_per_machine_dashboard_panel_counts_only_machines_that_still_report():
+    import json
+    dash = json.loads((ROOT / "monitoring" / "grafana" / "dashboards" / "devsecmlops-fleet.json").read_text())
+    tested = {t["expr"] for case in yaml.safe_load((ALERTING / "alert_rules_test.yml").read_text())["tests"]
+              for t in case.get("promql_expr_test", [])}
+    per_machine = re.compile(r"\b(api_input_metric|api_classifier_p_anomaly|api_anomaly_cause_p|api_currently_anomalous)\b")
+    checked = 0
+    for p in dash["panels"]:
+        for t in p.get("targets", []):
+            expr = t.get("expr", "")
+            if per_machine.search(expr) or "fleet:machine_anomalous:fresh" in expr:
+                checked += 1
+                fresh = "fleet:machine_anomalous:fresh" in expr or expr.count("< 300") >= expr.count("group_left()")
+                assert fresh, f"{p['title']}: reads per-machine gauges without the 5-minute freshness rule"
+    assert checked >= 6
+    panels = {p.get("title"): p for p in dash["panels"]}
+    for title in ("Fleet-wide average CPU", "Classifier anomaly probability by machine (top 25)", "Alerts firing now"):
+        assert panels[title]["targets"][0]["expr"].replace("$machine_type", ".*") in tested, title
+    probes = panels["Platform layers (HTTP probe every 5 s)"]["targets"][0]["expr"]
+    rule = next(r for g in RULES["groups"] for r in g["rules"] if r.get("alert") == "LayerDown")["expr"]
+    assert probes in rule      # the panel shows the series the LayerDown alert reads
