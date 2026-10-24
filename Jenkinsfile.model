@@ -58,7 +58,7 @@ pipeline {
                 sh '''
                     git log --oneline -1
                     rm -rf build
-                    python3 -m pip install --quiet --break-system-packages -r requirements-api.txt mlflow==3.16.1
+                    python3 -m pip install --quiet --break-system-packages -r requirements-api.txt mlflow==3.17.2
                 '''
                 script {
                     env.DO_PROMOTE = (params.SCOPE == 'full' && params.PROMOTE) ? 'true' : 'false'

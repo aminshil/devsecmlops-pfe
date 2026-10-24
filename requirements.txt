@@ -9,7 +9,8 @@
 
 # Experiment tracking (ml-model/train_production.py logs runs here when
 # MLFLOW_TRACKING_URI is set)
-mlflow==3.16.1
+# 3.17.2: CVE-2026-53995 (path traversal in the FileStore backend; our server uses SQLite, but the pin moves)
+mlflow==3.17.2
 # S3 client: MLflow's MinIO artifact store and scripts/ensure_minio_bucket.py
 boto3>=1.34
 
