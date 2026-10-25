@@ -1,10 +1,16 @@
-# Alert rules for the DevSecMLOps platform. Prometheus evaluates them every 15 s; Alertmanager groups
+# Alert rules for the DevSecMLOps platform. Prometheus evaluates them every 5 s; Alertmanager groups
 # and delivers the alerts (Telegram). Unit-tested by promtool (alert_rules_test.yml), run by
 # scripts/check_alerting.sh and by scripts/setup_alerting.sh before anything is installed.
 #
 # Freshness: each serving replica only knows the machines IT served, and its gauge keeps the last
 # value. So, as in the control panel's Fleet tab (api/app.py, _freshest), a machine's state is taken
 # from the replica that saw it last, and only for machines that reported in the last 5 minutes.
+#
+# Missed reports: every machine reports on its own rhythm (the production agent: about every 30 s). Its
+# usual interval is measured from its own reports, and a machine silent for more than three of them has
+# missed its reports: it is listed as not reporting (MachineSilent), and its last verdict no longer counts
+# as current. The alerts that make up the Telegram anomaly list carry the label list="anomalies"
+# (alertmanager.yml.tmpl routes on it; the control panel's "mute the anomaly list" silences it).
 
 groups:
   - name: anomalies
@@ -23,16 +29,58 @@ groups:
           and on (machine)
           (time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods"}) < 300)
 
+      # ---- is each machine still reporting? ----
+      - record: fleet:machine_last_seen:max
+        # when the machine last reported, whichever replica served it (its type taken from the verdict gauge,
+        # which the API sets on the same request)
+        expr: |
+          max by (machine) (api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods"})
+          + on (machine) group_left (machine_type)
+          (0 * topk by (machine) (1, max by (machine, machine_type) (api_currently_anomalous{job="anomaly-api-pods"})))
+
+      - record: fleet:machine_report_interval:avg15m
+        # average time between its reports over the last 15 minutes, when it reported at least 3 times
+        expr: |
+          (max_over_time(fleet:machine_last_seen:max[15m]) - min_over_time(fleet:machine_last_seen:max[15m]))
+          / changes(fleet:machine_last_seen:max[15m])
+          and changes(fleet:machine_last_seen:max[15m]) >= 3
+
+      - record: fleet:machine_report_interval:usual
+        # its usual interval: the lowest 15-minute average of the last hour, so a pause it has just had does
+        # not stretch the interval it is expected to keep
+        expr: min_over_time(fleet:machine_report_interval:avg15m[1h])
+
+      - record: fleet:machine_silence:seconds
+        # seconds since its last report (machines that reported in the last hour, or that a pod still remembers)
+        expr: time() - max_over_time(fleet:machine_last_seen:max[1h])
+
+      - record: fleet:machine_silence:limit_seconds
+        # how long it may stay silent: three usual intervals (at least 30 s, for the 5 s scrape and evaluation);
+        # 15 minutes while its usual interval is not known yet (fewer than 3 reports seen)
+        expr: |
+          clamp_min(3 * fleet:machine_report_interval:usual, 30)
+          or (0 * fleet:machine_silence:seconds + 900)
+
+      - record: fleet:machine_silent
+        # 1 when it has missed its reports (silent longer than its limit), 0 while it reports on time
+        expr: fleet:machine_silence:seconds > bool fleet:machine_silence:limit_seconds
+
+      - record: fleet:machine_anomalous:now
+        # the verdict that is current: the fresh verdict of a machine that has not missed its reports. The
+        # Telegram list and Grafana's "now" panels read this.
+        expr: fleet:machine_anomalous:fresh unless on (machine) (fleet:machine_silent == 1)
+
       - record: fleet:anomalous_machines:count
-        expr: count(fleet:machine_anomalous:fresh == 1) or vector(0)
+        expr: count(fleet:machine_anomalous:now == 1) or vector(0)
 
       - alert: AnomalyDetected
         # direct, both ways: fires on the first anomalous verdict and resolves on the first normal one
         # (no hold), so the Telegram list is exactly the machines anomalous now; a verdict that flickers
-        # (1, 0, 1, 0) comes and goes with it. Alertmanager batches changes into one message per 20 s.
-        expr: fleet:machine_anomalous:fresh == 1
+        # (1, 0, 1, 0) comes and goes with it. Alertmanager sends the list within 5 s of a change.
+        expr: fleet:machine_anomalous:now == 1
         labels:
           severity: info
+          list: anomalies
         annotations:
           summary: "{{ $labels.machine }} ({{ $labels.machine_type }}) is anomalous"
           description: "The served model flagged {{ $labels.machine }} on its last readings."
@@ -41,29 +89,61 @@ groups:
         # the "back to normal" line of the Telegram list: fires for one minute after a machine's verdict
         # turns normal. A firing alert of its own (not Alertmanager's resolved alerts, which Prometheus
         # keeps re-sending for 15 minutes) so a clear is announced once. A machine that stops reporting
-        # has no verdict at all and is not announced as back to normal.
+        # has no current verdict and is not announced as back to normal (MachineSilent lists it).
         expr: |
-          (fleet:machine_anomalous:fresh == 0)
-          and on (machine) (max_over_time(fleet:machine_anomalous:fresh[1m]) == 1)
+          (fleet:machine_anomalous:now == 0)
+          and on (machine) (max_over_time(fleet:machine_anomalous:now[1m]) == 1)
         labels:
           severity: info
+          list: anomalies
         annotations:
           summary: "{{ $labels.machine }} ({{ $labels.machine_type }}) is back to normal"
           description: "The served model's latest verdict on {{ $labels.machine }} is normal again."
 
-      - alert: FleetNoData
-        # no machine reported in the last 5 minutes (the traffic agent or the serving path stopped):
-        # the Telegram list says "no information" instead of "all clear"
-        expr: absent(fleet:machine_anomalous:fresh)
+      - alert: MachineSilent
+        # the machine missed its reports: nothing for more than three of its usual intervals. The value is the
+        # silence in seconds; the annotations give its usual interval and its last verdict (rounded to the second).
+        expr: fleet:machine_silence:seconds > fleet:machine_silence:limit_seconds
         labels:
           severity: info
+          list: anomalies
+        annotations:
+          summary: "{{ $labels.machine }} ({{ $labels.machine_type }}) stopped reporting"
+          silence: '{{ printf "%.0f" $value | humanizeDuration }}'
+          usual: '{{ with printf "fleet:machine_report_interval:usual{machine=%q}" $labels.machine | query }}{{ . | first | value | printf "%.0f" | humanizeDuration }}{{ end }}'
+          last_verdict: '{{ with printf "last_over_time(fleet:machine_anomalous:fresh{machine=%q}[1h])" $labels.machine | query }}{{ if eq (. | first | value) 1.0 }}anomalous{{ else }}normal{{ end }}{{ end }}'
+          description: 'No report from {{ $labels.machine }} for {{ printf "%.0f" $value | humanizeDuration }}: it has missed its reports.'
+
+      - alert: MachineReportingAgain
+        # the "reporting again" line of the Telegram list: fires for one minute after a machine that had missed
+        # its reports (or was not known a minute ago) reports on time
+        expr: |
+          (fleet:machine_silent == 0)
+          and on (machine) (
+            (max_over_time(fleet:machine_silent[1m]) == 1)
+            or (fleet:machine_silent unless on (machine) (fleet:machine_silent offset 1m))
+          )
+        labels:
+          severity: info
+          list: anomalies
+        annotations:
+          summary: "{{ $labels.machine }} ({{ $labels.machine_type }}) is reporting"
+          description: "{{ $labels.machine }} reports on time (after missing its reports, or for the first time)."
+
+      - alert: FleetNoData
+        # no machine reports on time (the traffic agent or the serving path stopped): the Telegram list says
+        # "no information" instead of "all clear"
+        expr: absent(fleet:machine_silent == 0)
+        labels:
+          severity: info
+          list: anomalies
         annotations:
           summary: "no information about the machines"
-          description: "No machine has reported to the serving pods in the last 5 minutes."
+          description: "No machine is reporting to the serving pods: every one has missed its reports."
 
       - alert: AnomalyPersistent
         # an episode, not a blip: anomalous on every reading for 10 minutes
-        expr: fleet:machine_anomalous:fresh == 1
+        expr: fleet:machine_anomalous:now == 1
         for: 10m
         labels:
           severity: warning

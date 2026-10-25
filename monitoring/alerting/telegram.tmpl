@@ -8,23 +8,38 @@ DevSecMLOps · Alertmanager :9093
 {{- end }}
 
 {{/* Machine anomalies as ONE running list, re-sent whenever it changes: every machine anomalous now,
-     alphabetical, with how long each has been anomalous; 🆕 + marks a machine that turned anomalous in
-     the last minute; the machines that just cleared follow. At most 60 + 15 lines, so the message stays
-     under Telegram's 4096-character limit even in a fleet-wide incident. Needs Alertmanager >= 0.28. */}}
+     alphabetical, with how long each has been anomalous (🆕 + marks a machine that turned anomalous in the
+     last minute); the machines that just turned normal (✅ −); the machines that missed their reports (⚫),
+     with how long ago they missed them (more than three of their usual intervals without a report), their
+     usual interval and their last verdict; the machines that
+     report again (🔌). With no machine reporting at all, the list says "no information". At most 40 + 10 +
+     10 + 10 lines, so the message stays under Telegram's 4096-character limit even in a fleet-wide
+     incident. Needs Alertmanager >= 0.28. */}}
 {{ define "devsecmlops.anomalies" -}}
 {{- /* counts are kept as strings of "x" (Alertmanager templates have no arithmetic) */ -}}
-{{- $nodata := false }}{{ $n := "" }}{{ range .Alerts.Firing }}{{ if eq .Labels.alertname "FleetNoData" }}{{ $nodata = true }}{{ end }}{{ if eq .Labels.alertname "AnomalyDetected" }}{{ $n = print $n "x" }}{{ end }}{{ end -}}
-{{ if $nodata }}⚪ <b>Anomalies</b> · no information: no machine has reported in the last 5 minutes
+{{- $nodata := false }}{{ $n := "" }}{{ $s := "" }}{{ range .Alerts.Firing }}{{ if eq .Labels.alertname "FleetNoData" }}{{ $nodata = true }}{{ end }}{{ if eq .Labels.alertname "AnomalyDetected" }}{{ $n = print $n "x" }}{{ end }}{{ if eq .Labels.alertname "MachineSilent" }}{{ $s = print $s "x" }}{{ end }}{{ end -}}
+{{ if $nodata }}⚪ <b>Anomalies</b> · no information: no machine is reporting
 {{ else if $n }}📋 <b>Anomalies</b> · {{ len $n }} machine(s) anomalous now
+{{ else if $s }}✅ <b>Anomalies</b> · no anomaly on the machines reporting
 {{ else }}✅ <b>Anomalies</b> · all clear
 {{ end -}}
-{{ $shown := "" }}{{ range .Alerts.Firing }}{{ if and (eq .Labels.alertname "AnomalyDetected") (lt (len $shown) 60) }}{{ $shown = print $shown "x" }}{{ if lt (since .StartsAt).Seconds 60.0 }}🆕 <b>+ {{ .Labels.machine }}</b> ({{ .Labels.machine_type }}) · new
+{{ $shown := "" }}{{ range .Alerts.Firing }}{{ if and (eq .Labels.alertname "AnomalyDetected") (lt (len $shown) 40) }}{{ $shown = print $shown "x" }}{{ if lt (since .StartsAt).Seconds 60.0 }}🆕 <b>+ {{ .Labels.machine }}</b> ({{ .Labels.machine_type }}) · new
 {{ else }}• {{ .Labels.machine }} ({{ .Labels.machine_type }}) · {{ humanizeDuration (since .StartsAt).Seconds }}
 {{ end }}{{ end }}{{ end -}}
-{{ if gt (len $n) 60 }}… 60 of {{ len $n }} listed
+{{ if gt (len $n) 40 }}… 40 of {{ len $n }} listed
 {{ end -}}
-{{ $c := "" }}{{ range .Alerts.Firing }}{{ if and (eq .Labels.alertname "AnomalyCleared") (lt (since .StartsAt).Seconds 20.0) }}{{ if lt (len $c) 15 }}✅ − {{ .Labels.machine }} ({{ .Labels.machine_type }}) back to normal
+{{ $c := "" }}{{ range .Alerts.Firing }}{{ if and (eq .Labels.alertname "AnomalyCleared") (lt (since .StartsAt).Seconds 20.0) }}{{ if lt (len $c) 10 }}✅ − {{ .Labels.machine }} ({{ .Labels.machine_type }}) back to normal
 {{ end }}{{ $c = print $c "x" }}{{ end }}{{ end -}}
-{{ if gt (len $c) 15 }}… 15 of {{ len $c }} back to normal listed
+{{ if gt (len $c) 10 }}… 10 of {{ len $c }} back to normal listed
+{{ end -}}
+{{ if $nodata }}⚫ all {{ len $s }} machine(s) have missed their reports
+{{ else if $s }}⚫ <b>{{ len $s }} not reporting</b>
+{{ $q := "" }}{{ range .Alerts.Firing }}{{ if and (eq .Labels.alertname "MachineSilent") (lt (len $q) 10) }}{{ $q = print $q "x" }}⚫ {{ .Labels.machine }} ({{ .Labels.machine_type }}) · missed its reports {{ if lt (since .StartsAt).Seconds 60.0 }}just now{{ else }}{{ humanizeDuration (since .StartsAt).Seconds }} ago{{ end }}{{ with .Annotations.usual }} (usually every {{ . }}){{ end }}{{ if eq .Annotations.last_verdict "anomalous" }} · <b>last verdict anomalous</b>{{ end }}
+{{ end }}{{ end -}}
+{{ if gt (len $s) 10 }}… 10 of {{ len $s }} listed
+{{ end }}{{ end -}}
+{{ $r := "" }}{{ range .Alerts.Firing }}{{ if and (eq .Labels.alertname "MachineReportingAgain") (lt (since .StartsAt).Seconds 20.0) }}{{ if lt (len $r) 10 }}🔌 {{ .Labels.machine }} ({{ .Labels.machine_type }}) reporting
+{{ end }}{{ $r = print $r "x" }}{{ end }}{{ end -}}
+{{ if gt (len $r) 10 }}… 10 of {{ len $r }} reporting listed
 {{ end }}DevSecMLOps · Alertmanager :9093
 {{- end }}

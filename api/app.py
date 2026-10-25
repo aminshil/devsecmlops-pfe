@@ -2179,11 +2179,15 @@ _AM_URL = (os.environ.get("ALERTMANAGER_URL") or "http://localhost:9093").rstrip
 _SILENCE_AUTHOR = "control-panel"
 _AM_DOWN = {"description": "Alertmanager did not answer as expected"}
 _SILENCE_SCOPES = {
+    # every alert of the Telegram anomaly list carries list="anomalies" (monitoring/alerting/alert_rules.yml)
     "anomalies": {"label": "the anomaly list",
-                  "matchers": [{"name": "alertname", "value": "AnomalyDetected", "isRegex": False, "isEqual": True}]},
+                  "matchers": [{"name": "list", "value": "anomalies", "isRegex": False, "isEqual": True}]},
     "all": {"label": "every notification",
             "matchers": [{"name": "alertname", "value": ".+", "isRegex": True, "isEqual": True}]},
 }
+# silences made before the list had its label (they muted AnomalyDetected only): still recognised, so
+# Unmute can expire them
+_LEGACY_SCOPES = {"anomalies": [{"name": "alertname", "value": "AnomalyDetected", "isRegex": False, "isEqual": True}]}
 
 
 class _AlertmanagerError(RuntimeError):
@@ -2211,6 +2215,9 @@ def _silence_scope(silence: dict) -> str | None:
     key = _matcher_key(silence.get("matchers") or [])
     for scope, spec in _SILENCE_SCOPES.items():
         if key == _matcher_key(spec["matchers"]):
+            return scope
+    for scope, matchers in _LEGACY_SCOPES.items():
+        if key == _matcher_key(matchers):
             return scope
     return None
 

@@ -453,7 +453,7 @@
         "x": 0,
         "y": 33
       },
-      "description": "How many machines are anomalous right now (latest verdict per machine, from the pod that served it last, among machines that reported in the last 5 minutes: fleet:machine_anomalous:fresh). It is the row count of the table below and of the Telegram list. There is no fixed normal level: compare the curve with its own last hours. The FleetAnomalySurge alert fires when it is at least 20 and more than twice its 6-hour average for 2 minutes, which points at a router or a shared dependency (see Root cause below).",
+      "description": "How many machines are anomalous right now (latest verdict per machine, from the pod that served it last, among machines that reported in the last 5 minutes and have not missed their reports), and how many have missed their reports (silent for more than three of their usual intervals: the \u26ab lines of the Telegram list). The first curve is the row count of the table below and of the Telegram list. There is no fixed normal level: compare the curve with its own last hours. The FleetAnomalySurge alert fires when it is at least 20 and more than twice its 6-hour average for 2 minutes, which points at a router or a shared dependency (see Root cause below).",
       "targets": [
         {
           "datasource": {
@@ -461,8 +461,17 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
-          "expr": "count(fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"} == 1) or vector(0)",
+          "expr": "count((fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"} unless on (machine) (fleet:machine_silent == 1)) == 1) or vector(0)",
           "legendFormat": "anomalous machines"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "B",
+          "expr": "count(fleet:machine_silent{machine_type=~\"$machine_type\"} == 1) or vector(0)",
+          "legendFormat": "not reporting"
         }
       ]
     },
@@ -491,7 +500,7 @@
         "x": 0,
         "y": 41
       },
-      "description": "The same machines as the Telegram anomaly list: every machine whose latest verdict is anomalous, from the pod that served it last, among machines that reported in the last 5 minutes (fleet:machine_anomalous:fresh). A machine leaves the list on its first normal verdict. Its row count is the curve above. The Telegram message is sent within 5 seconds of a change; this panel refreshes every 30 seconds.",
+      "description": "The same machines as the Telegram anomaly list: every machine whose latest verdict is anomalous, from the pod that served it last, among machines that still report on time (a machine that missed its reports is in the table \"Machines not reporting\" instead). A machine leaves the list on its first normal verdict. Its row count is the curve above. The Telegram message is sent within 5 seconds of a change; this panel refreshes every 30 seconds.",
       "targets": [
         {
           "datasource": {
@@ -499,7 +508,7 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
-          "expr": "fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"} == 1",
+          "expr": "(fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"} unless on (machine) (fleet:machine_silent == 1)) == 1",
           "legendFormat": "",
           "instant": true,
           "format": "table"
@@ -695,6 +704,82 @@
       }
     },
     {
+      "type": "table",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "id": 34,
+      "title": "Machines not reporting (the Telegram \u26ab lines)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "devsecmlops-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 51
+      },
+      "description": "Machines that missed their reports: silent for more than three of their usual intervals (each machine's interval is measured from its own reports; at least 30 s, and 15 minutes while it is not known yet). The value is how long it has been silent. Its last verdict no longer counts as current, so it is not in the anomalous table. Empty when every machine reports on time; when every machine is here, the Telegram list says \"no information\".",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "A",
+          "expr": "fleet:machine_silence:seconds{machine_type=~\"$machine_type\"} > fleet:machine_silence:limit_seconds",
+          "legendFormat": "",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            },
+            "indexByName": {
+              "machine": 0,
+              "machine_type": 1,
+              "Value": 2
+            },
+            "renameByName": {
+              "machine": "Machine",
+              "machine_type": "Type",
+              "Value": "Silent for"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Silent for",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
       "type": "timeseries",
       "fieldConfig": {
         "defaults": {},
@@ -711,7 +796,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 51
+        "y": 59
       },
       "description": "Average of the raw CPU % each machine's most recent request (machines that reported in the last 5 minutes) actually reported (not a synthetic value -- literally what the API received). Purely descriptive of current fleet load; there is no fixed 'bad' threshold here since machine types have very different normal baselines (a database server idles hotter than a web server, by design of the synthetic generator).",
       "targets": [
@@ -743,7 +828,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 51
+        "y": 59
       },
       "description": "Average of the raw network MB/s each machine's most recent request (machines that reported in the last 5 minutes) reported. Same caveat as CPU: descriptive only, no universal threshold, since normal ranges differ by machine type.",
       "targets": [
@@ -775,7 +860,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 59
+        "y": 67
       },
       "description": "Average of the raw load-average value each machine's most recent request (machines that reported in the last 5 minutes) reported. Same caveat: descriptive, not a threshold -- a machine's OWN per-machine, per-time-window baseline (not this fleet-wide average) is what the model actually scores it against.",
       "targets": [
@@ -799,7 +884,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 67
+        "y": 75
       },
       "panels": []
     },
@@ -836,7 +921,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 68
+        "y": 76
       },
       "description": "Routers the /root-cause analysis named as the LIKELY ORIGIN of a correlated failure (not just anomalous themselves) in the last 5 minutes, and how many times. The production agent sends the currently anomalous machines to /root-cause every 20 seconds, so about 15 checks happen in 5 minutes and the most this can show is 14 (Prometheus counts the steps between checks): 14 means the router was named in every check, i.e. for the whole 5 minutes; 1 means one check. Calls from the control panel's Root Cause tab count too. Only machines with dependents in dependency_graph.json (the routers) can appear. Empty is the normal state. The value is for now (the last 5 minutes), not for the dashboard's time range; the chart below shows when.",
       "targets": [
@@ -879,7 +964,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 74
+        "y": 82
       },
       "description": "When each router was named the likely root cause: how many /root-cause checks named it in each minute. The production agent checks every 20 seconds, so the most is about 3 per minute: a line at 3 means the router was the root cause the whole minute, 0 means not at all. A router that keeps coming back stands out from a one-off. (A pod restart does not show as a drop: increase() handles counter resets.)",
       "targets": [
@@ -911,7 +996,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 82
+        "y": 90
       },
       "description": "How many DIFFERENT machines have been anomalous at least once since the current pods started (a Counter, so it only grows -- unlike the 'currently anomalous' panels above). Resets to 0 on every rollout. High relative to 200 over a long session is expected; a high value within minutes of startup would be unusual.",
       "targets": [
@@ -943,7 +1028,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 82
+        "y": 90
       },
       "description": "Same idea as the panel to its left, but for root-cause incidents specifically: how many distinct machines have been identified as a likely root cause since the pods started.",
       "targets": [
@@ -967,7 +1052,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 88
+        "y": 96
       },
       "panels": []
     },
@@ -979,7 +1064,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 89
+        "y": 97
       },
       "datasource": {
         "type": "prometheus",
@@ -1016,7 +1101,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 89
+        "y": 97
       },
       "datasource": {
         "type": "prometheus",
@@ -1052,7 +1137,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 97
+        "y": 105
       },
       "datasource": {
         "type": "prometheus",
@@ -1091,7 +1176,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 97
+        "y": 105
       },
       "datasource": {
         "type": "prometheus",
@@ -1122,7 +1207,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 103
+        "y": 111
       },
       "panels": []
     },
@@ -1134,7 +1219,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 104
+        "y": 112
       },
       "datasource": {
         "type": "prometheus",
@@ -1181,7 +1266,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 104
+        "y": 112
       },
       "datasource": {
         "type": "prometheus",
@@ -1228,7 +1313,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 112
+        "y": 120
       },
       "datasource": {
         "type": "prometheus",
@@ -1272,7 +1357,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 112
+        "y": 120
       },
       "datasource": {
         "type": "prometheus",

@@ -28,7 +28,8 @@ def test_prometheus_loads_the_rules_and_sends_to_alertmanager():
     names = {r["name"] for r in tmpl["receivers"]}
     assert tmpl["route"]["receiver"] in names and all(rt["receiver"] in names for rt in tmpl["route"]["routes"])
     known = {"alertname": {r["alert"] for r in _rules() if "alert" in r},
-             "severity": {r["labels"]["severity"] for r in _rules() if "alert" in r}}
+             "severity": {r["labels"]["severity"] for r in _rules() if "alert" in r},
+             "list": {r["labels"]["list"] for r in _rules() if "list" in r.get("labels", {})}}
     for route in tmpl["route"]["routes"]:
         for m in route["matchers"]:
             label, value = m.split("=", 1)[0], m.split('"')[1]
@@ -83,10 +84,17 @@ def test_the_grafana_anomaly_panels_are_the_ones_unit_tested_against_the_telegra
     panels = {p.get("title"): p for p in dash["panels"]}
     tested = {t["expr"] for case in yaml.safe_load((ALERTING / "alert_rules_test.yml").read_text())["tests"]
               for t in case.get("promql_expr_test", [])}
+    now = next(r["expr"] for r in _rules() if r.get("record") == "fleet:machine_anomalous:now")
     for title in ("Anomalous machines now (the Telegram list)", "Anomalous machines over time"):
         expr = panels[title]["targets"][0]["expr"].replace("$machine_type", ".*")
-        assert "fleet:machine_anomalous:fresh" in expr, title          # same state as the alerts
+        # the alerts' current verdict (fleet:machine_anomalous:now), written out so that the curve keeps the
+        # time before that rule existed (fleet:machine_silent is then absent and `unless` removes nothing)
+        assert now.replace("fleet:machine_anomalous:fresh", 'fleet:machine_anomalous:fresh{machine_type=~".*"}') in expr, title
         assert expr in tested, f"{title}: the dashboard query is not the one alert_rules_test.yml checks"
+    silent = next(r["expr"] for r in _rules() if r.get("alert") == "MachineSilent")
+    table = panels["Machines not reporting (the Telegram ⚫ lines)"]["targets"][0]["expr"].replace("$machine_type", ".*")
+    assert table == silent.replace("fleet:machine_silence:seconds", 'fleet:machine_silence:seconds{machine_type=~".*"}', 1)
+    assert table in tested and panels["Anomalous machines over time"]["targets"][1]["expr"].replace("$machine_type", ".*") in tested
 
 
 def test_every_per_machine_dashboard_panel_counts_only_machines_that_still_report():

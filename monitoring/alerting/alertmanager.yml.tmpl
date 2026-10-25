@@ -14,13 +14,14 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
-    # one running list of every anomalous machine, sent within 5 s of every change: a machine turns
-    # anomalous (AnomalyDetected, marked new), a machine clears (AnomalyCleared, "back to normal"), or
-    # no machine reports any more (FleetNoData, "no information"). The receiver ignores resolved alerts
-    # (send_resolved: false), so Prometheus re-sending them for 15 minutes cannot trigger a message.
-    - matchers: ['alertname=~"AnomalyDetected|AnomalyCleared|FleetNoData"']
+    # one running list (the alerts labelled list="anomalies"), sent within 5 s of every change: a machine
+    # turns anomalous (AnomalyDetected, marked new) or back to normal (AnomalyCleared), misses its reports
+    # (MachineSilent) or reports again (MachineReportingAgain), or no machine reports (FleetNoData, "no
+    # information"). The receiver ignores resolved alerts (send_resolved: false), so Prometheus re-sending
+    # them for 15 minutes cannot trigger a message.
+    - matchers: ['list="anomalies"']
       receiver: telegram-anomalies
-      group_by: [severity]
+      group_by: [list]
       group_wait: 1s
       group_interval: 5s
       repeat_interval: 6h

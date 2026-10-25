@@ -42,6 +42,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: info
+              list: anomalies
               machine: web-01
               machine_type: web
             exp_annotations:
@@ -49,6 +50,7 @@ tests:
               description: "The served model flagged web-01 on its last readings."
           - exp_labels:
               severity: info
+              list: anomalies
               machine: cache-04
               machine_type: cache
             exp_annotations:
@@ -56,6 +58,7 @@ tests:
               description: "The served model flagged cache-04 on its last readings."
           - exp_labels:
               severity: info
+              list: anomalies
               machine: cdn-06
               machine_type: edge
             exp_annotations:
@@ -67,6 +70,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: info
+              list: anomalies
               machine: web-01
               machine_type: web
             exp_annotations:
@@ -74,6 +78,7 @@ tests:
               description: "The served model flagged web-01 on its last readings."
           - exp_labels:
               severity: info
+              list: anomalies
               machine: cache-04
               machine_type: cache
             exp_annotations:
@@ -85,6 +90,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: info
+              list: anomalies
               machine: web-01
               machine_type: web
             exp_annotations:
@@ -92,6 +98,7 @@ tests:
               description: "The served model flagged web-01 on its last readings."
           - exp_labels:
               severity: info
+              list: anomalies
               machine: cache-04
               machine_type: cache
             exp_annotations:
@@ -99,6 +106,7 @@ tests:
               description: "The served model flagged cache-04 on its last readings."
           - exp_labels:
               severity: info
+              list: anomalies
               machine: cdn-06
               machine_type: edge
             exp_annotations:
@@ -109,6 +117,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: info
+              list: anomalies
               machine: web-01
               machine_type: web
             exp_annotations:
@@ -116,6 +125,7 @@ tests:
               description: "The served model flagged web-01 on its last readings."
           - exp_labels:
               severity: info
+              list: anomalies
               machine: cache-04
               machine_type: cache
             exp_annotations:
@@ -127,6 +137,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: info
+              list: anomalies
               machine: web-01
               machine_type: web
             exp_annotations:
@@ -134,6 +145,7 @@ tests:
               description: "The served model flagged web-01 on its last readings."
           - exp_labels:
               severity: info
+              list: anomalies
               machine: edge-05
               machine_type: edge
             exp_annotations:
@@ -144,6 +156,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: info
+              list: anomalies
               machine: web-01
               machine_type: web
             exp_annotations:
@@ -151,6 +164,7 @@ tests:
               description: "The served model flagged web-01 on its last readings."
           - exp_labels:
               severity: info
+              list: anomalies
               machine: edge-05
               machine_type: edge
             exp_annotations:
@@ -617,8 +631,10 @@ tests:
 
   - name: the Grafana list and count show the same machines as the Telegram list
     # web-01 anomalous throughout; db-01 normal for the last minute; db-02 always normal; edge-01 stopped
-    # reporting 6 minutes ago while anomalous; app-01 has not reported for 10 minutes. Only web-01 is
-    # anomalous now, in all three. The expressions are the dashboard's, with $machine_type = .*
+    # reporting 6 minutes ago while anomalous (it reported every 15 s: missed its reports after 45 s); app-01
+    # has not reported for 10 minutes, after a single report (its interval is not known: listed as not
+    # reporting only after 15 minutes). Only web-01 is anomalous now, in all three; edge-01 is the one
+    # machine not reporting. The expressions are the dashboard's, with $machine_type = .*
     # (tests/test_alerting.py checks they are copied verbatim).
     interval: 15s
     input_series:
@@ -646,17 +662,40 @@ tests:
       - eval_time: 10m
         alertname: AnomalyDetected
         exp_alerts:
-          - exp_labels: {severity: info, machine: web-01, machine_type: web}
+          - exp_labels: {severity: info, list: anomalies, machine: web-01, machine_type: web}
             exp_annotations: {summary: "web-01 (web) is anomalous", description: "The served model flagged web-01 on its last readings."}
     promql_expr_test:
-      - expr: "fleet:machine_anomalous:fresh{machine_type=~\".*\"} == 1"
+      - expr: "(fleet:machine_anomalous:fresh{machine_type=~\".*\"} unless on (machine) (fleet:machine_silent == 1)) == 1"
         eval_time: 10m
         exp_samples:
           - {labels: 'fleet:machine_anomalous:fresh{machine="web-01",machine_type="web"}', value: 1}
-      - expr: "count(fleet:machine_anomalous:fresh{machine_type=~\".*\"} == 1) or vector(0)"
+      - expr: "count((fleet:machine_anomalous:fresh{machine_type=~\".*\"} unless on (machine) (fleet:machine_silent == 1)) == 1) or vector(0)"
         eval_time: 10m
         exp_samples:
           - {labels: '{}', value: 1}
+      - expr: "count(fleet:machine_silent{machine_type=~\".*\"} == 1) or vector(0)"
+        eval_time: 10m
+        exp_samples:
+          - {labels: '{}', value: 1}
+      - expr: "fleet:machine_silence:seconds{machine_type=~\".*\"} > fleet:machine_silence:limit_seconds"
+        eval_time: 10m
+        exp_samples:
+          - {labels: 'fleet:machine_silence:seconds{machine="edge-01",machine_type="edge"}', value: 360}
+      # edge-01 was still on the list until it missed its reports (last report at 4m, limit 45 s); app-01
+      # until its verdict was 5 minutes old
+      - expr: "(fleet:machine_anomalous:fresh{machine_type=~\".*\"} unless on (machine) (fleet:machine_silent == 1)) == 1"
+        eval_time: 4m45s
+        exp_samples:
+          - {labels: 'fleet:machine_anomalous:fresh{machine="web-01",machine_type="web"}', value: 1}
+          - {labels: 'fleet:machine_anomalous:fresh{machine="db-01",machine_type="db"}', value: 1}
+          - {labels: 'fleet:machine_anomalous:fresh{machine="edge-01",machine_type="edge"}', value: 1}
+          - {labels: 'fleet:machine_anomalous:fresh{machine="app-01",machine_type="app"}', value: 1}
+      - expr: "(fleet:machine_anomalous:fresh{machine_type=~\".*\"} unless on (machine) (fleet:machine_silent == 1)) == 1"
+        eval_time: 4m50s
+        exp_samples:
+          - {labels: 'fleet:machine_anomalous:fresh{machine="web-01",machine_type="web"}', value: 1}
+          - {labels: 'fleet:machine_anomalous:fresh{machine="db-01",machine_type="db"}', value: 1}
+          - {labels: 'fleet:machine_anomalous:fresh{machine="app-01",machine_type="app"}', value: 1}
       # the control panel's History tab (api/app.py, _HISTORY_EXPR): the same machines, from the raw metrics
       - expr: "(max by (machine, machine_type) (api_currently_anomalous{job=\"anomaly-api-pods\"} and on (pod, machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"} == on (machine) group_left () max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}))) and on (machine) (time() - max by (machine) (api_machine_last_seen_timestamp_seconds{job=\"anomaly-api-pods\"}) < 300)) == 1"
         eval_time: 10m
@@ -707,6 +746,7 @@ tests:
         eval_time: 4m
         exp_samples:
           - {labels: '{alertname="AnomalyDetected",severity="info"}', value: 1}
+          - {labels: '{alertname="MachineSilent",severity="info"}', value: 1}
 
   - name: the root-cause spotlight shows only routers named in the last 5 minutes, the chart when
     # one check every 20 s (the production agent). router-03 was named in the first 2 minutes only (6 checks);
@@ -735,7 +775,8 @@ tests:
           - {labels: '{machine="router-08"}', value: 0}
 
   - name: a machine that clears is announced once as back to normal; one that stops reporting is not
-    # m-clear: anomalous for 2 minutes, then normal. m-stale: anomalous, stops reporting at 1 minute.
+    # m-clear: anomalous for 2 minutes, then normal (reports every 15 s). m-stale: anomalous, reports every
+    # 15 s and stops at 1 minute: it misses its reports after 45 s (three intervals), at 1m45s.
     interval: 15s
     input_series:
       - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-clear",machine_type="web"}'
@@ -748,18 +789,41 @@ tests:
         values: '0+15x4 60x42'
     alert_rule_test:
       - eval_time: 1m45s
+        alertname: AnomalyDetected
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: m-clear, machine_type: web}
+            exp_annotations: {summary: "m-clear (web) is anomalous", description: "The served model flagged m-clear on its last readings."}
+          - exp_labels: {severity: info, list: anomalies, machine: m-stale, machine_type: db}
+            exp_annotations: {summary: "m-stale (db) is anomalous", description: "The served model flagged m-stale on its last readings."}
+      - eval_time: 1m45s
         alertname: AnomalyCleared
         exp_alerts: []
+      # m-stale missed its reports: off the anomalous list, listed as not reporting with its last verdict;
+      # it is not "back to normal"
+      - eval_time: 1m50s
+        alertname: AnomalyDetected
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: m-clear, machine_type: web}
+            exp_annotations: {summary: "m-clear (web) is anomalous", description: "The served model flagged m-clear on its last readings."}
+      - eval_time: 1m50s
+        alertname: MachineSilent
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: m-stale, machine_type: db}
+            exp_annotations:
+              summary: "m-stale (db) stopped reporting"
+              silence: "50s"
+              usual: "15s"
+              last_verdict: "anomalous"
+              description: "No report from m-stale for 50s: it has missed its reports."
       # m-clear turned normal at 2m: announced for one minute
       - eval_time: 2m30s
         alertname: AnomalyCleared
         exp_alerts:
-          - exp_labels: {severity: info, machine: m-clear, machine_type: web}
+          - exp_labels: {severity: info, list: anomalies, machine: m-clear, machine_type: web}
             exp_annotations: {summary: "m-clear (web) is back to normal", description: "The served model's latest verdict on m-clear is normal again."}
       - eval_time: 3m30s
         alertname: AnomalyCleared
         exp_alerts: []
-      # m-stale dropped out at 6m (no report for 5 minutes): it leaves the list, it is not "back to normal"
       - eval_time: 6m30s
         alertname: AnomalyCleared
         exp_alerts: []
@@ -770,19 +834,222 @@ tests:
         alertname: FleetNoData
         exp_alerts: []
 
-  - name: no machine reporting for 5 minutes is "no information", not "all clear"
+  - name: no machine reporting on time is "no information", not "all clear"; the first report ends it
+    # web-01 reports every 15 s, stops at 1m (misses its reports after 45 s, at 1m45s) and reports again at 5m
     interval: 15s
     input_series:
       - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="web-01",machine_type="web"}'
         values: '0x40'
       - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="web-01"}'
-        values: '0+15x4 60x36'
+        values: '0+15x4 60x14 300+15x20'
     alert_rule_test:
-      - eval_time: 3m
+      - eval_time: 1m45s
         alertname: FleetNoData
         exp_alerts: []
-      - eval_time: 7m
+      - eval_time: 1m50s
         alertname: FleetNoData
         exp_alerts:
-          - exp_labels: {severity: info}
-            exp_annotations: {summary: "no information about the machines", description: "No machine has reported to the serving pods in the last 5 minutes."}
+          - exp_labels: {severity: info, list: anomalies}
+            exp_annotations: {summary: "no information about the machines", description: "No machine is reporting to the serving pods: every one has missed its reports."}
+      - eval_time: 4m55s
+        alertname: FleetNoData
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies}
+            exp_annotations: {summary: "no information about the machines", description: "No machine is reporting to the serving pods: every one has missed its reports."}
+      - eval_time: 4m55s
+        alertname: MachineReportingAgain
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: FleetNoData
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: MachineReportingAgain
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: web-01, machine_type: web}
+            exp_annotations: {summary: "web-01 (web) is reporting", description: "web-01 reports on time (after missing its reports, or for the first time)."}
+      - eval_time: 6m
+        alertname: MachineReportingAgain
+        exp_alerts: []
+
+  - name: each machine is judged on its own rhythm, and a pause does not stretch it
+    # m30 reports every 30 s and stops at 20m (anomalous): limit 90 s. m60 every 60 s, stops at 20m: limit 180 s.
+    # mnew reported twice (0 and 30 s): its interval is not known, so 15 minutes. mpause reports every 30 s,
+    # pauses from 10m to 15m, resumes, and stops at 25m: missed at 1m30s + 5 s both times (the pause does not
+    # raise its limit). FleetNoData once the last of them (mpause) has missed its reports.
+    interval: 30s
+    input_series:
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m30",machine_type="web"}'
+        values: '1x64'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m30"}'
+        values: '0+30x40 1200x23'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m60",machine_type="db"}'
+        values: '0x64'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m60"}'
+        values: '0 0 60 60 120 120 180 180 240 240 300 300 360 360 420 420 480 480 540 540 600 600 660 660 720 720 780 780 840 840 900 900 960 960 1020 1020 1080 1080 1140 1140 1200 1200x23'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="mnew",machine_type="app"}'
+        values: '0x64'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="mnew"}'
+        values: '0 30x63'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="mpause",machine_type="edge"}'
+        values: '0x64'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="mpause"}'
+        values: '0+30x20 600x8 900+30x20 1500x13'
+    alert_rule_test:
+      # the first minute: each machine announced as reporting (first report)
+      - eval_time: 30s
+        alertname: MachineReportingAgain
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: m30, machine_type: web}
+            exp_annotations: {summary: "m30 (web) is reporting", description: "m30 reports on time (after missing its reports, or for the first time)."}
+          - exp_labels: {severity: info, list: anomalies, machine: m60, machine_type: db}
+            exp_annotations: {summary: "m60 (db) is reporting", description: "m60 reports on time (after missing its reports, or for the first time)."}
+          - exp_labels: {severity: info, list: anomalies, machine: mnew, machine_type: app}
+            exp_annotations: {summary: "mnew (app) is reporting", description: "mnew reports on time (after missing its reports, or for the first time)."}
+          - exp_labels: {severity: info, list: anomalies, machine: mpause, machine_type: edge}
+            exp_annotations: {summary: "mpause (edge) is reporting", description: "mpause reports on time (after missing its reports, or for the first time)."}
+      - eval_time: 1m30s
+        alertname: MachineReportingAgain
+        exp_alerts: []
+      # mpause pauses at 10m: missed after 90 s
+      - eval_time: 11m25s
+        alertname: MachineSilent
+        exp_alerts: []
+      - eval_time: 11m35s
+        alertname: MachineSilent
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: mpause, machine_type: edge}
+            exp_annotations:
+              summary: "mpause (edge) stopped reporting"
+              silence: "1m 35s"
+              usual: "30s"
+              last_verdict: "normal"
+              description: "No report from mpause for 1m 35s: it has missed its reports."
+      # mpause reports again at 15m: announced for one minute
+      - eval_time: 15m
+        alertname: MachineReportingAgain
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: mpause, machine_type: edge}
+            exp_annotations: {summary: "mpause (edge) is reporting", description: "mpause reports on time (after missing its reports, or for the first time)."}
+      - eval_time: 15m
+        alertname: MachineSilent
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: MachineReportingAgain
+        exp_alerts: []
+      # mnew: 15 minutes after its last report (its interval is not known)
+      - eval_time: 15m30s
+        alertname: MachineSilent
+        exp_alerts: []
+      - eval_time: 15m35s
+        alertname: MachineSilent
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: mnew, machine_type: app}
+            exp_annotations:
+              summary: "mnew (app) stopped reporting"
+              silence: "15m 5s"
+              usual: ""
+              last_verdict: "normal"
+              description: "No report from mnew for 15m 5s: it has missed its reports."
+      # m30 stops at 20m while anomalous: listed as not reporting with its last verdict, off the anomalous list,
+      # and not announced as back to normal
+      - eval_time: 21m25s
+        alertname: AnomalyDetected
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: m30, machine_type: web}
+            exp_annotations: {summary: "m30 (web) is anomalous", description: "The served model flagged m30 on its last readings."}
+      - eval_time: 21m35s
+        alertname: AnomalyDetected
+        exp_alerts: []
+      - eval_time: 21m35s
+        alertname: AnomalyCleared
+        exp_alerts: []
+      - eval_time: 21m35s
+        alertname: MachineSilent
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: m30, machine_type: web}
+            exp_annotations:
+              summary: "m30 (web) stopped reporting"
+              silence: "1m 35s"
+              usual: "30s"
+              last_verdict: "anomalous"
+              description: "No report from m30 for 1m 35s: it has missed its reports."
+          - exp_labels: {severity: info, list: anomalies, machine: mnew, machine_type: app}
+            exp_annotations:
+              summary: "mnew (app) stopped reporting"
+              silence: "21m 5s"
+              usual: ""
+              last_verdict: "normal"
+              description: "No report from mnew for 21m 5s: it has missed its reports."
+      # m60 stops at 20m too, but its limit is 180 s
+      - eval_time: 22m55s
+        alertname: MachineSilent
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: m30, machine_type: web}
+            exp_annotations:
+              summary: "m30 (web) stopped reporting"
+              silence: "2m 55s"
+              usual: "30s"
+              last_verdict: "anomalous"
+              description: "No report from m30 for 2m 55s: it has missed its reports."
+          - exp_labels: {severity: info, list: anomalies, machine: mnew, machine_type: app}
+            exp_annotations:
+              summary: "mnew (app) stopped reporting"
+              silence: "22m 25s"
+              usual: ""
+              last_verdict: "normal"
+              description: "No report from mnew for 22m 25s: it has missed its reports."
+      - eval_time: 23m5s
+        alertname: MachineSilent
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: m30, machine_type: web}
+            exp_annotations:
+              summary: "m30 (web) stopped reporting"
+              silence: "3m 5s"
+              usual: "30s"
+              last_verdict: "anomalous"
+              description: "No report from m30 for 3m 5s: it has missed its reports."
+          - exp_labels: {severity: info, list: anomalies, machine: m60, machine_type: db}
+            exp_annotations:
+              summary: "m60 (db) stopped reporting"
+              silence: "3m 5s"
+              usual: "1m 0s"
+              last_verdict: "normal"
+              description: "No report from m60 for 3m 5s: it has missed its reports."
+          - exp_labels: {severity: info, list: anomalies, machine: mnew, machine_type: app}
+            exp_annotations:
+              summary: "mnew (app) stopped reporting"
+              silence: "22m 35s"
+              usual: ""
+              last_verdict: "normal"
+              description: "No report from mnew for 22m 35s: it has missed its reports."
+      # mpause stops at 25m: same 90 s limit as before its pause; then no machine reports
+      - eval_time: 26m25s
+        alertname: FleetNoData
+        exp_alerts: []
+      - eval_time: 26m35s
+        alertname: FleetNoData
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies}
+            exp_annotations: {summary: "no information about the machines", description: "No machine is reporting to the serving pods: every one has missed its reports."}
+
+  - name: a machine that reports every 5 s is given at least 30 s (the scrape and the evaluation take up to 10 s)
+    interval: 5s
+    input_series:
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m5",machine_type="web"}'
+        values: '0x48'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m5"}'
+        values: '0+5x24 120x23'
+    alert_rule_test:
+      - eval_time: 2m30s
+        alertname: MachineSilent
+        exp_alerts: []
+      - eval_time: 2m35s
+        alertname: MachineSilent
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: m5, machine_type: web}
+            exp_annotations:
+              summary: "m5 (web) stopped reporting"
+              silence: "35s"
+              usual: "5s"
+              last_verdict: "normal"
+              description: "No report from m5 for 35s: it has missed its reports."

@@ -16,7 +16,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 import api.app as app_module  # noqa: E402
 
 CREDS = ("al-test-user", "al-test-password-0123456789")
-ANOMALIES = [{"name": "alertname", "value": "AnomalyDetected", "isRegex": False, "isEqual": True}]
+ANOMALIES = [{"name": "list", "value": "anomalies", "isRegex": False, "isEqual": True}]
+LEGACY_ANOMALIES = [{"name": "alertname", "value": "AnomalyDetected", "isRegex": False, "isEqual": True}]
 EVERYTHING = [{"name": "alertname", "value": ".+", "isRegex": True, "isEqual": True}]
 
 
@@ -105,6 +106,25 @@ def test_unmute_expires_only_the_panels_silences_for_that_scope(client, am):
     assert r.status_code == 200 and r.json() == {"expired": 2}
     deleted = [p for m, p, _ in am.calls if m == "DELETE"]
     assert deleted == ["/api/v2/silence/a1", "/api/v2/silence/a2"]
+
+
+def test_a_mute_made_before_the_list_label_is_still_shown_and_can_be_unmuted(client, am):
+    am.answers[("GET", "/api/v2/silences")] = [_silence("old-1", LEGACY_ANOMALIES)]
+    assert client.get("/ui/alerting", auth=CREDS).json()["muted"]["anomalies"]["ids"] == ["old-1"]
+    assert client.post("/ui/alerting/unmute", auth=CREDS, json={"scope": "anomalies"}).json() == {"expired": 1}
+    assert [p for m, p, _ in am.calls if m == "DELETE"] == ["/api/v2/silence/old-1"]
+
+
+def test_the_anomaly_mute_covers_every_alert_of_the_telegram_list():
+    import yaml
+    rules = yaml.safe_load((ROOT / "monitoring" / "alerting" / "alert_rules.yml").read_text())
+    am = yaml.safe_load((ROOT / "monitoring" / "alerting" / "alertmanager.yml.tmpl").read_text())
+    route = next(r for r in am["route"]["routes"] if r["receiver"] == "telegram-anomalies")
+    (m,) = app_module._SILENCE_SCOPES["anomalies"]["matchers"]
+    assert route["matchers"] == [f'{m["name"]}="{m["value"]}"']           # the mute matches what the route sends
+    listed = {r["alert"] for g in rules["groups"] for r in g["rules"]
+              if (r.get("labels") or {}).get(m["name"]) == m["value"]}
+    assert listed == {"AnomalyDetected", "AnomalyCleared", "MachineSilent", "MachineReportingAgain", "FleetNoData"}
 
 
 def test_alertmanager_down_is_a_502_not_a_crash(client, am):

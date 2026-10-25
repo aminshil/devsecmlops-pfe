@@ -54,7 +54,8 @@ Each entry says what was taken from it. The README cites the same sources where 
 
 14. Prometheus, *Alerting rules*: `for`, labels and annotations, and the `ALERTS` series used by the
     Grafana panel "Alerts firing now". https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/
-15. Prometheus, *Recording rules*: `fleet:machine_anomalous:fresh` and `fleet:anomalous_machines:count`.
+15. Prometheus, *Recording rules*: `fleet:machine_anomalous:fresh`, `fleet:anomalous_machines:count`, and the
+    rules that measure each machine's reporting interval and silence (`fleet:machine_silent` and the others).
     https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/
 16. Prometheus, *Unit testing for rules*: `promtool test rules`, `alert_rule_test` and `promql_expr_test`,
     the format of `monitoring/alerting/alert_rules_test.yml`.
@@ -62,10 +63,12 @@ Each entry says what was taken from it. The README cites the same sources where 
 17. Prometheus, *Operators*: binary operator precedence (`==` binds tighter than `and`), the cause of the
     History-tab bug found against a real Prometheus. https://prometheus.io/docs/prometheus/latest/querying/operators/
 18. Prometheus, *Functions*: `increase()` (extrapolation, counter resets; why the root-cause spotlight shows
-    at most 14), `max_over_time()`, `label_replace()`. https://prometheus.io/docs/prometheus/latest/querying/functions/
+    at most 14), `max_over_time()`, `label_replace()`; `changes()`, `min_over_time()`, `last_over_time()`,
+    `clamp_min()` and `absent()` (a machine's reporting interval, its silence, and `FleetNoData`). https://prometheus.io/docs/prometheus/latest/querying/functions/
 19. Prometheus, *HTTP API*: range queries and the limit of 11,000 points per series (the History tab's
     step). https://prometheus.io/docs/prometheus/latest/querying/api/
-20. Prometheus, *Querying basics*: staleness and the 5-minute lookback.
+20. Prometheus, *Querying basics*: staleness and the 5-minute lookback; the `offset` modifier (a machine not
+    known a minute ago, in `MachineReportingAgain`).
     https://prometheus.io/docs/prometheus/latest/querying/basics/
 21. Prometheus, *Alertmanager configuration* (0.28): routes, `group_wait`, `group_interval`,
     `repeat_interval`, `inhibit_rules`, `telegram_configs` with `bot_token_file`.
@@ -240,3 +243,9 @@ measurements are the evidence that it works as configured; these pages define wh
 86. Alertmanager source, `notify/notify.go` (`DedupStage`): a group is notified again when its firing set gains an
     alert, or, with `send_resolved: true`, when its resolved set changes; why the list ignores resolved alerts.
     https://github.com/prometheus/alertmanager/blob/main/notify/notify.go
+
+**Machines that miss their reports** (25 October)
+
+87. Prometheus, *Template reference*: `query`, `first`, `value` and `humanizeDuration` in alert annotations
+    (`MachineSilent` gives each machine's usual interval and last verdict).
+    https://prometheus.io/docs/visualization/template_reference/
