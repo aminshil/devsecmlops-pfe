@@ -491,7 +491,7 @@
         "x": 0,
         "y": 41
       },
-      "description": "The same machines as the Telegram anomaly list: every machine whose latest verdict is anomalous, from the pod that served it last, among machines that reported in the last 5 minutes (fleet:machine_anomalous:fresh). A machine leaves the list on its first normal verdict. Its row count is the curve above. The Telegram message is a snapshot from up to 20 seconds before it arrived; this panel refreshes every 30 seconds.",
+      "description": "The same machines as the Telegram anomaly list: every machine whose latest verdict is anomalous, from the pod that served it last, among machines that reported in the last 5 minutes (fleet:machine_anomalous:fresh). A machine leaves the list on its first normal verdict. Its row count is the curve above. The Telegram message is sent within 5 seconds of a change; this panel refreshes every 30 seconds.",
       "targets": [
         {
           "datasource": {

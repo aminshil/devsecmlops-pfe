@@ -12,11 +12,19 @@ DevSecMLOps · Alertmanager :9093
      the last minute; the machines that just cleared follow. At most 60 + 15 lines, so the message stays
      under Telegram's 4096-character limit even in a fleet-wide incident. Needs Alertmanager >= 0.28. */}}
 {{ define "devsecmlops.anomalies" -}}
-{{ if .Alerts.Firing }}📋 <b>Anomalies</b> · {{ len .Alerts.Firing }} machine(s) anomalous now{{ else }}✅ <b>Anomalies</b> · all clear{{ end }}
-{{ range $i, $a := .Alerts.Firing }}{{ if lt $i 60 }}{{ if lt (since $a.StartsAt).Seconds 60.0 }}🆕 <b>+ {{ $a.Labels.machine }}</b> ({{ $a.Labels.machine_type }}) · new
-{{ else }}• {{ $a.Labels.machine }} ({{ $a.Labels.machine_type }}) · {{ humanizeDuration (since $a.StartsAt).Seconds }}
-{{ end }}{{ end }}{{ end }}{{ if gt (len .Alerts.Firing) 60 }}… 60 of {{ len .Alerts.Firing }} listed
-{{ end }}{{ range $i, $a := .Alerts.Resolved }}{{ if lt $i 15 }}✅ − {{ $a.Labels.machine }} ({{ $a.Labels.machine_type }}) back to normal
-{{ end }}{{ end }}{{ if gt (len .Alerts.Resolved) 15 }}… 15 of {{ len .Alerts.Resolved }} back to normal listed
+{{- /* counts are kept as strings of "x" (Alertmanager templates have no arithmetic) */ -}}
+{{- $nodata := false }}{{ $n := "" }}{{ range .Alerts.Firing }}{{ if eq .Labels.alertname "FleetNoData" }}{{ $nodata = true }}{{ end }}{{ if eq .Labels.alertname "AnomalyDetected" }}{{ $n = print $n "x" }}{{ end }}{{ end -}}
+{{ if $nodata }}⚪ <b>Anomalies</b> · no information: no machine has reported in the last 5 minutes
+{{ else if $n }}📋 <b>Anomalies</b> · {{ len $n }} machine(s) anomalous now
+{{ else }}✅ <b>Anomalies</b> · all clear
+{{ end -}}
+{{ $shown := "" }}{{ range .Alerts.Firing }}{{ if and (eq .Labels.alertname "AnomalyDetected") (lt (len $shown) 60) }}{{ $shown = print $shown "x" }}{{ if lt (since .StartsAt).Seconds 60.0 }}🆕 <b>+ {{ .Labels.machine }}</b> ({{ .Labels.machine_type }}) · new
+{{ else }}• {{ .Labels.machine }} ({{ .Labels.machine_type }}) · {{ humanizeDuration (since .StartsAt).Seconds }}
+{{ end }}{{ end }}{{ end -}}
+{{ if gt (len $n) 60 }}… 60 of {{ len $n }} listed
+{{ end -}}
+{{ $c := "" }}{{ range .Alerts.Firing }}{{ if and (eq .Labels.alertname "AnomalyCleared") (lt (since .StartsAt).Seconds 20.0) }}{{ if lt (len $c) 15 }}✅ − {{ .Labels.machine }} ({{ .Labels.machine_type }}) back to normal
+{{ end }}{{ $c = print $c "x" }}{{ end }}{{ end -}}
+{{ if gt (len $c) 15 }}… 15 of {{ len $c }} back to normal listed
 {{ end }}DevSecMLOps · Alertmanager :9093
 {{- end }}

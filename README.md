@@ -47,7 +47,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7731** · precision 0.7166 · recall 0.8391. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on 25 October against the served 21 October model (image `2.20.3-b116`); the 19 October model scored 0.7755 on the same sample | `scripts/live_k8s_validation.py`, run on 25 October; output in `models/results/live_validation_20261025_b116.json` |
 | Latest green pipeline | Build `2.20.3-b116` (commit `c416cb99`, 25 October: the Notifications card, the History tab with episode details, the label store's machine and time, mlflow 3.17.2): all 11 stages green, 223 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS). Before it: b112 (`aaf947ff`, the external-review fixes, 188 tests) | [L3 run history](#l3--cicd) |
 | Tests | 223 passing, in 21 files, all run by build b116 (b112 ran 188; the 35 added since check the alerting configuration, the dashboard queries, and the panel's Notifications card and History tab) | `pytest tests/` (stage 1b) |
-| Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, persistent, fleet surge), any layer down, pods, Kubernetes, traffic stopped, disk and memory. 15 rules unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
+| Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, cleared, persistent, fleet surge, no data), any layer down, pods, Kubernetes, traffic stopped, disk and memory. 17 rules unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
 | Dashboard | 27 Grafana panels in 6 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-21: the model promoted by Jenkins `devsecmlops-model` build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, model files read back from MinIO, committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); the current image `2.20.3-b112` carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
 | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
@@ -1790,7 +1790,7 @@ named in every check.
 
 #### Alerting: Prometheus rules → Alertmanager → Telegram
 
-Prometheus evaluates the rules in `monitoring/alerting/alert_rules.yml` every 15 seconds; Alertmanager
+Prometheus evaluates the rules in `monitoring/alerting/alert_rules.yml` every 5 seconds; Alertmanager
 (`:9093`) groups the alerts and sends them to a Telegram chat. The decision is never made by the
 application: the serving pods only expose their verdicts, and alerts keep firing whether or not
 anyone has the control panel open, including when the panel itself is down.
@@ -1798,6 +1798,8 @@ anyone has the control panel open, including when the panel itself is down.
 | Alert | Fires when | Severity |
 |---|---|---|
 | `AnomalyDetected` | a machine's latest verdict is anomalous; it resolves on the first normal verdict (no hold); delivered as one running list (below) | info |
+| `AnomalyCleared` | for one minute after a machine's verdict turns normal: the "back to normal" line of the list (an alert of its own, so a clear is announced once) | info |
+| `FleetNoData` | no machine has reported in the last 5 minutes: the list says "no information" instead of "all clear" | info |
 | `AnomalyPersistent` | a machine is anomalous for 10 minutes | warning |
 | `FleetAnomalySurge` | at least 20 machines anomalous at once, and more than twice the 6-hour average, for 2 min | critical |
 | `LayerDown` | a platform layer fails two HTTP probes in a row (every 5 s, so 10 s): Docker registry, Jenkins, SonarQube, MLflow, MinIO, Grafana, the cluster NodePort; one message per layer | critical |
@@ -1810,20 +1812,27 @@ anyone has the control panel open, including when the panel itself is down.
 
 The anomaly alerts read the same state as the Fleet tab: each machine's verdict from the replica that
 served it last, and only for machines that reported in the last 5 minutes, so a stale replica or a
-machine that went silent does not alert. Machine anomalies arrive as **one running list**, re-sent
-within 20 seconds whenever it changes: every machine anomalous now, alphabetical, with how long each has
-been anomalous; `🆕 +` marks a machine that turned anomalous in the last minute, and `✅ −` the machines
-back to normal since the previous message. A machine leaves the list on its first normal verdict (there
-is no hold), so a verdict flickering around the threshold comes and goes with it; Alertmanager still
-sends at most one message per 20 seconds. The list is capped at 60 machines and 15 back-to-normal lines,
-with a "… 60 of N listed" line when it is cut, so the message stays under Telegram's 4096-character
-limit in a fleet-wide incident (checked end to end with the real Alertmanager and a stand-in Telegram:
-99 anomalous plus 40 back to normal gives 2,510 characters). The Grafana table "Anomalous machines now
+machine that went silent does not alert. Machine anomalies arrive as **one running list**, sent
+within 5 seconds of every change: every machine anomalous now, alphabetical, with how long each has
+been anomalous; `🆕 +` marks a machine that turned anomalous in the last minute, and `✅ −` a machine
+whose verdict just turned normal. A machine leaves the list on its first normal verdict (there is no
+hold), so a verdict flickering around the threshold comes and goes with it. "Back to normal" is an alert
+of its own (`AnomalyCleared`), and the anomaly receiver ignores Alertmanager's resolved alerts
+(`send_resolved: false`): Prometheus re-sends a resolved alert every minute for 15 minutes, and while the
+list used resolved alerts each re-send started a new message naming the same machines again (seen live
+on 25 October, an unchanged list re-sent every 20 seconds, and reproduced with the real Alertmanager).
+Now a message goes out only when the set of firing alerts gains something: a new anomaly, a fresh clear,
+or `FleetNoData`; re-sends and an expiring clear send nothing (checked end to end with the real
+Alertmanager: three changes gave three messages and 75 seconds of re-sends gave none). When no machine
+reports at all, the list says **"no information"** instead of "all clear". The list is capped at 60
+machines and 15 back-to-normal lines, with a "… 60 of N listed" line when it is cut, so the message stays
+under Telegram's 4096-character limit in a fleet-wide incident (checked end to end with the real
+Alertmanager and a stand-in Telegram: 99 anomalous plus 40 back to normal gives 2,450 characters). The Grafana table "Anomalous machines now
 (the Telegram list)" and the "Anomalous machines over time" curve show the same machines; a promtool
 test runs both dashboard queries against the alert on the same data. (Before this, the dashboard table
 used its own query, which also counted machines that had stopped reporting.) Each failing layer is its own message. Per-pod alerts are held back while the Kubernetes API itself is
-down. The list is re-sent about 50 times an hour (the fleet starts and ends about 25 anomaly episodes an
-hour); it can be muted on its own without muting the down alerts (below). The list
+down. Every change is a message (at most one every 5 seconds), so a busy fleet sends many; the list can be
+muted on its own without muting the down alerts (below). The list
 needs Alertmanager 0.28 or later (`since`, `humanizeDuration` in templates); the image is pinned to
 `prom/alertmanager:v0.28.1`.
 
@@ -1842,9 +1851,11 @@ made them active again.
 Alertmanager sends critical alerts and anomalies 1 second after they fire. A stopped layer reaches the
 phone in about 15 seconds (two failed probes, then delivery); a single failed probe does not page (unit
 test: "a layer down is alerted within 25 seconds, and a single failed probe is not"). An anomaly arrives
-in the list about 20 to 40 seconds after the reading (pods scraped every 15 s, list updated every
-20 s), and leaves it as fast; unit tests check that a machine is listed on its first anomalous verdict,
-removed on its first normal one, and listed again when it flips back. Warnings are
+in the list about 5 to 15 seconds after the reading (pods scraped every 5 s, rules every 5 s, the list
+sent within 5 s), and leaves it as fast; unit tests check that a machine is listed on its first anomalous
+verdict, removed on its first normal one and listed again when it flips back, that a clear is announced
+for one minute only, that a machine that stops reporting is not announced as back to normal, and that no
+machine reporting gives "no information". Warnings are
 sent 30 seconds after firing. The waits are set from how often each signal arrives (pod readiness waits 2 minutes so
 that a normal rollout does not page).
 
@@ -1869,8 +1880,9 @@ sends a test alert. `sudo bash scripts/setup_alerting.sh --test` sends only the 
 **Limits.** Prometheus cannot alert about itself: if it stops, nothing fires (the Status tab still
 shows it). For about a minute after Alertmanager restarts the anomaly list is incomplete: Alertmanager
 does not keep alerts across a restart, and Prometheus re-sends each firing alert once a minute. A
-machine that stops reporting while anomalous leaves the list 5 minutes later as "back to normal"; a
-wider stop is reported by `PredictionsStopped` and `ServingPodNotScraped`. Notifications need the VM's internet access to reach Telegram. The containers are started by
+machine that stops reporting while anomalous leaves the list 5 minutes later, quietly and without a
+"back to normal" line; when every machine has stopped, the list says "no information" (`FleetNoData`),
+and a wider stop is also reported by `PredictionsStopped` and `ServingPodNotScraped`. Notifications need the VM's internet access to reach Telegram. The containers are started by
 the setup script, not yet by the Ansible playbook. The router-level reasoning of the Fleet tab
 (suspected gray failure) is not an alert; `FleetAnomalySurge` covers the many-machines-at-once case.
 
@@ -3001,7 +3013,7 @@ python monitoring/k8s_exporter.py &
 |---|---|
 | `docs/TROUBLESHOOTING.md` | A runbook written from real incidents: Docker networking staleness, Minikube API timeouts, a rejected retrain (the guardrail working as intended), MLflow service checks, browser-vs-VM connectivity, Jenkins pytest/venv failures. Corrected in this pass: it referenced the deleted `retrain_from_feedback.py` and told operators to hand-launch MLflow with hardcoded MinIO credentials. |
 | `docs/MINIKUBE_RELIABILITY.md` | Why the cluster was unreachable after a reboot (Jenkins taking the node's fixed address, no autostart, missing `--force`), the permanent fix, and how to verify it |
-| `docs/SOURCES.md` | Every external source the project took information from (84), grouped by what it informed: network failures and root cause, the SMD benchmark, alerting and monitoring, the CI quality and security gates, assets, the report's Chapter 1 bibliography, and the reference documentation for each layer (L0–L6). |
+| `docs/SOURCES.md` | Every external source the project took information from (86), grouped by what it informed: network failures and root cause, the SMD benchmark, alerting and monitoring, the CI quality and security gates, assets, the report's Chapter 1 bibliography, and the reference documentation for each layer (L0–L6). |
 | `docs/INFRASTRUCTURE_SETUP.md` | Rebuilding the whole platform on a blank Ubuntu machine, step by step, with expected outputs. Brought up for real on the original VM only, not yet on a clean second machine; its status table says which steps are proven. |
 | `docs/DEMO_SCRIPT.md` | The defense demo, step by step: what to show, what to say, and which steps were proven in a real log versus to rehearse. |
 | `docs/fleet_status.svg` | A fleet snapshot drawn by `scripts/fleet_status.py` (by default the worst moment of the fleet, routers and their dependents). |

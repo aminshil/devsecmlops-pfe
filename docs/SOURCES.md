@@ -231,3 +231,12 @@ measurements are the evidence that it works as configured; these pages define wh
     `docker save | docker exec -i minikube docker load`. https://github.com/kubernetes/minikube/issues/16293
 84. kubernetes/minikube issue #15260: the same nested-container access problem.
     https://github.com/kubernetes/minikube/issues/15260
+
+**Alerting behaviour behind the anomaly list's design** (reproduced with the real Alertmanager on 25 October)
+
+85. Prometheus source, `rules/alerting.go`: a resolved alert is kept and re-sent to Alertmanager for 15 minutes
+    (`resolvedRetention`), every `--rules.alert.resend-delay` (1 minute by default).
+    https://github.com/prometheus/prometheus/blob/main/rules/alerting.go
+86. Alertmanager source, `notify/notify.go` (`DedupStage`): a group is notified again when its firing set gains an
+    alert, or, with `send_resolved: true`, when its resolved set changes; why the list ignores resolved alerts.
+    https://github.com/prometheus/alertmanager/blob/main/notify/notify.go

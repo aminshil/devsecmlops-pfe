@@ -37,6 +37,30 @@ groups:
           summary: "{{ $labels.machine }} ({{ $labels.machine_type }}) is anomalous"
           description: "The served model flagged {{ $labels.machine }} on its last readings."
 
+      - alert: AnomalyCleared
+        # the "back to normal" line of the Telegram list: fires for one minute after a machine's verdict
+        # turns normal. A firing alert of its own (not Alertmanager's resolved alerts, which Prometheus
+        # keeps re-sending for 15 minutes) so a clear is announced once. A machine that stops reporting
+        # has no verdict at all and is not announced as back to normal.
+        expr: |
+          (fleet:machine_anomalous:fresh == 0)
+          and on (machine) (max_over_time(fleet:machine_anomalous:fresh[1m]) == 1)
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.machine }} ({{ $labels.machine_type }}) is back to normal"
+          description: "The served model's latest verdict on {{ $labels.machine }} is normal again."
+
+      - alert: FleetNoData
+        # no machine reported in the last 5 minutes (the traffic agent or the serving path stopped):
+        # the Telegram list says "no information" instead of "all clear"
+        expr: absent(fleet:machine_anomalous:fresh)
+        labels:
+          severity: info
+        annotations:
+          summary: "no information about the machines"
+          description: "No machine has reported to the serving pods in the last 5 minutes."
+
       - alert: AnomalyPersistent
         # an episode, not a blip: anomalous on every reading for 10 minutes
         expr: fleet:machine_anomalous:fresh == 1

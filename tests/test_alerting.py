@@ -32,7 +32,8 @@ def test_prometheus_loads_the_rules_and_sends_to_alertmanager():
     for route in tmpl["route"]["routes"]:
         for m in route["matchers"]:
             label, value = m.split("=", 1)[0], m.split('"')[1]
-            assert value in known[label], m   # a route must not point at an alert or severity that does not exist
+            for v in value.split("|"):          # alertname=~"A|B|C" names each alert
+                assert v in known[label], m     # a route must not point at an alert or severity that does not exist
 
 
 def test_every_metric_in_the_rules_is_exported_by_this_project():

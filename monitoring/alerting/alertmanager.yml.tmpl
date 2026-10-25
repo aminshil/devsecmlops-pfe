@@ -14,13 +14,15 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
-    # one running list of every anomalous machine, re-sent within 20 s whenever it changes
-    # (a machine turns anomalous: marked new; a machine clears: listed as cleared)
-    - matchers: ['alertname="AnomalyDetected"']
+    # one running list of every anomalous machine, sent within 5 s of every change: a machine turns
+    # anomalous (AnomalyDetected, marked new), a machine clears (AnomalyCleared, "back to normal"), or
+    # no machine reports any more (FleetNoData, "no information"). The receiver ignores resolved alerts
+    # (send_resolved: false), so Prometheus re-sending them for 15 minutes cannot trigger a message.
+    - matchers: ['alertname=~"AnomalyDetected|AnomalyCleared|FleetNoData"']
       receiver: telegram-anomalies
-      group_by: [alertname]
+      group_by: [severity]
       group_wait: 1s
-      group_interval: 20s
+      group_interval: 5s
       repeat_interval: 6h
     # something is down: one message per failing layer or target, sent at once
     - matchers: ['severity="critical"']
@@ -49,4 +51,4 @@ receivers:
         chat_id: __TELEGRAM_CHAT_ID__
         parse_mode: HTML
         message: '{{ template "devsecmlops.anomalies" . }}'
-        send_resolved: true
+        send_resolved: false

@@ -733,3 +733,56 @@ tests:
         exp_samples:
           - {labels: '{machine="router-03"}', value: 3}
           - {labels: '{machine="router-08"}', value: 0}
+
+  - name: a machine that clears is announced once as back to normal; one that stops reporting is not
+    # m-clear: anomalous for 2 minutes, then normal. m-stale: anomalous, stops reporting at 1 minute.
+    interval: 15s
+    input_series:
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-clear",machine_type="web"}'
+        values: '1x7 0x40'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-clear"}'
+        values: '0+15x47'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-stale",machine_type="db"}'
+        values: '1x47'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-stale"}'
+        values: '0+15x4 60x42'
+    alert_rule_test:
+      - eval_time: 1m45s
+        alertname: AnomalyCleared
+        exp_alerts: []
+      # m-clear turned normal at 2m: announced for one minute
+      - eval_time: 2m30s
+        alertname: AnomalyCleared
+        exp_alerts:
+          - exp_labels: {severity: info, machine: m-clear, machine_type: web}
+            exp_annotations: {summary: "m-clear (web) is back to normal", description: "The served model's latest verdict on m-clear is normal again."}
+      - eval_time: 3m30s
+        alertname: AnomalyCleared
+        exp_alerts: []
+      # m-stale dropped out at 6m (no report for 5 minutes): it leaves the list, it is not "back to normal"
+      - eval_time: 6m30s
+        alertname: AnomalyCleared
+        exp_alerts: []
+      - eval_time: 6m30s
+        alertname: AnomalyDetected
+        exp_alerts: []
+      - eval_time: 6m30s
+        alertname: FleetNoData
+        exp_alerts: []
+
+  - name: no machine reporting for 5 minutes is "no information", not "all clear"
+    interval: 15s
+    input_series:
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="web-01",machine_type="web"}'
+        values: '0x40'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="web-01"}'
+        values: '0+15x4 60x36'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: FleetNoData
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: FleetNoData
+        exp_alerts:
+          - exp_labels: {severity: info}
+            exp_annotations: {summary: "no information about the machines", description: "No machine has reported to the serving pods in the last 5 minutes."}

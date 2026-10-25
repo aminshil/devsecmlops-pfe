@@ -2330,7 +2330,7 @@ def _prom_range(expr: str, start: float, end: float, step: int, timeout: int = 3
 
 
 def _history_step(hours: int) -> int:
-    """Smallest multiple of 15 s (the pods' scrape interval) that keeps every series under the point limit."""
+    """Smallest multiple of 15 s that keeps every series under the point limit."""
     return 15 * math.ceil(hours * 3600 / 15 / _HISTORY_MAX_POINTS)
 
 
