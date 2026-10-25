@@ -1,0 +1,114 @@
+# Sources
+
+Every external source this project took information from, grouped by what it informed. Nothing else in
+the repository comes from outside: every dataset is simulated by `ml-model/generate_telecom_fleet.py`
+(except the public SMD benchmark below), and every number in the README is the output of a script in
+this repository, run on that data.
+
+Each entry says what was taken from it. The README cites the same sources where they are used; section
+9c keeps its own numbered list for the failure model.
+
+## 1. Network failures, gray failure and root cause (failure model v3, Fleet tab, README 9c)
+
+1. P. Gill, N. Jain, N. Nagappan, *Understanding Network Failures in Data Centers: Measurement, Analysis,
+   and Implications*, ACM SIGCOMM 2011. Failure rates per device type, durations, traffic during failures,
+   redundancy effectiveness. https://people.cs.umass.edu/~phillipa/papers/comm235-gill.pdf
+2. P. Huang et al., *Gray Failure: The Achilles' Heel of Cloud-Scale Systems*, HotOS 2017. Differential
+   observability, silent packet drops.
+   https://www.microsoft.com/en-us/research/publication/gray-failure-achilles-heel-cloud-scale-systems/
+   (summary used: https://blog.acolyer.org/2017/06/15/gray-failure-the-achilles-heel-of-cloud-scale-systems/)
+3. B. Arzani et al., *007: Democratically Finding the Cause of Packet Drops*, USENIX NSDI 2018. Silent drops
+   invisible to SNMP; host TCP retransmissions as the signal. https://arxiv.org/pdf/1802.07222
+4. M. Mathis, J. Semke, J. Mahdavi, T. Ott, *The Macroscopic Behavior of the TCP Congestion Avoidance
+   Algorithm*, ACM SIGCOMM CCR 1997. TCP throughput proportional to 1/√p.
+   https://courses.cs.duke.edu/fall24/compsci514/readings/mathis-tcpmodel-ccr97.pdf
+5. J. Meza et al., *A Large Scale Study of Data Center Network Reliability*, ACM IMC 2018. Rack-switch
+   incidents, single switch per rack, root-cause categories.
+   https://conferences.sigcomm.org/imc/2018/papers/imc18-final179.pdf
+6. Nagios, *Parent/child host relationships and network reachability*. UNREACHABLE vs DOWN, notification
+   suppression. https://support.nagios.com/kb/print-904.html
+7. Grafana Labs, *Handle connectivity errors in alerts*. `up == 0`, missing data.
+   https://grafana.com/docs/grafana/v12.4/alerting/guides/connectivity-errors/
+8. B. Beyer, C. Jones, J. Petoff, N. R. Murphy (eds.), *Site Reliability Engineering*, O'Reilly 2016,
+   ch. 22 "Addressing Cascading Failures". https://sre.google/sre-book/addressing-cascading-failures/
+9. B. Gregg, *Linux Load Averages: Solving the Mystery*, 2017. What the load average counts.
+   https://www.brendangregg.com/blog/2017-08-08/linux-load-averages.html
+10. L. Pham et al., *RCAEval: A Benchmark for Root Cause Analysis of Microservice Systems with Telemetry
+    Data*, 2024. Fault injection and root-cause labelling. https://arxiv.org/html/2412.17015v1
+11. OneUptime, *Which Network Metrics Catch Host Problems? Drops, Errors, and Saturation*, 2026.
+    `node_netstat_Tcp_RetransSegs` and the retransmission ratio.
+    https://oneuptime.com/blog/post/2026-07-31-host-network-metrics-drops-errors-retransmits-saturation/markdown
+12. Facebook Engineering, *More details about the October 4 outage*, 2021. Maintenance command, backbone
+    down, DNS withdrawal (the pattern listed under future work).
+    https://engineering.fb.com/2021/10/05/networking-traffic/outage-details/
+
+## 2. Real-data validation (README L0, SMD)
+
+13. Y. Su, Y. Zhao, C. Niu, R. Liu, W. Sun, D. Pei, *Robust Anomaly Detection for Multivariate Time Series
+    through Stochastic Recurrent Neural Network* (OmniAnomaly), ACM KDD 2019. The Server Machine Dataset
+    (28 servers) used by `ml-model/load_smd.py`, the point-adjusted F1 convention, and the published
+    results the README compares against. https://doi.org/10.1145/3292500.3330672 ; dataset and code:
+    https://github.com/NetManAIOps/OmniAnomaly
+
+## 3. Alerting, monitoring and the control panel's History tab (README L5)
+
+14. Prometheus, *Alerting rules*: `for`, labels and annotations, and the `ALERTS` series used by the
+    Grafana panel "Alerts firing now". https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/
+15. Prometheus, *Recording rules*: `fleet:machine_anomalous:fresh` and `fleet:anomalous_machines:count`.
+    https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/
+16. Prometheus, *Unit testing for rules*: `promtool test rules`, `alert_rule_test` and `promql_expr_test`,
+    the format of `monitoring/alerting/alert_rules_test.yml`.
+    https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/
+17. Prometheus, *Operators*: binary operator precedence (`==` binds tighter than `and`), the cause of the
+    History-tab bug found against a real Prometheus. https://prometheus.io/docs/prometheus/latest/querying/operators/
+18. Prometheus, *Functions*: `increase()` (extrapolation, counter resets; why the root-cause spotlight shows
+    at most 14), `max_over_time()`, `label_replace()`. https://prometheus.io/docs/prometheus/latest/querying/functions/
+19. Prometheus, *HTTP API*: range queries and the limit of 11,000 points per series (the History tab's
+    step). https://prometheus.io/docs/prometheus/latest/querying/api/
+20. Prometheus, *Querying basics*: staleness and the 5-minute lookback.
+    https://prometheus.io/docs/prometheus/latest/querying/basics/
+21. Prometheus, *Alertmanager configuration* (0.28): routes, `group_wait`, `group_interval`,
+    `repeat_interval`, `inhibit_rules`, `telegram_configs` with `bot_token_file`.
+    https://prometheus.io/docs/alerting/0.28/configuration/
+22. Prometheus, *Alertmanager notification template reference* (0.28): the `since` and `humanizeDuration`
+    functions behind the running anomaly list (why Alertmanager is pinned to 0.28).
+    https://prometheus.io/docs/alerting/0.28/notifications/
+23. Prometheus, *Alertmanager API v2* (OpenAPI): `/api/v2/silences`, `/api/v2/silence/{id}`,
+    `/api/v2/alerts`, used by the Notifications card (mute/unmute).
+    https://github.com/prometheus/alertmanager/blob/main/api/v2/openapi.yaml
+24. Prometheus, *Blackbox exporter*: the `http_2xx` module and `probe_success` behind `LayerDown` and the
+    "Platform layers" panel. https://github.com/prometheus/blackbox_exporter
+25. Telegram, *Bot API*: `getMe` (token check), `getUpdates` (chat id), `sendMessage` (4,096-character
+    limit, HTML parse mode); bots are created with @BotFather. https://core.telegram.org/bots/api
+26. Grafana Labs, *Provision Grafana*: the file provider that loads `monitoring/grafana/dashboards/` from
+    the repository. https://grafana.com/docs/grafana/latest/administration/provisioning/
+27. Grafana Labs, *Configure value mappings*: the UP/DOWN tiles and the coloured status text.
+    https://grafana.com/docs/grafana/latest/panels-visualizations/configure-value-mappings/
+
+## 4. Code quality and security gates (README L3, Security posture)
+
+28. SonarSource, rule `javascript:S3358` *Ternary operators should not be nested* (stopped build 113).
+    https://rules.sonarsource.com/javascript/RSPEC-3358/ ; background:
+    https://www.sonarsource.com/blog/stop-nesting-ternaries-javascript/
+29. SonarSource, rule `python:S1192` *String literals should not be duplicated* (stopped build 108).
+    https://rules.sonarsource.com/python/RSPEC-1192/
+30. SonarSource, `eslint-plugin-sonarjs`: Sonar's JavaScript rules run locally to check the page code
+    before a build. https://www.npmjs.com/package/eslint-plugin-sonarjs
+31. Aqua Security, *Trivy*: repository scan (stage 3) and image scan with SBOM (stage 6).
+    https://trivy.dev/
+32. CVE-2026-53995 (PYSEC-2026-425), MLflow path traversal through the trace API in the FileStore backend,
+    fixed in MLflow 3.17.2 (stopped build 114 at stage 3). https://osv.dev/vulnerability/CVE-2026-53995 ;
+    https://osv.dev/vulnerability/PYSEC-2026-425 ; https://www.mend.io/vulnerability-database/CVE-2026-53995/ ;
+    https://www.vulncheck.com/advisories/mlflow-path-traversal-via-trace-id-api
+33. PyPI, *mlflow 3.17.2* (release of 21 October 2026, its dependency ranges checked against the pinned
+    versions). https://pypi.org/project/mlflow/3.17.2/
+34. MLflow, *Database migration* (`mlflow db upgrade`), run before restarting the tracking server on 3.17.2.
+    https://mlflow.org/docs/latest/self-hosting/migration/
+35. The pip-audit findings behind the security floors in `requirements.txt`: starlette
+    PYSEC-2026-161, -248, -249, -2280, -2281 and pyasn1 PYSEC-2026-3455, -3456, -3457.
+    https://osv.dev/vulnerability/PYSEC-2026-161 (each ID resolves at `https://osv.dev/vulnerability/<ID>`)
+
+## 5. Assets
+
+36. Lucide icons (ISC licence; portions from Feather, MIT): the equipment pictograms in
+    `scripts/fleet_status.py` and the Fleet tab. https://lucide.dev
