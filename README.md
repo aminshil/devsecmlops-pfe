@@ -2833,7 +2833,7 @@ this document), and the guardrail correctly **REJECTED** it. This exposed a
 real, honest finding: 500 feedback rows against millions of training rows is
 a tiny fraction of the signal -- too little to move the model regardless of
 sample-weight. Meaningful improvement needs thousands of real verdicts
-accumulated over weeks/months; the pipeline is production-ready and the
+accumulated over weeks/months; the retraining pipeline already takes them in, and the
 guardrail protects production in the meantime. (A z-score evaluation bug was
 also found and fixed while verifying this: a quick eval script that skipped
 add_window_column + apply_zscore mis-scored the baseline; the canonical F1
