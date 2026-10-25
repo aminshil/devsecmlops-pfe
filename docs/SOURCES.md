@@ -155,3 +155,71 @@ the report come from 37–40, 56 and 57.
 57. THD (Tunisie Haut Débit), *Rapport du régulateur tunisien : la data tire la croissance au troisième
     trimestre 2025*, November 2025.
     https://www.thd.tn/rapport-du-regulateur-tunisien-la-data-tire-la-croissance-au-troisieme-trimestre-2025/
+
+## 7. Reference documentation for each layer (L0–L6)
+
+The official page for each method or feature the layers rely on. The project's own tests, CI logs and
+measurements are the evidence that it works as configured; these pages define what each feature does.
+
+**L0 — ML model**
+
+58. F. T. Liu, K. M. Ting, Z.-H. Zhou, *Isolation Forest*, IEEE ICDM 2008. The unsupervised safety-net
+    model. https://doi.org/10.1109/ICDM.2008.17
+59. T. Chen, C. Guestrin, *XGBoost: A Scalable Tree Boosting System*, ACM KDD 2016. The primary classifier.
+    https://arxiv.org/abs/1603.02754
+60. scikit-learn, *IsolationForest* (`contamination`, `n_estimators`).
+    https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.IsolationForest.html
+61. scikit-learn, *Model persistence*: a pickled model must be loaded by the library version that wrote it
+    (why training and serving pin the same versions). https://scikit-learn.org/stable/model_persistence.html
+
+**L1 — Serving API**
+
+62. FastAPI documentation (routes, `Query`, `responses=`, dependency on Pydantic). https://fastapi.tiangolo.com/
+63. Pydantic documentation (request models, `Field` bounds, `Literal`). https://docs.pydantic.dev/
+64. Prometheus Python client (`Counter`, `Gauge`, `Histogram`, `/metrics`). https://github.com/prometheus/client_python
+65. Psycopg 3 documentation (the prediction and feedback log in PostgreSQL). https://www.psycopg.org/psycopg3/docs/
+
+**L2 — Container image**
+
+66. Docker, *Dockerfile reference* (`USER` for the non-root user, `HEALTHCHECK`).
+    https://docs.docker.com/reference/dockerfile/
+
+**L3 — CI/CD**
+
+67. SonarSource, *Pausing the pipeline until the quality gate is computed* (`withSonarQubeEnv`,
+    `waitForQualityGate`, the webhook).
+    https://docs.sonarsource.com/sonarqube-server/2026.3/analyzing-source-code/ci-integration/jenkins-integration/pipeline-pause
+68. CycloneDX, the SBOM format produced in stage 6. https://cyclonedx.org/
+
+**L4 — Kubernetes**
+
+69. Kubernetes, *Horizontal Pod Autoscaling*. https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+70. Kubernetes, *Network Policies*. https://kubernetes.io/docs/concepts/services-networking/network-policies/
+71. Kubernetes, *StatefulSets* (PostgreSQL with `volumeClaimTemplates`).
+    https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/
+72. Kubernetes, *Configure liveness, readiness and startup probes*.
+    https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+73. Kubernetes, *Configure a security context* (`runAsNonRoot`, `readOnlyRootFilesystem`,
+    `allowPrivilegeEscalation`, `capabilities`). https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+74. Kubernetes, *Pod Security Standards* (the `restricted` profile, `seccompProfile`).
+    https://kubernetes.io/docs/concepts/security/pod-security-standards/
+75. minikube, *minikube start* (`--force`, after a Docker restart). https://minikube.sigs.k8s.io/docs/commands/start/
+76. Docker, *docker network connect* (`--ip`: Jenkins pinned to 192.168.49.10 on the minikube network).
+    https://docs.docker.com/reference/cli/docker/network/connect/
+
+**L5 — Observability** (Prometheus, Alertmanager, Grafana and MLflow are in sections 3 and 4)
+
+77. Prometheus, *Node exporter* (the host VM's CPU, memory, disk and load metrics).
+    https://github.com/prometheus/node_exporter
+
+**L6 — Ansible and the host**
+
+78. Ansible, *Protecting sensitive data with Ansible Vault*. https://docs.ansible.com/ansible/latest/vault_guide/index.html
+79. Ansible, *community.docker.docker_container module* (Grafana, MinIO and the other containers).
+    https://docs.ansible.com/ansible/latest/collections/community/docker/docker_container_module.html
+80. Ansible, *ansible.builtin.systemd_service module* (the control panel, MLflow and agent units).
+    https://docs.ansible.com/ansible/latest/collections/ansible/builtin/systemd_service_module.html
+81. systemd, *systemd.service* (`Restart=always`: why the panel's Stop and Fix go through `systemctl`).
+    https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html
+82. Linux man pages, *setfacl* (the POSIX ACL that gives Jenkins access to the minikube credentials
+    instead of `chmod -R a+rwX`). https://man7.org/linux/man-pages/man1/setfacl.1.html
