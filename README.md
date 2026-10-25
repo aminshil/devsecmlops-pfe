@@ -2988,8 +2988,17 @@ python monitoring/k8s_exporter.py &
 | `docs/TROUBLESHOOTING.md` | A runbook written from real incidents: Docker networking staleness, Minikube API timeouts, a rejected retrain (the guardrail working as intended), MLflow service checks, browser-vs-VM connectivity, Jenkins pytest/venv failures. Corrected in this pass: it referenced the deleted `retrain_from_feedback.py` and told operators to hand-launch MLflow with hardcoded MinIO credentials. |
 | `docs/MINIKUBE_RELIABILITY.md` | Why the cluster was unreachable after a reboot (Jenkins taking the node's fixed address, no autostart, missing `--force`), the permanent fix, and how to verify it |
 | `docs/SOURCES.md` | Every external source the project took information from (82), grouped by what it informed: network failures and root cause, the SMD benchmark, alerting and monitoring, the CI quality and security gates, assets, the report's Chapter 1 bibliography, and the reference documentation for each layer (L0–L6). |
+| `docs/INFRASTRUCTURE_SETUP.md` | Rebuilding the whole platform on a blank Ubuntu machine, step by step, with expected outputs. Brought up for real on the original VM only, not yet on a clean second machine; its status table says which steps are proven. |
+| `docs/DEMO_SCRIPT.md` | The defense demo, step by step: what to show, what to say, and which steps were proven in a real log versus to rehearse. |
+| `docs/fleet_status.svg` | A fleet snapshot drawn by `scripts/fleet_status.py` (by default the worst moment of the fleet, routers and their dependents). |
 | `docs/machine_roster.txt` | The 200 simulated machines and their roles. |
 | `scripts/feedback_demo.py` | A one-page UI that walks the feedback loop: send readings to the live API, judge them, retrain in a memory-capped sandbox (`/tmp/feedback_demo`, tiny generated fleets) with the verdicts, and prove by hashing that the production models were not touched. Standard library only; run it from the repository root. |
+| `scripts/full_verification.sh` | Checks the layers end to end (API, registry, Jenkins, SonarQube and the others) and saves the output to a dated file in `/tmp`. |
+| `scripts/capture_all_screenshots.sh` | Captures the terminal screenshots in `screenshots/` (Wayland-safe, cropped to the terminal). |
+| `scripts/make_production_secrets.sh` | Creates the Vault-encrypted database password for the Ansible production profile; refuses to overwrite an existing one. |
+| `scripts/ensure_minio_bucket.py` | Creates MLflow's artifact bucket on MinIO if it is missing (run by the Ansible playbook). |
+| `scripts/model_report_summary.py` | Prints the headline facts of a training report in the Jenkins model job's log. |
+| `scripts/setup_history_clean.txt` | The command log of the first setup (VM, repository, first proof of concept), kept as a record. |
 | `screenshots/` | 12 PNGs captured at real milestones: the six-model benchmark, the final training run, a three-way model experiment, the z-score demo, the data generator, `/health`, a "3am problem" scenario, a disk-usage anomaly, the baseline fallback chain, Docker images, a container health check, a registry push. |
 
 ---
