@@ -112,3 +112,46 @@ Each entry says what was taken from it. The README cites the same sources where 
 
 36. Lucide icons (ISC licence; portions from Feather, MIT): the equipment pictograms in
     `scripts/fleet_status.py` and the Fleet tab. https://lucide.dev
+
+## 6. PFE report, Chapter 1 (host company, concepts, tool choices)
+
+The bibliography of the report's first chapter (April 2026). The Tunisie Telecom and sector figures in
+the report come from 37–40, 56 and 57.
+
+37. Instance Nationale des Télécommunications (INT), *Rapport Financier du Secteur des Télécommunications
+    2025*, 2026. Market shares, sector revenue, 5G launch, sector investment.
+    https://www.intt.tn/fr/index-rapports-annuels-266-402.html
+38. Challenges.tn, *Tunisie Telecom accélère l'IA souveraine : Data Centers certifiés et câble Medusa à
+    22 Tbps*, November 2025. Data-centre certifications (ISO 27001, 27701, 9001).
+    https://www.challenges.tn/high-tech/tunisie-telecom-accelere-l-ia-souveraine-data-centers-certifies-et-cable-medusa-a-22-tbps/
+39. Tunisie Telecom, *Chiffre d'affaires et performances réseau* (official site), 2025. Network and
+    submarine cables, Green Tech sites. https://www.tunisietelecom.tn/particulier/actualite/chiffre-d-affaires-tt/
+40. nPerf, *Baromètre des connexions Internet mobiles en Tunisie, 01/01/2025 – 31/12/2025*, January 2026.
+    nPoints, downlink and uplink speeds.
+    https://media.nperf.com/files/publications/TN/TN-Barometer-mobile-connections-nPerf-2025_7894.pdf
+41. N. Forsgren, J. Humble, G. Kim, *Accelerate: The Science of Lean Software and DevOps*, IT Revolution
+    Press, 2018. DevOps and CI/CD. https://itrevolution.com/accelerate-book/
+42. D. Sculley et al., *Hidden Technical Debt in Machine Learning Systems*, NIPS 2015. MLOps.
+    https://papers.nips.cc/paper/2015/hash/86df7dcfd896fcaf2674f757a2463eba-Abstract.html
+43. OWASP Foundation, *DevSecOps Guideline*, 2024. Shift-left security.
+    https://owasp.org/www-project-devsecops-guideline/
+44. S. Shankar et al., *Operationalizing Machine Learning: An Interview Study*, arXiv 2022. DevSecMLOps
+    context. https://arxiv.org/abs/2209.09125
+45. Jenkins, *User Documentation*. https://www.jenkins.io/doc/
+46. M. Zaharia et al., *Accelerating the Machine Learning Lifecycle with MLflow*, IEEE Data Engineering
+    Bulletin, 2018; MLflow documentation. https://mlflow.org/docs/latest/index.html
+47. Docker, *Documentation*. https://docs.docker.com/
+48. CNCF, *Kubernetes Documentation*. https://kubernetes.io/docs/home/
+49. SonarSource, *SonarQube Documentation*. https://docs.sonarqube.org/
+50. Aqua Security, *Trivy documentation* (report version of the link). https://aquasecurity.github.io/trivy/
+51. CNCF, *Prometheus overview*. https://prometheus.io/docs/introduction/overview/
+52. Grafana Labs, *Grafana documentation*. https://grafana.com/docs/
+53. MinIO, *Documentation*. https://min.io/docs/minio/linux/index.html
+54. Red Hat, *Ansible Documentation*. https://docs.ansible.com/
+55. F. Pedregosa et al., *Scikit-learn: Machine Learning in Python*, JMLR 12, 2011.
+    https://scikit-learn.org/stable/
+56. L'Expert Journal, *4101 millions de dinars de chiffre d'affaires dans le secteur des
+    télécommunications*, March 2026. https://lexpertjournal.net/fr/?p=139792
+57. THD (Tunisie Haut Débit), *Rapport du régulateur tunisien : la data tire la croissance au troisième
+    trimestre 2025*, November 2025.
+    https://www.thd.tn/rapport-du-regulateur-tunisien-la-data-tire-la-croissance-au-troisieme-trimestre-2025/
