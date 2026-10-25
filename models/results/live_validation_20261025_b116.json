@@ -1,0 +1,33 @@
+{
+  "requests": 16600,
+  "anomalous_readings": 1094,
+  "served_by_model": {
+    "telecom_v4_rolling": 16600
+  },
+  "f1": 0.7731,
+  "precision": 0.7166,
+  "recall": 0.8391,
+  "per_cause_recall": {
+    "cascade": 0.2598,
+    "cpu_spike": 0.9676,
+    "disk_saturation": 0.9867,
+    "memory_leak": 0.9439,
+    "network_flood": 0.9944,
+    "silent_failure": 0.9721
+  },
+  "cause_accuracy_on_detected": 0.9977,
+  "latency_ms": {
+    "p50": 316.1,
+    "p95": 668.1,
+    "max": 3404.6
+  },
+  "test_set": {
+    "file": "data/telecom_fleet_v2_test.csv",
+    "sha256": "3b6b6e2144100d43522a79a9a685eecc49e2bcecc573b001584614f0a5a8894a"
+  },
+  "days": 14,
+  "every_hours": 4,
+  "errors": 0,
+  "url": "http://192.168.49.2:30080",
+  "finished_at": "2026-10-25T19:49:19Z"
+}
