@@ -1164,6 +1164,7 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 | `scripts/export_feedback_dataset.py` | Snapshots labeled operator feedback as a fingerprinted training dataset. |
 | `scripts/verify_model_manifest.py` | The CI model gate — artifact SHA-256 + recorded F1 + deployment-file threshold and `MODEL_NAME` agreement. |
 | `scripts/live_k8s_validation.py` | Real-cluster validation against the independent test set. |
+| `scripts/pod_kill_test.py` | Deletes one API pod under live traffic (gracefully, then a hard kill) and measures failed requests and the time to recover. |
 | `scripts/master_comparison.py` | The 12-configuration threshold/feedback experiment. |
 | `models/telecom_xgb_classifier_v2.pkl`, `telecom_xgb_label_encoder_v2.pkl` | v3 XGBoost classifier + encoder. |
 | `models/telecom_xgb_v4_rolling.pkl`, `telecom_xgb_v4_rolling_encoder.pkl` | v4 XGBoost classifier + encoder. |
@@ -1565,6 +1566,16 @@ Minikube, single-node, Docker driver. Namespace `ml-serving`.
   up.
 - **NodePort** `:30080` — used by `scripts/live_k8s_validation.py` and any
   external client. Metrics-server is enabled for real HPA readings.
+- **An API pod killed under live traffic.** `scripts/pod_kill_test.py` sends `/predict` through the
+  NodePort at 10 requests/s while it deletes one API pod, first gracefully (SIGTERM, as in a rollout or
+  a drain), then with a hard kill (`--grace-period=0 --force`, as in a crash). Run on 25 October against
+  `2.20.3-b116` with 2 replicas: **0 failed of 884 requests**; the replacement pod was Ready after
+  13.9 s (graceful) and 13.3 s (hard kill), and 2 of 2 replicas were available again at 14.0 s and
+  13.3 s; latency stayed at p95 30–33 ms (4 concurrent clients, one request shape; not comparable with
+  the 20-worker live validation). Output: `models/results/pod_kill_20261025_b116.json`. What it shows:
+  the remaining replica absorbs one pod's loss at this load. What it does not: this is one node, so it
+  says nothing about losing the node, and at 10 requests/s a failure window shorter than the 100 ms
+  between requests could go unseen.
 - **Automated deployment from Jenkins.** Jenkins and Minikube are separate,
   sibling Docker containers — Jenkins has no built-in path to the cluster.
   `minikube image load`'s Docker driver uses SSH internally via a
@@ -2990,7 +3001,7 @@ python monitoring/k8s_exporter.py &
 |---|---|
 | `docs/TROUBLESHOOTING.md` | A runbook written from real incidents: Docker networking staleness, Minikube API timeouts, a rejected retrain (the guardrail working as intended), MLflow service checks, browser-vs-VM connectivity, Jenkins pytest/venv failures. Corrected in this pass: it referenced the deleted `retrain_from_feedback.py` and told operators to hand-launch MLflow with hardcoded MinIO credentials. |
 | `docs/MINIKUBE_RELIABILITY.md` | Why the cluster was unreachable after a reboot (Jenkins taking the node's fixed address, no autostart, missing `--force`), the permanent fix, and how to verify it |
-| `docs/SOURCES.md` | Every external source the project took information from (82), grouped by what it informed: network failures and root cause, the SMD benchmark, alerting and monitoring, the CI quality and security gates, assets, the report's Chapter 1 bibliography, and the reference documentation for each layer (L0–L6). |
+| `docs/SOURCES.md` | Every external source the project took information from (84), grouped by what it informed: network failures and root cause, the SMD benchmark, alerting and monitoring, the CI quality and security gates, assets, the report's Chapter 1 bibliography, and the reference documentation for each layer (L0–L6). |
 | `docs/INFRASTRUCTURE_SETUP.md` | Rebuilding the whole platform on a blank Ubuntu machine, step by step, with expected outputs. Brought up for real on the original VM only, not yet on a clean second machine; its status table says which steps are proven. |
 | `docs/DEMO_SCRIPT.md` | The defense demo, step by step: what to show, what to say, and which steps were proven in a real log versus to rehearse. |
 | `docs/fleet_status.svg` | A fleet snapshot drawn by `scripts/fleet_status.py` (by default the worst moment of the fleet, routers and their dependents). |

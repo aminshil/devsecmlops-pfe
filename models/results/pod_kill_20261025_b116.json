@@ -1,0 +1,42 @@
+{
+  "image": "devsecmlops-api:2.20.3-b116",
+  "url": "http://192.168.49.2:30080",
+  "rate_per_s": 10.0,
+  "rounds": [
+    {
+      "mode": "graceful",
+      "victim": "anomaly-api-5974cf7886-4n8bt",
+      "desired_replicas": 2,
+      "requests": 344,
+      "failed": 0,
+      "failed_at_s": [],
+      "failure_kinds": [],
+      "new_pod_ready_after_s": 13.9,
+      "available_restored_after_s": 14.0,
+      "latency_ms_until_restored": {
+        "p50": 22.1,
+        "p95": 30.4,
+        "max": 84.6
+      }
+    },
+    {
+      "mode": "force",
+      "victim": "anomaly-api-5974cf7886-5f5xh",
+      "desired_replicas": 2,
+      "requests": 338,
+      "failed": 0,
+      "failed_at_s": [],
+      "failure_kinds": [],
+      "new_pod_ready_after_s": 13.3,
+      "available_restored_after_s": 13.3,
+      "latency_ms_until_restored": {
+        "p50": 22.3,
+        "p95": 32.5,
+        "max": 50.8
+      }
+    }
+  ],
+  "total_requests": 884,
+  "total_failed": 0,
+  "finished_at": "2026-10-25T20:05:46Z"
+}

@@ -223,3 +223,11 @@ measurements are the evidence that it works as configured; these pages define wh
     https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html
 82. Linux man pages, *setfacl* (the POSIX ACL that gives Jenkins access to the minikube credentials
     instead of `chmod -R a+rwX`). https://man7.org/linux/man-pages/man1/setfacl.1.html
+
+**Cited in L4: the Jenkins-to-Minikube image path** (recorded when the problem was hit; not re-checked on 25 October)
+
+83. kubernetes/minikube issue #16293: `minikube image load` with the Docker driver failing from inside a
+    container (connection refused on the host-loopback SSH port), the reason the pipeline loads images with
+    `docker save | docker exec -i minikube docker load`. https://github.com/kubernetes/minikube/issues/16293
+84. kubernetes/minikube issue #15260: the same nested-container access problem.
+    https://github.com/kubernetes/minikube/issues/15260
