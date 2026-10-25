@@ -87,7 +87,7 @@ Each entry says what was taken from it. The README cites the same sources where 
 
 ## 4. Code quality and security gates (README L3, Security posture)
 
-28. SonarSource, rule `javascript:S3358` *Ternary operators should not be nested* (stopped build 113).
+28. SonarSource, rule `javascript:S3358` *Ternary operators should not be nested* (stopped builds 113 and 114).
     https://rules.sonarsource.com/javascript/RSPEC-3358/ ; background:
     https://www.sonarsource.com/blog/stop-nesting-ternaries-javascript/
 29. SonarSource, rule `python:S1192` *String literals should not be duplicated* (stopped build 108).
@@ -97,7 +97,7 @@ Each entry says what was taken from it. The README cites the same sources where 
 31. Aqua Security, *Trivy*: repository scan (stage 3) and image scan with SBOM (stage 6).
     https://trivy.dev/
 32. CVE-2026-53995 (PYSEC-2026-425), MLflow path traversal through the trace API in the FileStore backend,
-    fixed in MLflow 3.17.2 (stopped build 114 at stage 3). https://osv.dev/vulnerability/CVE-2026-53995 ;
+    fixed in MLflow 3.17.2 (stopped build 115 at stage 3). https://osv.dev/vulnerability/CVE-2026-53995 ;
     https://osv.dev/vulnerability/PYSEC-2026-425 ; https://www.mend.io/vulnerability-database/CVE-2026-53995/ ;
     https://www.vulncheck.com/advisories/mlflow-path-traversal-via-trace-id-api
 33. PyPI, *mlflow 3.17.2* (release of 21 October 2026, its dependency ranges checked against the pinned
