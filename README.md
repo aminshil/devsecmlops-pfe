@@ -45,8 +45,8 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Served v3 fallback | F1 0.6667 · precision 0.5971 · recall 0.7545 | `models/manifest.json` |
 | Weakest cause | `cascade`, recall 0.268 (label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7731** · precision 0.7166 · recall 0.8391. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on 25 October against the served 21 October model (image `2.20.3-b116`); the 19 October model scored 0.7755 on the same sample | `scripts/live_k8s_validation.py`, run on 25 October; output in `models/results/live_validation_20261025_b116.json` |
-| Latest green pipeline | Build `2.20.3-b116` (commit `c416cb99`, 25 October: the Notifications card, the History tab with episode details, the label store's machine and time, mlflow 3.17.2): all 11 stages green, 223 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS). Before it: b112 (`aaf947ff`, the external-review fixes, 188 tests) | [L3 run history](#l3--cicd) |
-| Tests | 225 passing, in 21 files; build b116 ran 223 (b112 ran 188; the 35 added up to b116 check the alerting configuration, the dashboard queries, and the panel's Notifications card and History tab; the 2 added after it check the anomaly mute) | `pytest tests/` (stage 1b) |
+| Latest green pipeline | Build `2.20.3-b117` (commit `7666e3c9`, 26 October: the alerts for machines that miss their reports, and the panel's anomaly mute on the list label): all 11 stages green, 225 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS). Before it: b116 (`c416cb99`, 25 October: the Notifications card, the History tab with episode details, the label store's machine and time, mlflow 3.17.2, 223 tests) | [L3 run history](#l3--cicd) |
+| Tests | 225 passing, in 21 files, all run by build b117 (b116 ran 223, b112 ran 188; the 37 added since b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute) | `pytest tests/` (stage 1b) |
 | Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, cleared, persistent, fleet surge), machines that miss their reports, no data, any layer down, pods, Kubernetes, traffic stopped, disk and memory. 26 rules (17 alerts, 9 recording rules) unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
 | Dashboard | 27 Grafana panels in 6 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-21: the model promoted by Jenkins `devsecmlops-model` build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, model files read back from MinIO, committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); the current image `2.20.3-b112` carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
@@ -1476,7 +1476,7 @@ Jenkins, `Jenkinsfile`, 11 stages, every one a real gate — a failure stops the
 Stage labels below match the Jenkins console exactly.
 
 - **1. Checkout**
-- **1b. Unit tests** — pytest, 223 tests (build b116), coverage report. Fail-fast: a broken commit stops here.
+- **1b. Unit tests** — pytest, 225 tests (build b117), coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that no deployment file carries a copy of the threshold (it is read from the manifest) and that the manifest's threshold is the evaluated one, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
@@ -1518,6 +1518,7 @@ Each failure below was a genuine problem, diagnosed from the log and fixed befor
 | 21 | Stopped at 2b | Quality Gate `ERROR` on build `b113` (commit `68162eca`), and again on `b114`, a re-run of the same commit: one new issue, a nested ternary in the History tab's episode window (`javascript:S3358`) | Rewritten as an `if`; Sonar's JavaScript rules (`eslint-plugin-sonarjs`) were run locally on the page before the next build |
 | 22 | Failed at 3 | Build `b115` (commit `d6ffcbae`): the repository scan found CVE-2026-53995 (HIGH) in `mlflow==3.16.1`, published after b112 | `mlflow==3.17.2`; the MLflow server upgraded and its SQLite store migrated (`mlflow db upgrade`, rehearsed first on a copy) |
 | 23 | **SUCCESS** | — | Build `2.20.3-b116` (commit `c416cb99`): 223 tests, Sonar gate OK, repository scan clean, model gate F1 0.7292, 0 image vulnerabilities, deployed and smoke-tested in the live pod (7 PASS); the first image with the Notifications card and the History tab |
+| 24 | **SUCCESS** | — | Build `2.20.3-b117` (commit `7666e3c9`): 225 tests, Sonar gate OK, repository scan clean, model gate F1 0.7292, 0 image vulnerabilities, deployed and smoke-tested in the live pod (7 PASS); the panel's anomaly mute now silences every alert of the Telegram list (`list="anomalies"`) |
 
 Builds b98 to b107 and b110 are not listed one by one. Run 17 is the same gate stopping new code: the operations UI
 and the v3 generator, both covered by tests, still had to meet the zero-new-issues rule.
@@ -2950,7 +2951,7 @@ this project.)
 
 ## Testing
 
-**225 tests** in 21 files (up from 15; build b116 ran 223), `pytest`, in `tests/`:
+**225 tests** in 21 files (up from 15), all run by build b117, `pytest`, in `tests/`:
 
 - `test_api.py` (47 tests) — every endpoint, input validation (NaN/inf
   rejection, including raw `NaN`/`Infinity` tokens answered with 422 rather than 500, reserved `__` machine names, physical-range rejection (cpu=150 is a 422), the opt-in feedback token, machine length, metrics count, history shape), v3/v4

@@ -1,6 +1,6 @@
 # Defense demo script
 
-Prepared against build `2.20.3-b116` (all 11 CI stages green, 223 tests, Quality Gate OK; serves the model promoted on 21 October by model build 9: all 17.28M rows plus 315 judged feedback rows, v4 F1 0.7292, threshold 0.91), commit `aaf947ff` or later (`git log --oneline -5`). About 15 minutes.
+Prepared against build `2.20.3-b117` (all 11 CI stages green, 225 tests, Quality Gate OK; serves the model promoted on 21 October by model build 9: all 17.28M rows plus 315 judged feedback rows, v4 F1 0.7292, threshold 0.91), commit `aaf947ff` or later (`git log --oneline -5`). About 15 minutes.
 
 **How to read the "Proven" column.** *Log* means the exact command or output appeared in a real Jenkins or terminal log during this project. *Rehearse* means it is documented in the README but was not run today. Run every *Rehearse* step once before the defense, from a cold start.
 
@@ -52,13 +52,13 @@ Have `screenshots/` open as a last-resort fallback.
 | 9 | 1 | Terminal | block C below | "Pods run non-root, read-only filesystem, all capabilities dropped. The autoscaler is 2 to 5 replicas at 70% CPU." | Log (rehearsal) |
 | 10 | 2 | Terminal | `python3 scripts/verify_model_manifest.py --min-f1 0.60` | "The CI model gate: artifact hashes, recorded F1, and that no deployment file carries a threshold: it is read from the manifest, where it was selected on an independent validation fleet." | Log |
 | 11 | 1 | Terminal (optional) | block E below | "I change the model selector to the legacy value and the gate fails." Always restore with `git checkout`. | Log |
-| 12 | 2 | Jenkins | back to the running build, or the last green one | Point at stage 1b (223 tests in b116), stage 2b (Quality Gate), stage 3 (gate lines), stage 6 (`0` vulnerabilities), stage 9 (smoke test). Then the README run-history table: runs 1, 2, 9 and 10 are builds the gates stopped. | Log |
+| 12 | 2 | Jenkins | back to the running build, or the last green one | Point at stage 1b (225 tests in b117), stage 2b (Quality Gate), stage 3 (gate lines), stage 6 (`0` vulnerabilities), stage 9 (smoke test). Then the README run-history table: runs 1, 2, 9 and 10 are builds the gates stopped. | Log |
 | 13 | 1 | MLflow, SonarQube | open each | "Every pipeline training run is logged here, with artifacts stored in MinIO. SonarQube shows the blocking quality gate." | Rehearse |
 | 14 | 1 | README | "At a glance" and "Known limitations" | "Every number here traces to the manifest or a log. These are the limits I know about." | n/a |
 
 ### The feedback loop and retraining (about 5 minutes, after step 7)
 
-**Precondition.** The cluster runs the latest image (history logging; `kubectl -n ml-serving get deploy -o jsonpath='{.items[*].spec.template.spec.containers[*].image}'` should show `2.20.3-b116`). The feedback table lives on a 2 Gi volume and survives reboots (verified across two reboots; the Continuous training tab shows the live counts). Only a deleted volume empties it.
+**Precondition.** The cluster runs the latest image (history logging; `kubectl -n ml-serving get deploy -o jsonpath='{.items[*].spec.template.spec.containers[*].image}'` should show `2.20.3-b117`). The feedback table lives on a 2 Gi volume and survives reboots (verified across two reboots; the Continuous training tab shows the live counts). Only a deleted volume empties it.
 
 1. **Control panel → Demo → Send 20 → Review alerts only.** Say: "the readings come from a labelled fleet that is not part of training, validation or test; the cluster pods answer and log them; the verdicts come from the generator's ground truth, standing in for an operator."
 1b. **Review tab (optional, 30 seconds):** the anomalies the pods flagged that nobody has judged. Press Real or False alarm on a row; it becomes training data for the next retraining run. Judge only rows recorded by the Demo tab, never rows recorded by the production agent: those are test-set readings. Say: "this is how an operator feeds the loop without opening Postgres."
