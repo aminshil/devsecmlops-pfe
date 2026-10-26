@@ -63,8 +63,9 @@ Each entry says what was taken from it. The README cites the same sources where 
 17. Prometheus, *Operators*: binary operator precedence (`==` binds tighter than `and`), the cause of the
     History-tab bug found against a real Prometheus. https://prometheus.io/docs/prometheus/latest/querying/operators/
 18. Prometheus, *Functions*: `increase()` (extrapolation, counter resets; why the root-cause spotlight shows
-    at most 14), `max_over_time()`, `label_replace()`; `changes()`, `min_over_time()`, `last_over_time()`,
-    `clamp_min()` and `absent()` (a machine's reporting interval, its silence, and `FleetNoData`). https://prometheus.io/docs/prometheus/latest/querying/functions/
+    at most 14), `max_over_time()`, `label_replace()`; `quantile_over_time()`, `count_over_time()`,
+    `last_over_time()`, `clamp_min()` and `absent()` (a machine's reporting interval, its silence, and
+    `FleetNoData`). https://prometheus.io/docs/prometheus/latest/querying/functions/
 19. Prometheus, *HTTP API*: range queries and the limit of 11,000 points per series (the History tab's
     step). https://prometheus.io/docs/prometheus/latest/querying/api/
 20. Prometheus, *Querying basics*: staleness and the 5-minute lookback; the `offset` modifier (a machine not

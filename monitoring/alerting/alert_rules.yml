@@ -38,17 +38,19 @@ groups:
           + on (machine) group_left (machine_type)
           (0 * topk by (machine) (1, max by (machine, machine_type) (api_currently_anomalous{job="anomaly-api-pods"})))
 
-      - record: fleet:machine_report_interval:avg15m
-        # average time between its reports over the last 15 minutes, when it reported at least 3 times
-        expr: |
-          (max_over_time(fleet:machine_last_seen:max[15m]) - min_over_time(fleet:machine_last_seen:max[15m]))
-          / changes(fleet:machine_last_seen:max[15m])
-          and changes(fleet:machine_last_seen:max[15m]) >= 3
+      - record: fleet:machine_report_gap:seconds
+        # the time between two of its reports, recorded when a report arrives (its last-seen time moved since
+        # the previous evaluation): one sample per report
+        expr: (fleet:machine_last_seen:max - fleet:machine_last_seen:max offset 5s) > 0
 
       - record: fleet:machine_report_interval:usual
-        # its usual interval: the lowest 15-minute average of the last hour, so a pause it has just had does
-        # not stretch the interval it is expected to keep
-        expr: min_over_time(fleet:machine_report_interval:avg15m[1h])
+        # its usual interval: the median of its gaps over the last hour (once it has 3), so one long gap, such
+        # as the traffic agent stopped for an hour and started again, does not change it. (An average over a
+        # window did: after a long stop it stayed inflated for 15 minutes, and a machine that stopped again
+        # in that time was never listed; seen on the VM on 26 October.)
+        expr: |
+          quantile_over_time(0.5, fleet:machine_report_gap:seconds[1h])
+          and count_over_time(fleet:machine_report_gap:seconds[1h]) >= 3
 
       - record: fleet:machine_silence:seconds
         # seconds since its last report (machines that reported in the last hour, or that a pod still remembers)
@@ -56,7 +58,7 @@ groups:
 
       - record: fleet:machine_silence:limit_seconds
         # how long it may stay silent: three usual intervals (at least 30 s, for the 5 s scrape and evaluation);
-        # 15 minutes while its usual interval is not known yet (fewer than 3 reports seen)
+        # 15 minutes while its usual interval is not known yet (fewer than 3 gaps seen in the last hour)
         expr: |
           clamp_min(3 * fleet:machine_report_interval:usual, 30)
           or (0 * fleet:machine_silence:seconds + 900)
@@ -236,15 +238,16 @@ groups:
           description: "kubectl calls from the k8s exporter have failed for 30 seconds (Minikube down?)."
 
       - alert: PredictionsStopped
-        # the production agent (or the whole serving path) stopped: no prediction served for 5 minutes
+        # the production agent (or the whole serving path) stopped: no prediction served for a minute (the
+        # agent sends several per second; pods are scraped every 5 s)
         expr: |
-          sum(rate(api_predictions_total{job="anomaly-api-pods"}[5m])) == 0
+          sum(increase(api_predictions_total{job="anomaly-api-pods"}[1m])) == 0
           or absent(api_predictions_total{job="anomaly-api-pods"})
-        for: 5m
+        for: 15s
         labels:
           severity: warning
         annotations:
-          summary: "no predictions served for 5 minutes"
+          summary: "no predictions served for a minute"
           description: "The traffic agent or the serving path has stopped."
 
       - alert: DiskAlmostFull

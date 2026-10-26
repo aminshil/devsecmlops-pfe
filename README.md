@@ -1809,7 +1809,7 @@ anyone has the control panel open, including when the panel itself is down.
 | `BlackboxExporterDown` | the probing exporter itself is down for 10 s (the layer checks would be blind) | critical |
 | `ServingPodNotScraped`, `KubernetesUnreachable` | a serving pod not answering, or the Kubernetes API down, for 30 s | critical |
 | `PodNotReady`, `ServingReplicasMissing` | a pod not Ready, or fewer replicas than desired, for 2 min (longer than a rollout or an HPA scale-up) | critical / warning |
-| `PredictionsStopped` | no prediction served for 5 min (the traffic agent or the serving path stopped) | warning |
+| `PredictionsStopped` | no prediction served for a minute, for 15 s (the traffic agent or the serving path stopped; it took 10 minutes before 26 October) | warning |
 | `DiskAlmostFull`, `MemoryLow` | root disk above 90% (SonarQube turns read-only at 95%), less than 1.5 GB of memory free | warning |
 
 The anomaly alerts read the same state as the Fleet tab: each machine's verdict from the replica that
@@ -1830,10 +1830,16 @@ Prometheus' re-sends and a clear expiring).
 **Machines that miss their reports.** Each machine reports on its own rhythm (the production agent:
 every 30 s, ±30%), and the pods only see the reports that arrive, so a machine that stops is detected
 from the time since its last report. Its usual interval is measured from its own reports
-(`fleet:machine_report_interval:usual`: the lowest 15-minute average of the last hour, so a pause it has
-just had does not stretch it), and it has **missed its reports** once it is silent for more than three
-of those intervals (at least 30 s, for the 5 s scrape and evaluation; 15 minutes while fewer than 3 of
-its reports have been seen). With the agent's 30 s that is 90 s: the longest normal gap is about 39 s (1.3 ×
+(`fleet:machine_report_interval:usual`: the median of the gaps between its reports over the last hour,
+so one long gap, such as the agent stopped for an hour and started again, does not change it), and it has
+**missed its reports** once it is silent for more than three of those intervals (at least 30 s, for the
+5 s scrape and evaluation; 15 minutes while fewer than 3 gaps have been seen). The first version used
+the lowest 15-minute average instead; on the VM on 26 October, after the agent was restarted following a
+long stop, every average still contained the old report and the intervals looked like 15 minutes, so
+when the agent was stopped again a few minutes later (its last anomaly message at 00:37, `PredictionsStopped`
+at 00:47) the machines were listed only at 00:50, 13 minutes late, and with intervals of 25 s instead of
+30 s (the lowest of many averages is biased low). A unit test
+now replays that case, and so does the end-to-end script (the pod remembers a report from an hour ago). With the agent's 30 s that is 90 s: the longest normal gap is about 39 s (1.3 ×
 30 s, plus the request), so a single late report does not alert. A machine that missed its reports leaves the anomalous list (its
 last verdict is no longer current) and is listed under `⚫ N not reporting`, with how long ago it missed
 them, its usual interval and its last verdict (`last verdict anomalous` in bold: it may have stopped
@@ -1843,7 +1849,8 @@ When **no** machine reports on time,
 the list says **"⚪ no information"** instead of "all clear". Unit tests run machines on 5 s, 30 s and
 60 s rhythms, one that pauses and resumes, one seen only twice, and the whole fleet stopping; making
 the limit two intervals instead of three, dropping the 30 s floor or the 15-minute fallback, letting a
-pause stretch the interval, or keeping a silent machine's verdict as current makes them fail. A
+pause stretch the interval, going back to the first estimator or averaging the gaps instead of taking
+their median, or keeping a silent machine's verdict as current makes them fail. A
 machine that a pod still remembers stays listed until it reports again; after a pod restart it is
 forgotten an hour after its last report.
 
@@ -1888,7 +1895,7 @@ for one minute only, that a machine that stops reporting is not announced as bac
 machine reporting gives "no information". A machine that stops reporting is in the list about three of
 its intervals later (90 s with the agent's 30 s, plus up to 10 s), and "no information" follows when the
 last machine has missed its reports. Warnings are
-sent 30 seconds after firing. The waits are set from how often each signal arrives (pod readiness waits 2 minutes so
+sent 1 second after firing (30 seconds before 26 October), and a new one of the same name within 30 s. The waits are set from how often each signal arrives (pod readiness waits 2 minutes so
 that a normal rollout does not page).
 
 **How it is checked.** `scripts/check_alerting.sh` runs `promtool check rules`, `promtool test rules` on
@@ -1904,17 +1911,19 @@ repository.
 **End to end.** `scripts/alerting_e2e.py` runs the repository's rules and templates in a real
 Prometheus and a real Alertmanager (the pinned images with Docker, or binaries given on the command
 line), fed by a stand-in serving pod whose four machines report every 5 s (±30%), and delivering to a
-stand-in Telegram server that records each message and its time; nothing on the VM is touched. Run on
-25 October with Prometheus 2.53.2 and Alertmanager 0.28.1 (binaries; output in
-`models/results/alerting_e2e_20261025.json`), all eight checks passed:
+stand-in Telegram server that records each message and its time; nothing on the VM is touched. The pod
+starts out remembering a report from an hour ago for each machine, as after a stopped agent. Run on
+26 October with Prometheus 2.53.2 and Alertmanager 0.28.1 (binaries; output in
+`models/results/alerting_e2e_20261026.json`), all eight checks passed (the first version of the script,
+without the restart case, also passed all eight on the VM with the Docker images):
 
 | Step | Telegram |
 |---|---|
 | a machine turns normal | `✅ − m4 back to normal` 2.9 s later |
 | nothing changes for 50 s (Prometheus re-sends its alerts, the clear expires) | no message |
-| an anomalous machine stops reporting (limit 30 s: three 5 s intervals, floor 30 s) | `⚫ m1 … missed its reports · last verdict anomalous` 32.9 s later |
-| every machine stops | `⚪ no information` 27.9 s after the last stop |
-| every machine reports again | `🔌` lines 2.9 s later (the four machines over two messages) |
+| an anomalous machine stops reporting (limit 30 s: three 5 s intervals, floor 30 s) | `⚫ m1 … missed its reports · last verdict anomalous` 33.0 s later |
+| every machine stops | `⚪ no information` 33.0 s after the last stop |
+| every machine reports again | `🔌` lines 3.0 s later (the four machines over two messages) |
 | the largest list, posted to Alertmanager | 3,463 characters (limit 4,096) |
 | the panel's anomaly mute | the five alerts of the list suppressed, `LayerDown` active |
 

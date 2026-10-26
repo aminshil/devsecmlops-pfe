@@ -41,7 +41,7 @@ req = urllib.request.Request("http://localhost:9093/api/v2/alerts", data=json.du
                              headers={"Content-Type": "application/json"}, method="POST")
 print("test alert accepted by Alertmanager:", urllib.request.urlopen(req, timeout=10).status == 200)
 EOF
-  echo "it should reach Telegram within about 30 seconds (group_wait)"
+  echo "it should reach Telegram within a few seconds"
 }
 
 if [ "${1:-}" = "--test" ]; then send_test_alert; exit 0; fi

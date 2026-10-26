@@ -9,6 +9,8 @@ Nothing on the VM is touched (own ports, own temporary storage, no real Telegram
                        ->  stand-in Telegram :18080 (records every message with its time)
 
 Scenario (machines report every --cadence seconds, +-30%, like the production agent):
+  start  the pod remembers each machine's last report from an hour ago (the agent was stopped), then the
+         machines start reporting: they must be judged on their new reports at once
   m1 anomalous throughout, m4 anomalous until 40 s; m2, m3 normal
   40 s   m4 turns normal            -> a "back to normal" line
   60-110 s  nothing changes        -> no message (Prometheus re-sends its alerts, the clear expires)
@@ -48,7 +50,7 @@ MACHINES = {"m1": "web", "m2": "db", "m3": "edge", "m4": "app"}
 
 # ---- stand-ins -------------------------------------------------------------------------------------------
 messages, stopped, verdict = [], set(), {"m1": 1, "m2": 0, "m3": 0, "m4": 1}
-seen = {m: time.time() for m in MACHINES}
+seen = {m: time.time() - 3600 for m in MACHINES}     # last report an hour ago, as after a stopped agent
 
 
 class Telegram(BaseHTTPRequestHandler):

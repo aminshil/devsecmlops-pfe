@@ -548,22 +548,27 @@ tests:
             exp_annotations:
               summary: "the Kubernetes API is not answering"
               description: "kubectl calls from the k8s exporter have failed for 30 seconds (Minikube down?)."
-  - name: no predictions for 5 minutes
-    interval: 1m
+  - name: no predictions for a minute
+    # several predictions every 5 s until 2m, then none: the last increase leaves the 1-minute window at
+    # 3m, and the alert fires 15 s later
+    interval: 5s
     input_series:
       - series: 'api_predictions_total{job="anomaly-api-pods",pod="p1",model="telecom_v4_rolling",machine_type="web",is_anomaly="0",likely_cause="normal"}'
-        values: '0+10x10 100x20'
+        values: '0+30x24 720x60'
     alert_rule_test:
-      - eval_time: 9m
+      - eval_time: 2m30s
         alertname: PredictionsStopped
         exp_alerts: []
-      - eval_time: 22m
+      - eval_time: 3m10s
+        alertname: PredictionsStopped
+        exp_alerts: []
+      - eval_time: 3m20s
         alertname: PredictionsStopped
         exp_alerts:
           - exp_labels:
               severity: warning
             exp_annotations:
-              summary: "no predictions served for 5 minutes"
+              summary: "no predictions served for a minute"
               description: "The traffic agent or the serving path has stopped."
   - name: root disk above 90%
     interval: 1m
@@ -1053,3 +1058,50 @@ tests:
               usual: "5s"
               last_verdict: "normal"
               description: "No report from m5 for 35s: it has missed its reports."
+
+  - name: a machine that restarts after a long stop is judged on its new reports at once
+    # The pods still remember a report from an hour ago; the agent starts at 10m (every 30 s) and stops again
+    # at 13m. Its usual interval is 30 s from its third gap (the hour-long gap does not count for more than
+    # one), so it misses its reports at 13m + 90 s. On the VM on 26 October, the first estimator (an average
+    # over 15-minute windows) put that machine's interval at about 15 minutes and never listed it. At 5m it
+    # has no verdict younger than 5 minutes, so its last verdict is empty.
+    interval: 30s
+    input_series:
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="m-restart",machine_type="web"}'
+        values: '0x40'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="m-restart"}'
+        values: '-3600x19 600+30x6 780x13'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MachineSilent
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: m-restart, machine_type: web}
+            exp_annotations:
+              summary: "m-restart (web) stopped reporting"
+              silence: "1h 5m 0s"
+              usual: ""
+              last_verdict: ""
+              description: "No report from m-restart for 1h 5m 0s: it has missed its reports."
+      - eval_time: 10m30s
+        alertname: MachineReportingAgain
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: m-restart, machine_type: web}
+            exp_annotations: {summary: "m-restart (web) is reporting", description: "m-restart reports on time (after missing its reports, or for the first time)."}
+      - eval_time: 14m25s
+        alertname: MachineSilent
+        exp_alerts: []
+      - eval_time: 14m35s
+        alertname: MachineSilent
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: m-restart, machine_type: web}
+            exp_annotations:
+              summary: "m-restart (web) stopped reporting"
+              silence: "1m 35s"
+              usual: "30s"
+              last_verdict: "normal"
+              description: "No report from m-restart for 1m 35s: it has missed its reports."
+      - eval_time: 14m35s
+        alertname: FleetNoData
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies}
+            exp_annotations: {summary: "no information about the machines", description: "No machine is reporting to the serving pods: every one has missed its reports."}
