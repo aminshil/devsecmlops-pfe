@@ -1,0 +1,23 @@
+{
+  "started_at": "2026-10-26T01:08:22Z",
+  "before_stop": {
+    "machines_with_interval": 200,
+    "usual_interval_s": {
+      "0.0": 26.8,
+      "0.5": 30.6,
+      "1.0": 34.2
+    },
+    "silent": 0
+  },
+  "after_stop_s": {
+    "first MachineSilent": 50.2,
+    "PredictionsStopped": 75.3,
+    "FleetNoData (every machine silent)": 100.4
+  },
+  "after_restart_s": {
+    "FleetNoData gone": 4.0,
+    "first MachineReportingAgain": 4.0,
+    "no machine silent": 34.1
+  },
+  "finished_at": "2026-10-26T01:10:39Z"
+}

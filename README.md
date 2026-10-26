@@ -1927,8 +1927,25 @@ without the restart case, also passed all eight on the VM with the Docker images
 | the largest list, posted to Alertmanager | 3,463 characters (limit 4,096) |
 | the panel's anomaly mute | the five alerts of the list suppressed, `LayerDown` active |
 
-Every rule evaluated without error. With the production agent's 30 s the limit is 90 s, so a stopped
-machine is expected in the list 90 to 105 s after its last report (not measured at that cadence).
+Every rule evaluated without error.
+
+**The real agent stopped on the VM.** `scripts/agent_stop_test.py` (run as root on the VM) waits until
+every machine has 3 new gaps between its reports and none is silent, stops the production agent, times
+the alerts as Prometheus fires them (Telegram follows within about 5 s), starts the agent again and times
+the recovery. Run on 26 October (output in `models/results/agent_stop_test_20261026.json`), with the 200
+machines' usual intervals between 26.8 and 34.2 s (median 30.6 s):
+
+| After the stop | Seconds |
+|---|---|
+| first `⚫` (`MachineSilent`: the machine whose last report was the oldest) | 50.2 |
+| `PredictionsStopped` (93 machines silent by then) | 75.3 |
+| `⚪ no information` (`FleetNoData`: all 200 silent) | 100.4 |
+| **After the restart** | |
+| "no information" gone, first `🔌` (`MachineReportingAgain`) | 4.0 |
+| no machine silent (each agent's first report comes after the replay data is indexed, about 20 s, and a random start of up to 30 s) | 34.1 |
+
+Before the fixes of 26 October, the same stop took 13 minutes to show the first `⚫` lines and about 10
+minutes for `PredictionsStopped`.
 
 **Installing it** (on the VM, as root): `sudo bash scripts/setup_alerting.sh`. It asks for the bot token
 once (not echoed, checked with Telegram's `getMe`, stored root-only in
@@ -1943,7 +1960,7 @@ does not keep alerts across a restart, and Prometheus re-sends each firing alert
 machine is judged against its own past reports, so one that reports more slowly than every 5 minutes
 has no known interval and is listed as not reporting only after 15 minutes; a machine seen for the first
 time is announced as reporting (`🔌`), and so is the whole fleet once when these rules are first loaded
-(or after Prometheus was down for more than a minute). A wider stop is also reported by `PredictionsStopped` and `ServingPodNotScraped`. The promtool
+(or after Prometheus was down for more than a minute). A wider stop is also reported by `PredictionsStopped` and `ServingPodNotScraped`. After a change to a recording rule, its old values stay readable for up to 5 minutes once Prometheus restarts (the 5-minute lookback; nothing marks them as ended): on 26 October the replaced interval rule's values (about 4,400 s) were still returned at 01:32, and a stop test started then measured nothing useful, which is why `agent_stop_test.py` waits for 3 new gaps per machine. The promtool
 suite takes about 3 minutes on 2 cores (the new rules look back an hour on every 5 s step). Notifications need the VM's internet access to reach Telegram. The containers are started by
 the setup script, not yet by the Ansible playbook. The router-level reasoning of the Fleet tab
 (suspected gray failure) is not an alert; `FleetAnomalySurge` covers the many-machines-at-once case.
@@ -2019,6 +2036,7 @@ mlflow server --host 0.0.0.0 --port 5001 \
 | `monitoring/alerting/alertmanager.yml.tmpl`, `telegram.tmpl`, `blackbox.yml` | Alertmanager routing (template, no secret), the Telegram message, the layer probes. |
 | `scripts/check_alerting.sh`, `scripts/setup_alerting.sh` | Validate the alerting configuration; install it on the VM (Telegram, Alertmanager, blackbox exporter). |
 | `scripts/alerting_e2e.py` | The anomaly list end to end: the repository's rules and templates in a real Prometheus and Alertmanager, a stand-in pod and a stand-in Telegram; timings, message size and the mute, written to JSON. |
+| `scripts/agent_stop_test.py` | Stops and restarts the real production agent on the VM and times `MachineSilent`, `PredictionsStopped`, `FleetNoData` and the recovery, written to JSON. |
 | `monitoring/replay_exporter.py`, `anomaly_bridge.py` | Earlier traffic designs, kept and functional, not started by default. |
 | `docs/machine_roster.txt` | All 200 machines: 40 web, 35 app, 30 db, 20 cache, 20 queue, 15 batch, 15 edge, 8 router, 7 firewall, 5 dns, 5 voip. |
 
