@@ -7,10 +7,12 @@
 DevSecMLOps · Alertmanager :9093
 {{- end }}
 
-{{/* Machine anomalies as ONE running list, re-sent whenever it changes: every machine anomalous now,
-     alphabetical, with how long each has been anomalous (🆕 + marks a machine that turned anomalous in the
-     last minute, ⏱ one anomalous on every reading for 10 minutes: AnomalyPersistent); the machines that just
-     turned normal (✅ −); the machines that missed their reports (⚫),
+{{/* Machine anomalies as ONE running list, re-sent whenever it changes: every machine the classifier
+     flags now (a machine flagged by the IsolationForest safety net alone is not listed: alert_rules.yml,
+     fleet:machine_confirmed:now), alphabetical, with how long each has been anomalous (🆕 + marks a machine
+     that turned anomalous in the last minute, ⏱ one anomalous on every reading for 10 minutes:
+     AnomalyPersistent); the machines that just turned normal (✅ −) or that only the safety net still flags
+     (❔ −); the machines that missed their reports (⚫),
      with how long ago they missed them (more than three of their usual intervals without a report), their
      usual interval and their last verdict; the machines that
      report again (🔌). With no machine reporting at all, the list says "no information". At most 40 + 10 +
@@ -29,8 +31,9 @@ DevSecMLOps · Alertmanager :9093
 {{ end }}{{ end }}{{ end -}}
 {{ if gt (len $n) 40 }}… 40 of {{ len $n }} listed
 {{ end -}}
-{{ $c := "" }}{{ range .Alerts.Firing }}{{ if and (eq .Labels.alertname "AnomalyCleared") (lt (since .StartsAt).Seconds 20.0) }}{{ if lt (len $c) 10 }}✅ − {{ .Labels.machine }} ({{ .Labels.machine_type }}) back to normal
-{{ end }}{{ $c = print $c "x" }}{{ end }}{{ end -}}
+{{ $c := "" }}{{ range .Alerts.Firing }}{{ if and (eq .Labels.alertname "AnomalyCleared") (lt (since .StartsAt).Seconds 20.0) }}{{ if lt (len $c) 10 }}{{ if eq .Annotations.now "safety net only" }}❔ − {{ .Labels.machine }} ({{ .Labels.machine_type }}) safety net only now (not confirmed)
+{{ else }}✅ − {{ .Labels.machine }} ({{ .Labels.machine_type }}) back to normal
+{{ end }}{{ end }}{{ $c = print $c "x" }}{{ end }}{{ end -}}
 {{ if gt (len $c) 10 }}… 10 of {{ len $c }} back to normal listed
 {{ end -}}
 {{ if $nodata }}⚫ all {{ len $s }} machine(s) have missed their reports

@@ -259,3 +259,10 @@ measurements are the evidence that it works as configured; these pages define wh
     https://prometheus.io/docs/alerting/latest/management_api/
 90. systemd, *systemd.exec*: `RuntimeDirectory=` and `RuntimeDirectoryPreserve=` (the watchdog's
     `/run/prometheus-watchdog/`). https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html
+
+**Safety-net alarms on Telegram** (27 October)
+
+91. R. Ewaschuk, *Monitoring Distributed Systems*, in Beyer et al., *Site Reliability Engineering*, O'Reilly,
+    2016, ch. 6: "Effective alerting systems have good signal and very low noise", and never alert "simply
+    because 'something seems a bit weird'" (why the Telegram list leaves out the safety net's alarms alone,
+    README Decision 10b). https://www.oreilly.com/radar/monitoring-distributed-systems

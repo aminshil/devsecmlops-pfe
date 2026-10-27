@@ -47,7 +47,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7731** · precision 0.7166 · recall 0.8391. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on 25 October against the served 21 October model (image `2.20.3-b116`); the 19 October model scored 0.7755 on the same sample | `scripts/live_k8s_validation.py`, run on 25 October; output in `models/results/live_validation_20261025_b116.json` |
 | Latest green pipeline | Build `2.20.3-b120` (commit `ee6399b4`, 27 October: the watchdog, the History tab's order and every reading of an episode, the pods' `GET /predictions/by-machine`): all 11 stages green, 241 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS). Before it: b117 (`7666e3c9`, 26 October: the alerts for machines that miss their reports and the anomaly mute on the list label, 225 tests) | [L3 run history](#l3--cicd) |
 | Tests | 241 passing, in 22 files, all run by build b120 (b117 ran 225, b116 ran 223, b112 ran 188; the 37 added after b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute; the 16 added after b117 check the watchdog and the History tab's episode readings) | `pytest tests/` (stage 1b) |
-| Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, cleared, persistent, fleet surge), machines that miss their reports, no data, any layer down, pods, Kubernetes, traffic stopped, disk and memory. 26 rules (17 alerts, 9 recording rules) unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
+| Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, cleared, persistent, fleet surge; the list names the classifier's anomalies, not the safety net's alone: [10b](#10b-safety-net-alarms-measured--why-telegram-lists-only-the-classifiers)), machines that miss their reports, no data, any layer down, pods, Kubernetes, traffic stopped, disk and memory. 28 rules (17 alerts, 11 recording rules) unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
 | Dashboard | 27 Grafana panels in 6 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-21: the model promoted by Jenkins `devsecmlops-model` build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, model files read back from MinIO, committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); the current image `2.20.3-b112` carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
 | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
@@ -1818,13 +1818,13 @@ anyone has the control panel open, including when the panel itself is down.
 
 | Alert | Fires when | Severity |
 |---|---|---|
-| `AnomalyDetected` | a machine's latest verdict is anomalous; it resolves on the first normal verdict (no hold); delivered as one running list (below) | info |
-| `AnomalyCleared` | for one minute after a machine's verdict turns normal: the "back to normal" line of the list (an alert of its own, so a clear is announced once) | info |
+| `AnomalyDetected` | a machine's latest verdict is anomalous **and the classifier flagged it** (a machine flagged by the IsolationForest safety net alone is not sent: [Decision 10b](#10b-safety-net-alarms-measured--why-telegram-lists-only-the-classifiers)); it resolves on the first verdict that is not (no hold); delivered as one running list (below) | info |
+| `AnomalyCleared` | for one minute after a machine leaves the list: `✅ − … back to normal`, or `❔ − … safety net only now` when only the safety net still flags it (an alert of its own, so a clear is announced once) | info |
 | `MachineSilent` | a machine has missed its reports: nothing for more than three of its usual intervals (below); the `⚫` lines of the list, with its last verdict | info |
 | `MachineReportingAgain` | for one minute after a machine that had missed its reports (or is new) reports on time: the `🔌` line of the list | info |
 | `FleetNoData` | no machine reports on time any more: the list says "no information" instead of "all clear" | info |
-| `AnomalyPersistent` | a machine is anomalous on every reading for 10 minutes: marked `⏱` on its line of the list and counted in its header (part of the list, not a message of its own) | warning |
-| `FleetAnomalySurge` | at least 20 machines anomalous at once, and more than twice the 6-hour average, for 2 min | critical |
+| `AnomalyPersistent` | a machine is on the list (classifier-flagged) on every reading for 10 minutes: marked `⏱` on its line of the list and counted in its header (part of the list, not a message of its own) | warning |
+| `FleetAnomalySurge` | at least 20 machines anomalous at once, and more than twice the 6-hour average, for 2 min; it counts every anomalous machine, the safety net's alone included, because a cascade is mostly caught by the safety net alone | critical |
 | `LayerDown` | a platform layer fails two HTTP probes in a row (every 5 s, so 10 s): Docker registry, Jenkins, SonarQube, MLflow, MinIO, Grafana, the cluster NodePort; one message per layer | critical |
 | `ScrapeTargetDown` | the node exporter, the Kubernetes exporter or the control panel cannot be scraped for 30 s | critical |
 | `BlackboxExporterDown` | the probing exporter itself is down for 10 s (the layer checks would be blind) | critical |
@@ -1837,11 +1837,18 @@ anyone has the control panel open, including when the panel itself is down.
 
 The anomaly alerts read the same state as the Fleet tab: each machine's verdict from the replica that
 served it last, and only for machines that reported in the last 5 minutes, so a stale replica does not
-alert. Machine anomalies arrive as **one running list**, sent
+alert. The list names the machines **the classifier** flagged (`fleet:machine_confirmed:now`): a machine
+flagged by the IsolationForest safety net alone stays anomalous in the served decision, the panel and
+Grafana's count, but is not sent, because live only 16.9% of those alarms were real against 88.8% for the
+classifier's ([Decision 10b](#10b-safety-net-alarms-measured--why-telegram-lists-only-the-classifiers)).
+Which model flagged a machine is read from `api_anomaly_cause_p`, whose `cause` label the API sets to
+`unknown (flagged by safety-net model only)` in that case (`fleet:machine_net_only:fresh`, from the same
+replica as the verdict), so the change needed no new image. Machine anomalies arrive as **one running list**, sent
 within 5 seconds of every change: every machine anomalous now, alphabetical, with how long each has
 been anomalous; `🆕 +` marks a machine that turned anomalous in the last minute, `⏱` one anomalous on
 every reading for 10 minutes (`AnomalyPersistent`, also counted in the header: "12 machine(s) anomalous
-now, 5 for 10+ min"), and `✅ −` a machine whose verdict just turned normal. Until 26 October
+now, 5 for 10+ min"), `✅ −` a machine whose verdict just turned normal, and `❔ −` one that left the list
+because only the safety net still flags it (still anomalous in the panel). Until 26 October
 `AnomalyPersistent` was a message of its own; once warnings were sent within 30 s, it was re-sent every
 time a flickering machine entered or left the 10-minute set (seen on the VM: five messages in six
 minutes, each naming almost the same machines), so it became part of the list. A machine leaves the list on its first normal verdict (there is no
@@ -1883,10 +1890,12 @@ forgotten an hour after its last report.
 
 The list is capped at 40 anomalous machines and 10 lines each for back to normal, not reporting and
 reporting again, with a "… 40 of N listed" line when it is cut, so the message stays under Telegram's
-4,096-character limit in a fleet-wide incident (end to end, below: 200 anomalous, all marked `⏱`, 60 back to normal, 60 not reporting and 60 reporting
-again, with names longer than the fleet's, gives 3,562 characters as Telegram counts them: UTF-16 units, after the
+4,096-character limit in a fleet-wide incident (end to end, below: 200 anomalous, all marked `⏱`, 60 leaving the list (with the longer `❔` line), 60 not reporting and 60 reporting
+again, with names longer than the fleet's, gives 3,772 characters as Telegram counts them: UTF-16 units, after the
 HTML tags are parsed). The Grafana table "Anomalous machines now
-(the Telegram list)" and the "Anomalous machines over time" curve show the same machines, the table
+(the Telegram list)" and the "sent to Telegram (classifier)" line of the "Anomalous machines over time" chart
+show the same machines (its "anomalous" line also counts the safety net's alone: the gap between the two is
+what Telegram leaves out), the table
 "Machines not reporting" the `⚫` lines (with how long each has been silent), and the curve's second line
 how many there are; a promtool test runs the dashboard queries against the alerts on the same data. (Before this, the dashboard table
 used its own query, which also counted machines that had stopped reporting.) Each failing layer is its own message. Per-pod alerts are held back while the Kubernetes API itself is
@@ -1940,21 +1949,25 @@ repository.
 
 **End to end.** `scripts/alerting_e2e.py` runs the repository's rules and templates in a real
 Prometheus and a real Alertmanager (the pinned images with Docker, or binaries given on the command
-line), fed by a stand-in serving pod whose four machines report every 5 s (±30%), and delivering to a
+line), fed by a stand-in serving pod whose five machines report every 5 s (±30%), and delivering to a
 stand-in Telegram server that records each message and its time; nothing on the VM is touched. The pod
-starts out remembering a report from an hour ago for each machine, as after a stopped agent. Run on
-26 October with Prometheus 2.53.2 and Alertmanager 0.28.1 (binaries; output in
-`models/results/alerting_e2e_20261026.json`), all eight checks passed (the first version of the script,
-without the restart case, also passed all eight on the VM with the Docker images):
+starts out remembering a report from an hour ago for each machine, as after a stopped agent, and exports
+each anomalous machine's cause as the API does: m2 is flagged by the classifier until 40 s and by the
+safety net alone after, m5 by the safety net alone throughout. Run on 27 October with Prometheus 2.53.2
+and Alertmanager 0.28.1 (binaries; output in `models/results/alerting_e2e_20261027.json`), all eleven
+checks passed (the 26 October run, before the safety-net change, is kept in
+`models/results/alerting_e2e_20261026.json`: eight checks, all passed):
 
 | Step | Telegram |
 |---|---|
-| a machine turns normal | `✅ − m4 back to normal` 3.5 s later |
+| first list | m1, m2 (classifier) and m4 listed; m5 (safety net alone) not |
+| a machine turns normal; another is left to the safety net | `✅ − m4 back to normal` and `❔ − m2 safety net only now` 6.8 s later, in the same message |
+| m5, flagged by the safety net alone, at any time | never on the list |
 | nothing changes for 50 s (Prometheus re-sends its alerts, the clear expires) | no message |
-| an anomalous machine stops reporting (limit 30 s: three 5 s intervals, floor 30 s) | `⚫ m1 … missed its reports · last verdict anomalous` 33.5 s later |
-| every machine stops | `⚪ no information` 28.5 s after the last stop |
-| every machine reports again | `🔌` lines 3.5 s later |
-| the largest list, posted to Alertmanager (200 anomalous, all `⏱`) | 3,562 characters (limit 4,096) |
+| an anomalous machine stops reporting (limit 30 s: three 5 s intervals, floor 30 s) | `⚫ m1 … missed its reports · last verdict anomalous` 31.9 s later |
+| every machine stops | `⚪ no information` 31.9 s after the last stop |
+| every machine reports again | `🔌` lines 6.9 s later |
+| the largest list, posted to Alertmanager (200 anomalous, all `⏱`; the 60 clears with the longer `❔` line) | 3,772 characters (limit 4,096) |
 | the panel's anomaly mute | the six alerts of the list suppressed, `LayerDown` active |
 
 Every rule evaluated without error.
@@ -2849,6 +2862,80 @@ What this says, without softening it:
 - On the five learnable causes the safety net adds almost nothing (recall changes by less than half a point on every one, for example memory_leak 0.929 -> 0.933). Its real contribution is **cascade**, 0.041 -> 0.268, which the classifier is trained not to learn (label-noise decision above).
 - The shipped rule therefore follows the project's stated priority in `config/model_policy.json` (recall first: `min_recall` 0.80, F-beta with beta 3), not F1. If false alarms were the priority, the data says to serve the classifier alone. This is a deliberate trade-off, not a free improvement, and the recall target is still narrowly missed (0.7979 against 0.80).
 - All of it is measured on simulated data with generator labels; cascade labels are only 40% consistent by construction, so cascade recall is capped by the labels themselves.
+- The safety net's own alarms, measured live on 27 October: 16.9% real, almost all cascades. The decision stays; Telegram lists only the classifier's alarms ([10b](#10b-safety-net-alarms-measured--why-telegram-lists-only-the-classifiers)).
+
+### 10b. Safety-net alarms, measured — why Telegram lists only the classifier's
+
+Watching the Telegram list, the alarms whose cause reads `unknown (flagged by safety-net model only)`
+looked wrong most of the time. Decision 10 measured the safety net's cost on the whole decision; this
+measures its own alarms, live and offline, and the two ways of making them better that were proposed.
+Three read-only scripts, run on the VM on 27 October; nothing in the model or the decision changed.
+
+**Who raised the alarm, live.** `scripts/safety_net_live.py` joins the true label of every reading the
+production agent sent and the cluster flagged (`api/demo_labels.py`) with the cluster's prediction log
+(`GET /predictions/by-machine`), and splits the flagged readings by who raised them
+(`models/results/safety_net_live_20261027.json`):
+
+| Raised by | Flags | Real | False alarms | Precision | Real causes of its hits |
+|---|---|---|---|---|---|
+| classifier | 22,860 | 20,309 | 2,551 | **0.888** | the five learnable causes |
+| safety net alone | 9,967 | 1,683 | 8,284 | **0.169** | cascade 1,618 of 1,683 |
+
+All 32,827 labelled flags were found in the log. **Offline**, on all 17,280,000 rows of the test fleet
+(`scripts/decision_components.py`, `models/results/decision_components_20261027.json`, the 21 October
+model), the same split gives 426,185 flags raised by the safety net alone, 69,413 of them real (67,174
+cascades) and 356,772 false: precision **0.1629**. Both agree: about one safety-net-only alarm in six is
+real, and almost every real one is a cascade, the one cause the classifier is trained not to learn
+(Decision 9). The safety net is the project's only cascade detector (cascade recall 0.041 → 0.268), and
+it pays for it with about five false alarms per real one.
+
+**Fix A, a stricter safety-net cut-off** (the same script; IsolationForest `decision_function` below the
+cut-off, 0 being the trained one):
+
+| Cut-off | Precision | Recall | Cascade recall |
+|---|---|---|---|
+| 0 (served) | 0.6713 | 0.7979 | 0.268 |
+| -0.02 | 0.776 | 0.7746 | 0.1797 |
+| -0.04 | 0.8401 | 0.7584 | 0.1181 |
+| -0.06 | 0.8731 | 0.7484 | 0.0798 |
+| -0.10 | 0.8946 | 0.7399 | 0.0472 |
+| -0.15 | 0.8975 | 0.7384 | 0.0412 |
+
+Rejected: every stricter cut-off moves recall further below the policy's 0.80
+(`config/model_policy.json`) and gives up the cascades the safety net exists for. At -0.15 it is
+practically the classifier alone (0.8976 / 0.7383 / 0.041, below). **Turning the safety net off** is
+that row: precision 0.8976, but recall 0.7383 against the policy's 0.80, and cascades almost unseen.
+
+**Fix C, trust the safety net only when the machine's router is flagged too** (cascades come from a
+router: `scripts/safety_net_router_rule.py`, a 60 s window, routers from `models/dependency_graph.json`,
+`models/results/safety_net_router_rule_20261027.json`):
+
+| Decision | Precision | Recall | Cascade recall |
+|---|---|---|---|
+| classifier alone | 0.8976 | 0.7383 | 0.041 |
+| served (classifier OR safety net) | 0.6713 | 0.7979 | 0.268 |
+| classifier OR (safety net AND router flagged) | 0.791 | 0.7499 | 0.0848 |
+| same, with the router's true label | 0.8274 | 0.7422 | 0.0551 |
+
+Rejected, and the script says why before the table: during a cascade, the machine's router is truly
+anomalous **0.0586** of the time, about its base rate (5%). This is Decision 9b's audit finding
+(the v2 generator draws the router's own rows separately from the cascades it causes; `cascade_check.py`
+measured 1.02×), seen from the other side: on the shipped data a router's state says nothing about its
+dependents, so no router-based rule can confirm a cascade. On the v3 data it would (28.86×, Decision 9c),
+but production stays on its v2-trained models.
+
+**What was done instead: the served decision is unchanged, Telegram lists only the classifier's alarms.**
+Recall stays 0.7979 and every number above stays true; only what is pushed to a phone changes. The rule
+`fleet:machine_confirmed:now` (Alerting, L5) leaves out the machines whose latest verdict is the safety
+net's alone; they stay anomalous in the panel (Review tab: "flagged by safety net") and in Grafana's
+"anomalous" count, and a machine that leaves the list that way gets a `❔ −` line instead of
+"back to normal". `FleetAnomalySurge` still counts them, so a cascade, many machines behind one router
+failing together, still reaches Telegram as a surge. Measured live, this list would have left out 9,967
+of the 32,827 alarms (30.4%), 8,284 of them false; what it sends is right 88.8% of the time, and the
+1,683 real anomalies it leaves out (1,618 cascades) are still on the panel. The principle is the SRE
+book's: "Effective alerting systems have good signal and very low noise", and an alert should not fire
+"simply because 'something seems a bit weird'" (Ewaschuk, *Monitoring Distributed Systems*), which is
+what an unsupervised outlier score is.
 
 ### 11. Why XGBoost replaced RandomForest as primary (v3)
 
@@ -3167,7 +3254,7 @@ python monitoring/k8s_exporter.py &
 |---|---|
 | `docs/TROUBLESHOOTING.md` | A runbook written from real incidents: Docker networking staleness, Minikube API timeouts, a rejected retrain (the guardrail working as intended), MLflow service checks, browser-vs-VM connectivity, Jenkins pytest/venv failures. Corrected in this pass: it referenced the deleted `retrain_from_feedback.py` and told operators to hand-launch MLflow with hardcoded MinIO credentials. |
 | `docs/MINIKUBE_RELIABILITY.md` | Why the cluster was unreachable after a reboot (Jenkins taking the node's fixed address, no autostart, missing `--force`), the permanent fix, and how to verify it |
-| `docs/SOURCES.md` | Every external source the project took information from (90), grouped by what it informed: network failures and root cause, the SMD benchmark, alerting and monitoring, the CI quality and security gates, assets, the report's Chapter 1 bibliography, and the reference documentation for each layer (L0–L6). |
+| `docs/SOURCES.md` | Every external source the project took information from (91), grouped by what it informed: network failures and root cause, the SMD benchmark, alerting and monitoring, the CI quality and security gates, assets, the report's Chapter 1 bibliography, and the reference documentation for each layer (L0–L6). |
 | `docs/INFRASTRUCTURE_SETUP.md` | Rebuilding the whole platform on a blank Ubuntu machine, step by step, with expected outputs. Brought up for real on the original VM only, not yet on a clean second machine; its status table says which steps are proven. |
 | `docs/DEMO_SCRIPT.md` | The defense demo, step by step: what to show, what to say, and which steps were proven in a real log versus to rehearse. |
 | `docs/fleet_status.svg` | A fleet snapshot drawn by `scripts/fleet_status.py` (by default the worst moment of the fleet, routers and their dependents). |

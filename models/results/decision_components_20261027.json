@@ -1,0 +1,177 @@
+{
+  "test_rows": 17280000,
+  "anomalous_rows": 1164259,
+  "threshold": 0.91,
+  "false_positives_added_only_by_isolation_forest": 356772,
+  "decisions": {
+    "classifier": {
+      "precision": 0.8976,
+      "recall": 0.7383,
+      "f1": 0.8102,
+      "tp": 859578,
+      "fp": 98054,
+      "fn": 304681,
+      "recall_by_cause": {
+        "cascade": 0.041,
+        "cpu_spike": 0.9862,
+        "disk_saturation": 0.9964,
+        "memory_leak": 0.9292,
+        "network_flood": 0.9906,
+        "silent_failure": 0.9788
+      }
+    },
+    "isolation_forest": {
+      "precision": 0.6666,
+      "recall": 0.661,
+      "f1": 0.6638,
+      "tp": 769555,
+      "fp": 384905,
+      "fn": 394704,
+      "recall_by_cause": {
+        "cascade": 0.2509,
+        "cpu_spike": 0.7935,
+        "disk_saturation": 0.9641,
+        "memory_leak": 0.6713,
+        "network_flood": 0.9078,
+        "silent_failure": 0.686
+      }
+    },
+    "served_or": {
+      "precision": 0.6713,
+      "recall": 0.7979,
+      "f1": 0.7292,
+      "tp": 928991,
+      "fp": 454826,
+      "fn": 235268,
+      "recall_by_cause": {
+        "cascade": 0.268,
+        "cpu_spike": 0.988,
+        "disk_saturation": 0.9967,
+        "memory_leak": 0.9333,
+        "network_flood": 0.9945,
+        "silent_failure": 0.9811
+      }
+    }
+  },
+  "safety_net_only": {
+    "flags": 426185,
+    "real_anomalies": 69413,
+    "false_alarms": 356772,
+    "precision": 0.1629,
+    "real_anomalies_by_cause": {
+      "cascade": 67174,
+      "network_flood": 719,
+      "memory_leak": 715,
+      "silent_failure": 406,
+      "cpu_spike": 343,
+      "disk_saturation": 56
+    }
+  },
+  "isolation_forest_cutoffs": [
+    {
+      "cutoff": 0.0,
+      "precision": 0.6713,
+      "recall": 0.7979,
+      "f1": 0.7292,
+      "cascade_recall": 0.268,
+      "safety_net_only_flags": 426185,
+      "safety_net_only_precision": 0.1629,
+      "tp": 928991,
+      "fp": 454826,
+      "fn": 235268,
+      "only_tp": 69413,
+      "only_fp": 356772,
+      "cascade_hit": 79322
+    },
+    {
+      "cutoff": -0.02,
+      "precision": 0.776,
+      "recall": 0.7746,
+      "f1": 0.7753,
+      "cascade_recall": 0.1797,
+      "safety_net_only_flags": 204516,
+      "safety_net_only_precision": 0.2067,
+      "tp": 901850,
+      "fp": 260298,
+      "fn": 262409,
+      "only_tp": 42272,
+      "only_fp": 162244,
+      "cascade_hit": 53203
+    },
+    {
+      "cutoff": -0.04,
+      "precision": 0.8401,
+      "recall": 0.7584,
+      "f1": 0.7972,
+      "cascade_recall": 0.1181,
+      "safety_net_only_flags": 93452,
+      "safety_net_only_precision": 0.2506,
+      "tp": 882993,
+      "fp": 168091,
+      "fn": 281266,
+      "only_tp": 23415,
+      "only_fp": 70037,
+      "cascade_hit": 34956
+    },
+    {
+      "cutoff": -0.06,
+      "precision": 0.8731,
+      "recall": 0.7484,
+      "f1": 0.806,
+      "cascade_recall": 0.0798,
+      "safety_net_only_flags": 40278,
+      "safety_net_only_precision": 0.2914,
+      "tp": 871317,
+      "fp": 126593,
+      "fn": 292942,
+      "only_tp": 11739,
+      "only_fp": 28539,
+      "cascade_hit": 23611
+    },
+    {
+      "cutoff": -0.08,
+      "precision": 0.8883,
+      "recall": 0.7427,
+      "f1": 0.809,
+      "cascade_recall": 0.058,
+      "safety_net_only_flags": 15875,
+      "safety_net_only_precision": 0.325,
+      "tp": 864737,
+      "fp": 108770,
+      "fn": 299522,
+      "only_tp": 5159,
+      "only_fp": 10716,
+      "cascade_hit": 17181
+    },
+    {
+      "cutoff": -0.1,
+      "precision": 0.8946,
+      "recall": 0.7399,
+      "f1": 0.8099,
+      "cascade_recall": 0.0472,
+      "safety_net_only_flags": 5329,
+      "safety_net_only_precision": 0.35,
+      "tp": 861443,
+      "fp": 101518,
+      "fn": 302816,
+      "only_tp": 1865,
+      "only_fp": 3464,
+      "cascade_hit": 13961
+    },
+    {
+      "cutoff": -0.15,
+      "precision": 0.8975,
+      "recall": 0.7384,
+      "f1": 0.8102,
+      "cascade_recall": 0.0412,
+      "safety_net_only_flags": 134,
+      "safety_net_only_precision": 0.4179,
+      "tp": 859634,
+      "fp": 98132,
+      "fn": 304625,
+      "only_tp": 56,
+      "only_fp": 78,
+      "cascade_hit": 12203
+    }
+  ]
+}

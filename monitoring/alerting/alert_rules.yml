@@ -11,6 +11,12 @@
 # missed its reports: it is listed as not reporting (MachineSilent), and its last verdict no longer counts
 # as current. The alerts that make up the Telegram anomaly list carry the label list="anomalies"
 # (alertmanager.yml.tmpl routes on it; the control panel's "mute the anomaly list" silences it).
+#
+# Confirmed anomalies only: the Telegram list names the machines the classifier flagged. A machine flagged
+# by the IsolationForest safety net alone is still anomalous (the served decision, the panel and Grafana's
+# counts are unchanged), but it is not sent: measured on 27 October, 16.9% of those alarms were real, live
+# (1,683 of 9,967), against 88.8% for the classifier's (README, "Safety-net alarms"). Their real hits are
+# cascades, which reach Telegram through FleetAnomalySurge (many machines at once), which counts all of them.
 
 groups:
   - name: anomalies
@@ -73,13 +79,35 @@ groups:
         expr: fleet:machine_anomalous:fresh unless on (machine) (fleet:machine_silent == 1)
 
       - record: fleet:anomalous_machines:count
+        # every anomalous machine, safety-net-only ones included: FleetAnomalySurge reads it
         expr: count(fleet:machine_anomalous:now == 1) or vector(0)
 
+      # ---- which model flagged it ----
+      - record: fleet:machine_net_only:fresh
+        # 1 per machine whose latest anomalous verdict came from the IsolationForest safety net alone (the
+        # classifier did not flag it). The API names that cause in api_anomaly_cause_p (api/app.py,
+        # SAFETY_NET_CAUSE); read from the replica that served the machine last, as fleet:machine_anomalous:fresh
+        expr: |
+          group by (machine) (
+            api_anomaly_cause_p{job="anomaly-api-pods", cause="unknown (flagged by safety-net model only)"}
+            and on (pod, machine)
+            (api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods"}
+              == on (machine) group_left ()
+              max by (machine) (api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods"}))
+          )
+
+      - record: fleet:machine_confirmed:now
+        # what the Telegram list reads: 1 when the machine is anomalous now and the classifier flagged it;
+        # 0 when it is normal now or flagged by the safety net only (same machines as fleet:machine_anomalous:now)
+        expr: |
+          (fleet:machine_anomalous:now unless on (machine) fleet:machine_net_only:fresh)
+          or (0 * fleet:machine_anomalous:now)
+
       - alert: AnomalyDetected
-        # direct, both ways: fires on the first anomalous verdict and resolves on the first normal one
-        # (no hold), so the Telegram list is exactly the machines anomalous now; a verdict that flickers
-        # (1, 0, 1, 0) comes and goes with it. Alertmanager sends the list within 5 s of a change.
-        expr: fleet:machine_anomalous:now == 1
+        # direct, both ways: fires on the first confirmed anomalous verdict and resolves on the first one that
+        # is not (no hold), so the Telegram list is exactly the machines the classifier flags now; a verdict
+        # that flickers (1, 0, 1, 0) comes and goes with it. Alertmanager sends the list within 5 s of a change.
+        expr: fleet:machine_confirmed:now == 1
         labels:
           severity: info
           list: anomalies
@@ -88,19 +116,21 @@ groups:
           description: "The served model flagged {{ $labels.machine }} on its last readings."
 
       - alert: AnomalyCleared
-        # the "back to normal" line of the Telegram list: fires for one minute after a machine's verdict
-        # turns normal. A firing alert of its own (not Alertmanager's resolved alerts, which Prometheus
-        # keeps re-sending for 15 minutes) so a clear is announced once. A machine that stops reporting
-        # has no current verdict and is not announced as back to normal (MachineSilent lists it).
+        # the "back to normal" line of the Telegram list: fires for one minute after a machine leaves it. A
+        # firing alert of its own (not Alertmanager's resolved alerts, which Prometheus keeps re-sending for
+        # 15 minutes) so a clear is announced once. A machine that stops reporting has no current verdict
+        # and is not announced as back to normal (MachineSilent lists it). `now` says why it left: "normal",
+        # or "safety net only" (still anomalous, no longer confirmed by the classifier: its own ❔ line).
         expr: |
-          (fleet:machine_anomalous:now == 0)
-          and on (machine) (max_over_time(fleet:machine_anomalous:now[1m]) == 1)
+          (fleet:machine_confirmed:now == 0)
+          and on (machine) (max_over_time(fleet:machine_confirmed:now[1m]) == 1)
         labels:
           severity: info
           list: anomalies
         annotations:
-          summary: "{{ $labels.machine }} ({{ $labels.machine_type }}) is back to normal"
-          description: "The served model's latest verdict on {{ $labels.machine }} is normal again."
+          now: '{{ with printf "fleet:machine_net_only:fresh{machine=%q}" $labels.machine | query }}safety net only{{ else }}normal{{ end }}'
+          summary: '{{ $labels.machine }} ({{ $labels.machine_type }}) {{ with printf "fleet:machine_net_only:fresh{machine=%q}" $labels.machine | query }}is no longer confirmed by the classifier{{ else }}is back to normal{{ end }}'
+          description: '{{ with printf "fleet:machine_net_only:fresh{machine=%q}" $labels.machine | query }}Only the IsolationForest safety net still flags {{ $labels.machine }}: not sent to Telegram (Review tab).{{ else }}The served model''s latest verdict on {{ $labels.machine }} is normal again.{{ end }}'
 
       - alert: MachineSilent
         # the machine missed its reports: nothing for more than three of its usual intervals. The value is the
@@ -147,7 +177,7 @@ groups:
         # an episode, not a blip: anomalous on every reading for 10 minutes. Part of the list (marked ⏱ on the
         # machine's line, counted in the header), not a message of its own: as a separate message it was re-sent
         # every time a machine entered or left the 10-minute set, which the list already shows (26 October)
-        expr: fleet:machine_anomalous:now == 1
+        expr: fleet:machine_confirmed:now == 1
         for: 10m
         labels:
           severity: warning
@@ -158,7 +188,8 @@ groups:
 
       - alert: FleetAnomalySurge
         # many machines at once points upstream (a router, a shared dependency). Self-calibrating:
-        # at least twice the 6-hour average AND at least 20 machines (10% of the fleet), for 2 minutes
+        # at least twice the 6-hour average AND at least 20 machines (10% of the fleet), for 2 minutes.
+        # Counts safety-net-only machines too: a cascade is mostly caught by the safety net alone
         expr: |
           fleet:anomalous_machines:count >= 20
           and fleet:anomalous_machines:count > 2 * avg_over_time(fleet:anomalous_machines:count[6h])

@@ -826,7 +826,7 @@ tests:
         alertname: AnomalyCleared
         exp_alerts:
           - exp_labels: {severity: info, list: anomalies, machine: m-clear, machine_type: web}
-            exp_annotations: {summary: "m-clear (web) is back to normal", description: "The served model's latest verdict on m-clear is normal again."}
+            exp_annotations: {now: normal, summary: "m-clear (web) is back to normal", description: "The served model's latest verdict on m-clear is normal again."}
       - eval_time: 3m30s
         alertname: AnomalyCleared
         exp_alerts: []
@@ -839,6 +839,129 @@ tests:
       - eval_time: 6m30s
         alertname: FleetNoData
         exp_alerts: []
+
+  - name: a machine flagged by the safety net alone is not on the Telegram list, and still counts for a surge
+    # Every 15 s. web-01: the classifier flags it throughout. db-01: only the safety net flags it, throughout.
+    # app-01: the classifier until 2m, then only the safety net (the API replaces its cause series). edge-01:
+    # the other way round. cache-01: a stale replica (p1) last saw it flagged by the safety net, the replica that
+    # served it last (p2) by the classifier. db-02: normal.
+    interval: 15s
+    input_series:
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="web-01",machine_type="web"}'
+        values: '1x47'
+      - series: 'api_anomaly_cause_p{job="anomaly-api-pods",pod="p1",machine="web-01",machine_type="web",cause="cpu_spike"}'
+        values: '0.9x47'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="web-01"}'
+        values: '0+15x47'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="db-01",machine_type="db"}'
+        values: '1x47'
+      - series: 'api_anomaly_cause_p{job="anomaly-api-pods",pod="p1",machine="db-01",machine_type="db",cause="unknown (flagged by safety-net model only)"}'
+        values: '0.02x47'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="db-01"}'
+        values: '0+15x47'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="app-01",machine_type="app"}'
+        values: '1x47'
+      - series: 'api_anomaly_cause_p{job="anomaly-api-pods",pod="p1",machine="app-01",machine_type="app",cause="memory_leak"}'
+        values: '0.9x7 stale'
+      - series: 'api_anomaly_cause_p{job="anomaly-api-pods",pod="p1",machine="app-01",machine_type="app",cause="unknown (flagged by safety-net model only)"}'
+        values: '_x8 0.05x39'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="app-01"}'
+        values: '0+15x47'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="edge-01",machine_type="edge"}'
+        values: '1x47'
+      - series: 'api_anomaly_cause_p{job="anomaly-api-pods",pod="p1",machine="edge-01",machine_type="edge",cause="unknown (flagged by safety-net model only)"}'
+        values: '0.05x7 stale'
+      - series: 'api_anomaly_cause_p{job="anomaly-api-pods",pod="p1",machine="edge-01",machine_type="edge",cause="network_flood"}'
+        values: '_x8 0.95x39'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="edge-01"}'
+        values: '0+15x47'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="cache-01",machine_type="cache"}'
+        values: '1x47'
+      - series: 'api_anomaly_cause_p{job="anomaly-api-pods",pod="p1",machine="cache-01",machine_type="cache",cause="unknown (flagged by safety-net model only)"}'
+        values: '0.05x47'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="cache-01"}'
+        values: '0x47'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p2",machine="cache-01",machine_type="cache"}'
+        values: '1x47'
+      - series: 'api_anomaly_cause_p{job="anomaly-api-pods",pod="p2",machine="cache-01",machine_type="cache",cause="disk_saturation"}'
+        values: '0.9x47'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p2",machine="cache-01"}'
+        values: '15+15x47'
+      - series: 'api_currently_anomalous{job="anomaly-api-pods",pod="p1",machine="db-02",machine_type="db"}'
+        values: '0x47'
+      - series: 'api_machine_last_seen_timestamp_seconds{job="anomaly-api-pods",pod="p1",machine="db-02"}'
+        values: '0+15x47'
+    alert_rule_test:
+      - eval_time: 1m45s
+        alertname: AnomalyDetected
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: web-01, machine_type: web}
+            exp_annotations: {summary: "web-01 (web) is anomalous", description: "The served model flagged web-01 on its last readings."}
+          - exp_labels: {severity: info, list: anomalies, machine: app-01, machine_type: app}
+            exp_annotations: {summary: "app-01 (app) is anomalous", description: "The served model flagged app-01 on its last readings."}
+          - exp_labels: {severity: info, list: anomalies, machine: cache-01, machine_type: cache}
+            exp_annotations: {summary: "cache-01 (cache) is anomalous", description: "The served model flagged cache-01 on its last readings."}
+      # 2m: app-01 is left to the safety net (off the list, its own line), edge-01 confirmed (on the list)
+      - eval_time: 2m30s
+        alertname: AnomalyDetected
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: web-01, machine_type: web}
+            exp_annotations: {summary: "web-01 (web) is anomalous", description: "The served model flagged web-01 on its last readings."}
+          - exp_labels: {severity: info, list: anomalies, machine: edge-01, machine_type: edge}
+            exp_annotations: {summary: "edge-01 (edge) is anomalous", description: "The served model flagged edge-01 on its last readings."}
+          - exp_labels: {severity: info, list: anomalies, machine: cache-01, machine_type: cache}
+            exp_annotations: {summary: "cache-01 (cache) is anomalous", description: "The served model flagged cache-01 on its last readings."}
+      - eval_time: 2m30s
+        alertname: AnomalyCleared
+        exp_alerts:
+          - exp_labels: {severity: info, list: anomalies, machine: app-01, machine_type: app}
+            exp_annotations:
+              now: "safety net only"
+              summary: "app-01 (app) is no longer confirmed by the classifier"
+              description: "Only the IsolationForest safety net still flags app-01: not sent to Telegram (Review tab)."
+      - eval_time: 3m30s
+        alertname: AnomalyCleared
+        exp_alerts: []
+      # 10 minutes: only web-01 and cache-01 have been confirmed on every reading (db-01, flagged by the safety
+      # net throughout, is never persistent; edge-01 is confirmed since 2m)
+      - eval_time: 11m
+        alertname: AnomalyPersistent
+        exp_alerts:
+          - exp_labels: {severity: warning, list: anomalies, machine: web-01, machine_type: web}
+            exp_annotations: {summary: "web-01 (web) anomalous for 10+ minutes", description: "Persistent anomaly on web-01: check the machine (Review tab: Details)."}
+          - exp_labels: {severity: warning, list: anomalies, machine: cache-01, machine_type: cache}
+            exp_annotations: {summary: "cache-01 (cache) anomalous for 10+ minutes", description: "Persistent anomaly on cache-01: check the machine (Review tab: Details)."}
+    promql_expr_test:
+      - expr: fleet:machine_net_only:fresh
+        eval_time: 2m30s
+        exp_samples:
+          - {labels: 'fleet:machine_net_only:fresh{machine="db-01"}', value: 1}
+          - {labels: 'fleet:machine_net_only:fresh{machine="app-01"}', value: 1}
+      - expr: fleet:machine_confirmed:now
+        eval_time: 2m30s
+        exp_samples:
+          - {labels: 'fleet:machine_confirmed:now{machine="web-01",machine_type="web"}', value: 1}
+          - {labels: 'fleet:machine_confirmed:now{machine="edge-01",machine_type="edge"}', value: 1}
+          - {labels: 'fleet:machine_confirmed:now{machine="cache-01",machine_type="cache"}', value: 1}
+          - {labels: 'fleet:machine_confirmed:now{machine="db-01",machine_type="db"}', value: 0}
+          - {labels: 'fleet:machine_confirmed:now{machine="app-01",machine_type="app"}', value: 0}
+          - {labels: 'fleet:machine_confirmed:now{machine="db-02",machine_type="db"}', value: 0}
+      # FleetAnomalySurge's count keeps every anomalous machine, safety-net-only ones included
+      - expr: fleet:anomalous_machines:count
+        eval_time: 2m30s
+        exp_samples:
+          - {labels: 'fleet:anomalous_machines:count', value: 5}
+      # the dashboard's table "Anomalous machines now (the Telegram list)" and its curve, with $machine_type = .*
+      - expr: "fleet:machine_confirmed:now{machine_type=~\".*\"} == 1"
+        eval_time: 2m30s
+        exp_samples:
+          - {labels: 'fleet:machine_confirmed:now{machine="web-01",machine_type="web"}', value: 1}
+          - {labels: 'fleet:machine_confirmed:now{machine="edge-01",machine_type="edge"}', value: 1}
+          - {labels: 'fleet:machine_confirmed:now{machine="cache-01",machine_type="cache"}', value: 1}
+      - expr: "count(fleet:machine_confirmed:now{machine_type=~\".*\"} == 1) or vector(0)"
+        eval_time: 2m30s
+        exp_samples:
+          - {labels: '{}', value: 3}
 
   - name: no machine reporting on time is "no information", not "all clear"; the first report ends it
     # web-01 reports every 15 s, stops at 1m (misses its reports after 45 s, at 1m45s) and reports again at 5m

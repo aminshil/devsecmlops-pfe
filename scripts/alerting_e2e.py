@@ -11,14 +11,17 @@ Nothing on the VM is touched (own ports, own temporary storage, no real Telegram
 Scenario (machines report every --cadence seconds, +-30%, like the production agent):
   start  the pod remembers each machine's last report from an hour ago (the agent was stopped), then the
          machines start reporting: they must be judged on their new reports at once
-  m1 anomalous throughout, m4 anomalous until 40 s; m2, m3 normal
+  m1 anomalous throughout, m4 anomalous until 40 s, m2 flagged by the classifier until 40 s and by the
+         IsolationForest safety net alone after; m5 flagged by the safety net alone throughout; m3 normal
   40 s   m4 turns normal            -> a "back to normal" line
+         m2 left to the safety net  -> a "safety net only now" line, and m2 off the list
+  always m5 (safety net alone)      -> never on the list
   60-110 s  nothing changes        -> no message (Prometheus re-sends its alerts, the clear expires)
   110 s  m1 stops reporting          -> listed as not reporting, last verdict anomalous
   170 s  every machine stops         -> "no information"
   230 s  every machine reports again -> "reporting" lines
-Then, against Alertmanager alone: the largest list (200 anomalous, all for 10+ minutes, 60 back to normal,
-60 not reporting, 60 reporting again) must stay under Telegram's 4,096 characters, and the panel's anomaly mute must
+Then, against Alertmanager alone: the largest list (200 anomalous, all for 10+ minutes, 60 leaving the list
+with the longer "safety net only now" line, 60 not reporting, 60 reporting again) must stay under Telegram's 4,096 characters, and the panel's anomaly mute must
 silence every alert of the list and nothing else.
 
 Runs the pinned images with Docker (host network), or binaries given with --prometheus/--alertmanager.
@@ -46,10 +49,12 @@ ROOT = Path(__file__).resolve().parent.parent
 ALERTING = ROOT / "monitoring" / "alerting"
 PROM_IMG, AM_IMG = "prom/prometheus:v2.53.2", "prom/alertmanager:v0.28.1"
 POD, TG, PROM, AM = 18090, 18080, 19090, 19093
-MACHINES = {"m1": "web", "m2": "db", "m3": "edge", "m4": "app"}
+MACHINES = {"m1": "web", "m2": "db", "m3": "edge", "m4": "app", "m5": "cache"}
+SAFETY_NET = "unknown (flagged by safety-net model only)"     # api/app.py SAFETY_NET_CAUSE
 
 # ---- stand-ins -------------------------------------------------------------------------------------------
-messages, stopped, verdict = [], set(), {"m1": 1, "m2": 0, "m3": 0, "m4": 1}
+messages, stopped, verdict = [], set(), {"m1": 1, "m2": 1, "m3": 0, "m4": 1, "m5": 1}
+cause = {"m1": "cpu_spike", "m2": "memory_leak", "m4": "memory_leak", "m5": SAFETY_NET}   # while anomalous, as the API
 seen = {m: time.time() - 3600 for m in MACHINES}     # last report an hour ago, as after a stopped agent
 
 
@@ -71,6 +76,8 @@ class Pod(BaseHTTPRequestHandler):
         for m, mtype in MACHINES.items():
             lines.append(f'api_machine_last_seen_timestamp_seconds{{machine="{m}"}} {seen[m]}')
             lines.append(f'api_currently_anomalous{{machine="{m}",machine_type="{mtype}"}} {verdict[m]}')
+            if verdict[m]:      # the API keeps this series only while the machine is anomalous
+                lines.append(f'api_anomaly_cause_p{{machine="{m}",machine_type="{mtype}",cause="{cause[m]}"}} 0.5')
         out = ("\n".join(lines) + "\n").encode()
         self.send_response(200); self.send_header("Content-Type", "text/plain; version=0.0.4"); self.end_headers()
         self.wfile.write(out)
@@ -172,7 +179,7 @@ def scenario(t0):
         events.append({"t": round(time.time() - t0, 1), "event": what})
         print(f"+{time.time() - t0:5.1f}s {what}", flush=True)
 
-    at(40, "m4 turns normal", lambda: verdict.update(m4=0))
+    at(40, "m4 turns normal, m2 left to the safety net", lambda: (verdict.update(m4=0), cause.update(m2=SAFETY_NET)))
     at(110, "m1 stops reporting (anomalous)", lambda: stopped.add("m1"))
     at(170, "every machine stops reporting", lambda: stopped.update(MACHINES))
     at(230, "every machine reports again", stopped.clear)
@@ -201,7 +208,7 @@ def largest_list():
                            "machine_type": "firewall"},
                 "annotations": ann or {}, "startsAt": iso(now - started), "endsAt": iso(now + 300)}
     alerts = [a("AnomalyDetected", f"firewall-{i:03d}", 600) for i in range(200)]
-    alerts += [a("AnomalyCleared", f"firewall-c{i:02d}", 2) for i in range(60)]
+    alerts += [a("AnomalyCleared", f"firewall-c{i:02d}", 2, {"now": "safety net only"}) for i in range(60)]   # the longer line
     alerts += [a("MachineSilent", f"firewall-s{i:02d}", 3600, {"usual": "1m 0s", "last_verdict": "anomalous"}) for i in range(60)]
     alerts += [a("MachineReportingAgain", f"firewall-r{i:02d}", 2) for i in range(60)]
     alerts += [a("AnomalyPersistent", f"firewall-{i:03d}", 600) for i in range(200)]       # every listed machine marked
@@ -265,11 +272,16 @@ def main():
         limit = max(30.0, 3 * args.cadence)
         delays = {
             "back to normal": first_after(t0, 40, r"✅ − m4 \(app\) back to normal", 70),
+            "safety net only": first_after(t0, 40, r"❔ − m2 \(db\) safety net only now", 70),
             "m1 not reporting": first_after(t0, 110, r"⚫ m1 \(web\) · missed its reports.*last verdict anomalous", 170),
             "no information": first_after(t0, 170, r"no information", 230),
             "reporting again": first_after(t0, 230, r"🔌 m\d", 260),
         }
         quiet = [m for m in messages if t0 + 60 <= m["t"] < t0 + 110]
+        listed = lambda m, text: re.search(rf"^(🆕 <b>\+ {m}</b>|• {m} )", text, re.M)       # a line of the anomalous list
+        first = next((m for m in messages if m["t"] >= t0), None)
+        net_listed = [round(m["t"] - t0, 1) for m in messages if m["t"] >= t0 and
+                      (listed("m5", m["text"]) or (m["t"] > t0 + 40 + 15 and listed("m2", m["text"])))]
         size = largest_list()
         muted = mute_check()
     finally:
@@ -280,6 +292,10 @@ def main():
     checks = {
         "every rule evaluates without error": not rule_errors,
         "back to normal within 15 s": delays["back to normal"] is not None and delays["back to normal"] <= 15,
+        "the first list names m2 (classifier) and not m5 (safety net alone)":
+            first is not None and bool(listed("m2", first["text"])) and not listed("m5", first["text"]),
+        "safety net only line within 15 s": delays["safety net only"] is not None and delays["safety net only"] <= 15,
+        "a machine flagged by the safety net alone is never on the list": not net_listed,
         "no message in the 50 quiet seconds (re-sends, a clear expiring)": not quiet,
         f"a stopped machine listed within its limit ({limit:g} s) + 1.3 cadences + 15 s":
             delays["m1 not reporting"] is not None and delays["m1 not reporting"] <= limit + 1.3 * args.cadence + 15,
@@ -299,7 +315,7 @@ def main():
     report = {"finished_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "prometheus": version(args.prometheus, PROM_IMG), "alertmanager": version(args.alertmanager, AM_IMG),
               "cadence_s": args.cadence, "silence_limit_s": limit, "events": events, "delays_s": delays,
-              "largest_list_chars": size, "mute_states": muted, "rule_errors": rule_errors,
+              "largest_list_chars": size, "mute_states": muted, "rule_errors": rule_errors, "net_only_listed_at_s": net_listed,
               "messages": [{"t": round(m["t"] - t0, 1), "text": m["text"]} for m in messages if m["t"] < t0 + 270],
               "checks": checks}
     args.out.parent.mkdir(parents=True, exist_ok=True)

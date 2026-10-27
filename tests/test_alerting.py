@@ -86,12 +86,20 @@ def test_the_grafana_anomaly_panels_are_the_ones_unit_tested_against_the_telegra
     tested = {t["expr"] for case in yaml.safe_load((ALERTING / "alert_rules_test.yml").read_text())["tests"]
               for t in case.get("promql_expr_test", [])}
     now = next(r["expr"] for r in _rules() if r.get("record") == "fleet:machine_anomalous:now")
-    for title in ("Anomalous machines now (the Telegram list)", "Anomalous machines over time"):
-        expr = panels[title]["targets"][0]["expr"].replace("$machine_type", ".*")
-        # the alerts' current verdict (fleet:machine_anomalous:now), written out so that the curve keeps the
-        # time before that rule existed (fleet:machine_silent is then absent and `unless` removes nothing)
-        assert now.replace("fleet:machine_anomalous:fresh", 'fleet:machine_anomalous:fresh{machine_type=~".*"}') in expr, title
-        assert expr in tested, f"{title}: the dashboard query is not the one alert_rules_test.yml checks"
+    curve = panels["Anomalous machines over time"]["targets"]
+    # every anomalous machine (fleet:machine_anomalous:now), written out so that the curve keeps the time before
+    # that rule existed (fleet:machine_silent is then absent and `unless` removes nothing)
+    expr = curve[0]["expr"].replace("$machine_type", ".*")
+    assert now.replace("fleet:machine_anomalous:fresh", 'fleet:machine_anomalous:fresh{machine_type=~".*"}') in expr
+    assert expr in tested, "the anomalous-machines curve is not the query alert_rules_test.yml checks"
+    # the Telegram list: the machines the classifier flags (AnomalyDetected), in the table and its curve
+    listed = next(r["expr"] for r in _rules() if r.get("alert") == "AnomalyDetected")
+    assert listed == "fleet:machine_confirmed:now == 1"
+    table = panels["Anomalous machines now (the Telegram list)"]["targets"][0]["expr"].replace("$machine_type", ".*")
+    assert table == listed.replace("fleet:machine_confirmed:now", 'fleet:machine_confirmed:now{machine_type=~".*"}')
+    confirmed = next(t["expr"] for t in curve if t["refId"] == "C").replace("$machine_type", ".*")
+    assert confirmed == f"count({table}) or vector(0)"
+    assert table in tested and confirmed in tested
     silent = next(r["expr"] for r in _rules() if r.get("alert") == "MachineSilent")
     table = panels["Machines not reporting (the Telegram ⚫ lines)"]["targets"][0]["expr"].replace("$machine_type", ".*")
     assert table == silent.replace("fleet:machine_silence:seconds", 'fleet:machine_silence:seconds{machine_type=~".*"}', 1)
@@ -108,9 +116,10 @@ def test_every_per_machine_dashboard_panel_counts_only_machines_that_still_repor
     for p in dash["panels"]:
         for t in p.get("targets", []):
             expr = t.get("expr", "")
-            if per_machine.search(expr) or "fleet:machine_anomalous:fresh" in expr:
-                checked += 1
-                fresh = "fleet:machine_anomalous:fresh" in expr or expr.count("< 300") >= expr.count("group_left()")
+            if per_machine.search(expr) or re.search(r"fleet:machine_(anomalous:fresh|confirmed:now)", expr):
+                checked += 1     # fleet:machine_confirmed:now is built on fleet:machine_anomalous:fresh
+                fresh = (re.search(r"fleet:machine_(anomalous:fresh|confirmed:now)", expr)
+                         or expr.count("< 300") >= expr.count("group_left()"))
                 assert fresh, f"{p['title']}: reads per-machine gauges without the 5-minute freshness rule"
     assert checked >= 6
     panels = {p.get("title"): p for p in dash["panels"]}
@@ -120,3 +129,22 @@ def test_every_per_machine_dashboard_panel_counts_only_machines_that_still_repor
     probes = panels["Platform layers (HTTP probe every 5 s)"]["targets"][0]["expr"]
     rule = next(r for g in RULES["groups"] for r in g["rules"] if r.get("alert") == "LayerDown")["expr"]
     assert probes in rule      # the panel shows the series the LayerDown alert reads
+
+
+def test_the_telegram_list_leaves_out_only_the_safety_net_alone():
+    """The list reads fleet:machine_confirmed:now: fleet:machine_anomalous:now minus the machines whose cause is
+    the API's safety-net cause. The cause string must be the one the API exports, or nothing would be left out;
+    the surge alert still counts every anomalous machine (cascades are mostly caught by the safety net alone)."""
+    import api.app as app_module
+    rules = {r.get("record") or r.get("alert"): r for r in _rules()}
+    net_only = rules["fleet:machine_net_only:fresh"]["expr"]
+    assert f'cause="{app_module.SAFETY_NET_CAUSE}"' in net_only
+    assert "api_machine_last_seen_timestamp_seconds" in net_only        # the freshest replica, as :fresh
+    assert "fleet:machine_anomalous:now unless on (machine) fleet:machine_net_only:fresh" in rules["fleet:machine_confirmed:now"]["expr"]
+    for name in ("AnomalyDetected", "AnomalyCleared", "AnomalyPersistent"):
+        assert "fleet:machine_confirmed:now" in rules[name]["expr"] and "fleet:machine_anomalous:now" not in rules[name]["expr"], name
+    assert rules["fleet:anomalous_machines:count"]["expr"] == "count(fleet:machine_anomalous:now == 1) or vector(0)"
+    assert "fleet:anomalous_machines:count" in rules["FleetAnomalySurge"]["expr"]
+    tmpl = (ALERTING / "telegram.tmpl").read_text()
+    assert 'eq .Annotations.now "safety net only"' in tmpl
+    assert "safety net only" in rules["AnomalyCleared"]["annotations"]["now"]

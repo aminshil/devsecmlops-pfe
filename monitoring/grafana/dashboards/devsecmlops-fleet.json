@@ -453,7 +453,7 @@
         "x": 0,
         "y": 33
       },
-      "description": "How many machines are anomalous right now (latest verdict per machine, from the pod that served it last, among machines that reported in the last 5 minutes and have not missed their reports), and how many have missed their reports (silent for more than three of their usual intervals: the \u26ab lines of the Telegram list). The first curve is the row count of the table below and of the Telegram list. There is no fixed normal level: compare the curve with its own last hours. The FleetAnomalySurge alert fires when it is at least 20 and more than twice its 6-hour average for 2 minutes, which points at a router or a shared dependency (see Root cause below).",
+      "description": "How many machines are anomalous right now (latest verdict per machine, from the pod that served it last, among machines that reported in the last 5 minutes and have not missed their reports), how many of them the classifier flagged (the machines the Telegram list names: a machine flagged by the IsolationForest safety net alone is not sent), and how many have missed their reports (silent for more than three of their usual intervals: the \u26ab lines of the Telegram list). The gap between the first two curves is the safety-net-only machines (Review tab). The second curve is the row count of the table below and of the Telegram list; it starts on 27 October 2026, when its rule was added. There is no fixed normal level: compare the curves with their own last hours. The FleetAnomalySurge alert reads the first curve: it fires when it is at least 20 and more than twice its 6-hour average for 2 minutes, which points at a router or a shared dependency (see Root cause below).",
       "targets": [
         {
           "datasource": {
@@ -462,7 +462,7 @@
           },
           "refId": "A",
           "expr": "count((fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"} unless on (machine) (fleet:machine_silent == 1)) == 1) or vector(0)",
-          "legendFormat": "anomalous machines"
+          "legendFormat": "anomalous (classifier or safety net)"
         },
         {
           "datasource": {
@@ -472,6 +472,15 @@
           "refId": "B",
           "expr": "count(fleet:machine_silent{machine_type=~\"$machine_type\"} == 1) or vector(0)",
           "legendFormat": "not reporting"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "devsecmlops-prom"
+          },
+          "refId": "C",
+          "expr": "count(fleet:machine_confirmed:now{machine_type=~\"$machine_type\"} == 1) or vector(0)",
+          "legendFormat": "sent to Telegram (classifier)"
         }
       ]
     },
@@ -500,7 +509,7 @@
         "x": 0,
         "y": 41
       },
-      "description": "The same machines as the Telegram anomaly list: every machine whose latest verdict is anomalous, from the pod that served it last, among machines that still report on time (a machine that missed its reports is in the table \"Machines not reporting\" instead). A machine leaves the list on its first normal verdict. Its row count is the curve above. The Telegram message is sent within 5 seconds of a change; this panel refreshes every 30 seconds.",
+      "description": "The same machines as the Telegram anomaly list: every machine whose latest verdict is anomalous and was flagged by the classifier, from the pod that served it last, among machines that still report on time (a machine that missed its reports is in the table \"Machines not reporting\" instead; one flagged by the IsolationForest safety net alone is not listed, see the Review tab). A machine leaves the list on its first verdict that is not a confirmed anomaly. Its row count is the second curve above. The Telegram message is sent within 5 seconds of a change; this panel refreshes every 30 seconds.",
       "targets": [
         {
           "datasource": {
@@ -508,7 +517,7 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
-          "expr": "(fleet:machine_anomalous:fresh{machine_type=~\"$machine_type\"} unless on (machine) (fleet:machine_silent == 1)) == 1",
+          "expr": "fleet:machine_confirmed:now{machine_type=~\"$machine_type\"} == 1",
           "legendFormat": "",
           "instant": true,
           "format": "table"
