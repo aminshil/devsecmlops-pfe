@@ -122,7 +122,8 @@ echo "== 6. verification"
 sleep 20   # one scrape and one rule evaluation
 rules=$(curl -s localhost:9090/api/v1/rules | json 'sum(len(g["rules"]) for g in d["data"]["groups"])')
 ams=$(curl -s localhost:9090/api/v1/alertmanagers | json 'len(d["data"]["activeAlertmanagers"])')
-echo "rules loaded: $rules (expected 26)   alertmanagers connected: $ams (expected 1)"
+expected=$(grep -cE '^\s*- (alert|record):' monitoring/alerting/alert_rules.yml)   # every rule in the file
+echo "rules loaded: $rules (expected $expected)   alertmanagers connected: $ams (expected 1)"
 echo "layer probes (1 = up):"
 curl -sG localhost:9090/api/v1/query --data-urlencode 'query=probe_success{job="blackbox-layers"}' | \
   python3 -c "import sys,json; [print(f'   {r[\"metric\"][\"layer\"]:<32} {r[\"value\"][1]}') for r in json.load(sys.stdin)['data']['result']]"
