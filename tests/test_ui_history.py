@@ -114,6 +114,7 @@ def test_the_tab_is_on_the_page_and_uses_this_route():
     page = (ROOT / "api" / "static" / "control_panel.html").read_text()
     assert 'data-tab="history"' in page and 'id="history_body"' in page
     assert '"/ui/history?hours="' in page and 'if(id==="history"){ loadHistory(); }' in page
+    assert 'id="hs_sort"' in page and 'hsMachines(hsSort(machines,"machine"))' in page   # order choice, latest first
 
 
 def test_the_history_query_is_the_one_promtool_runs_against_the_alert():

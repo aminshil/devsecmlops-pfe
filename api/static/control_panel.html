@@ -301,6 +301,8 @@
         <select id="hs_hours" style="width:auto"><option value="1">last hour</option><option value="6" selected>last 6 hours</option><option value="24">last 24 hours</option><option value="168">last 7 days</option></select>
         <label for="hs_filter">Filter</label>
         <input id="hs_filter" type="text" placeholder="machine or type, e.g. web-17 or router" style="width:260px">
+        <label for="hs_sort">Order</label>
+        <select id="hs_sort" style="width:auto"><option value="latest" selected>latest first (anomalous now on top)</option><option value="time">most time anomalous first</option></select>
       </div>
       <div id="history_body"><div class="hint">Open this tab to load.</div></div>
     </div>
@@ -1111,12 +1113,27 @@
   }
   function hsMatch(row,f){ return !f || row.machine.toLowerCase().includes(f) || String(row.type).toLowerCase().includes(f); }
   function hsEnd(row){ return row.ongoing?'<span class="tag anom">ongoing</span>':ctEsc(rvLocal(row.end*1000)); }
+  // latest: anomalous now first, then the most recent end; time: machines by time anomalous, episodes by length
+  function hsSort(rows, kind){
+    const latest=document.getElementById("hs_sort").value!=="time";
+    const copy=rows.slice();
+    copy.sort(function(a,b){
+      if(latest){
+        if(a.ongoing!==b.ongoing){ return a.ongoing?-1:1; }
+        const ea=kind==="machine"?a.last_end:a.end, eb=kind==="machine"?b.last_end:b.end;
+        return (eb-ea) || (b.start-a.start) || 0;
+      }
+      return kind==="machine" ? (b.anomalous_s-a.anomalous_s) : (b.duration_s-a.duration_s);
+    });
+    return copy;
+  }
   function hsMachines(rows){
     const body=rows.map(function(r){
       const last=r.ongoing?'<span class="tag anom">now</span>':ctEsc(rvLocal(r.last_end*1000));
       return '<tr><td class="mono">'+ctEsc(r.machine)+'</td><td>'+ctEsc(r.type)+'</td><td class="mono">'+r.episodes+'</td><td class="mono">'+hsDur(r.anomalous_s)+'</td><td class="mono">'+hsDur(r.longest_s)+'</td><td class="mono">'+last+'</td></tr>';
     }).join("");
-    return '<h4 style="margin:14px 0 6px">By machine (most time anomalous first)</h4><table><thead><tr><th>Machine</th><th>Type</th><th>Episodes</th><th>Time anomalous</th><th>Longest</th><th>Last anomalous</th></tr></thead><tbody>'+body+'</tbody></table>';
+    const order=document.getElementById("hs_sort").value==="time"?"most time anomalous first":"latest first: anomalous now on top";
+    return '<h4 style="margin:14px 0 6px">By machine ('+order+')</h4><table><thead><tr><th>Machine</th><th>Type</th><th>Episodes</th><th>Time anomalous</th><th>Longest</th><th>Last anomalous</th></tr></thead><tbody>'+body+'</tbody></table>';
   }
   let HS_SHOWN=[];
   function hsEpisodes(rows){
@@ -1126,7 +1143,8 @@
       return '<tr><td class="mono">'+ctEsc(e.machine)+'</td><td>'+ctEsc(e.type)+'</td><td class="mono">'+ctEsc(rvLocal(e.start*1000))+'</td><td class="mono">'+hsEnd(e)+'</td><td class="mono">'+hsDur(e.duration_s)+'</td><td><button type="button" class="btn sec small" data-hsdetail="'+i+'">Details</button></td></tr>';
     }).join("");
     const more=rows.length>shown.length?'<div class="hint">'+shown.length+' of '+rows.length+' episodes shown: filter by machine or type to see the others.</div>':'';
-    return '<h4 style="margin:14px 0 6px">Episodes (newest first)</h4><table><thead><tr><th>Machine</th><th>Type</th><th>Started</th><th>Ended</th><th>Duration</th><th></th></tr></thead><tbody>'+body+'</tbody></table>'+more;
+    const order=document.getElementById("hs_sort").value==="time"?"longest first":"latest first: ongoing on top";
+    return '<h4 style="margin:14px 0 6px">Episodes ('+order+')</h4><table><thead><tr><th>Machine</th><th>Type</th><th>Started</th><th>Ended</th><th>Duration</th><th></th></tr></thead><tbody>'+body+'</tbody></table>'+more;
   }
   function renderHistory(){
     const body=document.getElementById("history_body");
@@ -1138,7 +1156,7 @@
     const cut=HS_DATA.truncated?' · the '+HS_DATA.truncated+' oldest episodes are not listed (choose a shorter window)':'';
     if(!machines.length){ body.innerHTML='<div class="hint">No anomaly in this window'+(f?' for this filter':'')+'.</div>'; return; }
     body.innerHTML='<div style="margin-top:10px">'+episodes.length+' episode(s) on '+machines.length+' machine(s) · '+ongoing+' anomalous now · resolution '+HS_DATA.step_s+' s'+cut+'</div>'
-      +hsMachines(machines)+hsEpisodes(episodes);
+      +hsMachines(hsSort(machines,"machine"))+hsEpisodes(hsSort(episodes,"episode"));
   }
   function hsUtc(t){ return new Date(t*1000).toISOString().replace("T"," ").slice(0,19); }
   function hsSpark(pts,ep,d){
@@ -1338,6 +1356,7 @@
   document.getElementById("btnRefreshHistory").addEventListener("click", loadHistory);
   document.getElementById("hs_hours").addEventListener("change", loadHistory);
   document.getElementById("hs_filter").addEventListener("input", renderHistory);
+  document.getElementById("hs_sort").addEventListener("change", renderHistory);
   document.getElementById("history_body").addEventListener("click", function(ev){ const b=ev.target.closest("button[data-hsdetail]"); if(b){ hsOpen(b); } });
   document.getElementById("alerting_body").addEventListener("click", function(e){
     const b=e.target.closest("button[data-alact]");

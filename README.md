@@ -1290,7 +1290,8 @@ Tabs:
   router only), the rule measured in [Decision 9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail).
 - **History** — past anomalies over the last hour, 6 hours, 24 hours or 7 days, filterable by machine or
   type: one row per machine (episodes, time anomalous, longest episode, last anomalous) and one row per
-  episode (start, end or *ongoing*, duration). It reads Prometheus with the alert's own expression
+  episode (start, end or *ongoing*, duration), ordered latest first (machines anomalous now and ongoing
+  episodes on top, then the most recent) or by time anomalous. It reads Prometheus with the alert's own expression
   (`fleet:machine_anomalous:fresh`, evaluated from the raw pod metrics, so it covers Prometheus's 15-day
   retention, not only the time since the alert rules were loaded); an episode ends on the first normal
   verdict, as in the Telegram list. Resolution is 15 s up to 41 hours and 75 s for 7 days (Prometheus
