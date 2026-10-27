@@ -1252,7 +1252,7 @@
       +rvBox("Classifier P(anomaly)",hsScore(d.p_anomaly,ep,d,3,"classifier score"))+rvBox("Likely cause (time in the episode)",hsCauses(d))
       +rvBox("The readings (first in the episode → peak)",hsMetrics(ep,d),true)
       +rvBox("IsolationForest score",hsScore(d.iso_score,ep,d,3,"IsolationForest score"))
-      +rvBox("Every reading (the cluster\'s prediction log)",hsReadings(ep,d),true)
+      +rvBox("Every reading (the cluster's prediction log)",hsReadings(ep,d),true)
       +rvBox("How to read this",HS_HOW)+'</div></div>';
   }
   async function hsOpen(btn){
