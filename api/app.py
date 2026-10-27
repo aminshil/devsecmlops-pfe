@@ -137,6 +137,17 @@ PREDICT_THRESHOLD, PREDICT_THRESHOLD_SOURCE = _resolve_threshold()
 MODEL_LINEAGE.update({"threshold": PREDICT_THRESHOLD, "threshold_source": PREDICT_THRESHOLD_SOURCE})
 
 
+def _check_listed_artifacts(listed: dict) -> None:
+    """Every file the manifest lists exists and has its recorded SHA-256."""
+    import hashlib
+    for rel, expected in listed.items():
+        path = ROOT / rel
+        if not path.exists():
+            raise RuntimeError(f"production artifact missing: {rel} (listed in the manifest)")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise RuntimeError(f"artifact integrity check failed: {rel}")
+
+
 def _verify_artifact_integrity(loaded=()) -> None:
     """Refuse to serve artifacts that differ from the promoted ones: every
     file listed in models/manifest.json must match its recorded SHA-256
@@ -145,20 +156,13 @@ def _verify_artifact_integrity(loaded=()) -> None:
     refused, and so is any file in `loaded` (the files the app is about to
     load) that the manifest does not list. Also records the lineage reported
     by /health."""
-    import hashlib
     if not MANIFEST_PATH.exists():
         raise RuntimeError(f"model manifest not found: {MANIFEST_PATH}")
     prod = json.loads(MANIFEST_PATH.read_text()).get("production") or {}
     listed = prod.get("artifacts") or {}
     if not listed:
         raise RuntimeError("model manifest lists no production artifact: refusing to load unverified models")
-    for rel, expected in listed.items():
-        path = ROOT / rel
-        if not path.exists():
-            raise RuntimeError(f"production artifact missing: {rel} (listed in the manifest)")
-        h = hashlib.sha256(path.read_bytes()).hexdigest()
-        if h != expected:
-            raise RuntimeError(f"artifact integrity check failed: {rel}")
+    _check_listed_artifacts(listed)
     covered = {(ROOT / rel).resolve() for rel in listed}
     unlisted = [str(Path(f)) for f in loaded if Path(f).exists() and Path(f).resolve() not in covered]
     if unlisted:

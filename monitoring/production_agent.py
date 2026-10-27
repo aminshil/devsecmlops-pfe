@@ -66,7 +66,8 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from api import demo_labels  # noqa: E402  (true labels of flagged readings, for the control panel's Review tab)
+# true labels of flagged readings, for the control panel's Review tab
+from api import demo_labels  # noqa: E402
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "telecom_fleet_v2_test.csv"
 FEATURES = ["cpu", "ram", "network", "disk_io", "disk_usage", "load_avg"]
@@ -82,7 +83,9 @@ TARGETS = {
     # localhost -- the NodePort is NOT one of them (confirmed live: the
     # node's own IP is required). 192.168.49.2 is Minikube's own fixed
     # convention, stable across rebuilds -- not a dynamically assigned IP.
-    "k8s":  "http://192.168.49.2:30080",
+    # Plain HTTP to a fixed address is deliberate: the NodePort is reached on the VM's own Minikube
+    # bridge, never over a network, and the cluster serves no TLS on it.
+    "k8s":  "http://192.168.49.2:30080",  # NOSONAR
     "host": "http://localhost:8000",
 }
 

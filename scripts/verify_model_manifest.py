@@ -137,6 +137,18 @@ def check_threshold(prod: dict, root: Path) -> list[str]:
     return problems
 
 
+def artifact_problems(arts: dict, models_dir: Path) -> list[str]:
+    """The manifest's artifacts that are missing or differ from their recorded SHA-256."""
+    bad = []
+    for rel, expected in arts.items():
+        p = models_dir / Path(rel).name
+        if not p.exists():
+            bad.append(f"{rel}: missing")
+        elif sha256(p) != expected:
+            bad.append(f"{rel}: hash mismatch")
+    return bad
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-f1", type=float, required=True)
@@ -152,14 +164,7 @@ def main() -> int:
     if not arts:
         print("FAIL: manifest has no production artifacts")
         return 1
-    bad = []
-    models_dir = a.manifest.resolve().parent
-    for rel, expected in arts.items():
-        p = models_dir / Path(rel).name
-        if not p.exists():
-            bad.append(f"{rel}: missing")
-        elif sha256(p) != expected:
-            bad.append(f"{rel}: hash mismatch")
+    bad = artifact_problems(arts, a.manifest.resolve().parent)
     if bad:
         print("FAIL: artifacts differ from the promoted model:\n  " + "\n  ".join(bad))
         return 1

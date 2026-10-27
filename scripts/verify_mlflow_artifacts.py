@@ -21,7 +21,6 @@ import hashlib
 import json
 import os
 import sys
-import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -61,6 +60,23 @@ def expected_hashes(args):
     return run_id, {Path(k).name: v for k, v in arts.items()}, source
 
 
+def check_file(uri, run_id, name, want, in_run) -> dict:
+    """Download one file of the run and compare its SHA-256 with the recorded one; print the result."""
+    row = {"file": name, "expected_sha256": want}
+    if name not in in_run:
+        row["result"] = "missing from the run"
+    else:
+        try:
+            data = download(uri, run_id, name)
+        except OSError as e:                     # urllib's HTTPError is an OSError
+            row["result"] = f"download failed ({e})"
+        else:
+            got = hashlib.sha256(data).hexdigest()
+            row.update(bytes=len(data), downloaded_sha256=got, result="match" if got == want else "DIFFERENT")
+    print(f"  {row['result']:<22} {name}" + (f"  ({row['bytes']:,} bytes)" if "bytes" in row else ""))
+    return row
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tracking-uri", default=os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5001"))
@@ -80,22 +96,8 @@ def main():
         in_run = listed(uri, run_id)
     except (OSError, ValueError) as e:
         sys.exit(f"MLflow not reachable or run unknown: {e}")
-    rows, ok = [], True
-    for name, want in sorted(expected.items()):
-        row = {"file": name, "expected_sha256": want}
-        if name not in in_run:
-            row["result"] = "missing from the run"
-        else:
-            try:
-                data = download(uri, run_id, name)
-                got = hashlib.sha256(data).hexdigest()
-                row.update(bytes=len(data), downloaded_sha256=got,
-                           result="match" if got == want else "DIFFERENT")
-            except (OSError, urllib.error.HTTPError) as e:
-                row["result"] = f"download failed ({e})"
-        ok &= row["result"] == "match"
-        rows.append(row)
-        print(f"  {row['result']:<22} {name}" + (f"  ({row['bytes']:,} bytes)" if "bytes" in row else ""))
+    rows = [check_file(uri, run_id, name, want, in_run) for name, want in sorted(expected.items())]
+    ok = all(r["result"] == "match" for r in rows)
     print(("all " if ok else "NOT all ") + f"{len(expected)} files read back from MLflow (MinIO) and identical to the recorded hashes")
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -31,13 +31,15 @@ def main() -> int:
     if not user or not password:
         print("MINIO_ROOT_USER and MINIO_ROOT_PASSWORD must be set", file=sys.stderr)
         return 2
-    s3 = boto3.client("s3", endpoint_url=a.endpoint, aws_access_key_id=user,
-                      aws_secret_access_key=password, region_name="us-east-1")
+    # MinIO, not AWS: it has a single fixed region and no AWS account, so the region is its constant and
+    # there is no bucket owner id to check (python:S6262 and python:S7608 do not apply).
+    s3 = boto3.client("s3", endpoint_url=a.endpoint, aws_access_key_id=user,  # NOSONAR
+                      aws_secret_access_key=password, region_name="us-east-1")  # NOSONAR
 
     deadline = time.time() + a.wait
     while True:
         try:
-            s3.head_bucket(Bucket=a.bucket)
+            s3.head_bucket(Bucket=a.bucket)  # NOSONAR
             print("exists")
             return 0
         except ClientError as e:

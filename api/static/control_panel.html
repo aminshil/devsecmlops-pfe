@@ -1164,8 +1164,9 @@
     }).join("");
     return pager+'<table><thead><tr><th>Machine</th><th>Type</th><th>Started</th><th>Ended</th><th>Duration</th><th></th></tr></thead><tbody>'+body+'</tbody></table>'+pager;
   }
+  function hsOn(v){ return HS_VIEW===v?' class="on"':''; }
   function hsTabs(machines,episodes){
-    const on=function(v){ return HS_VIEW===v?' class="on"':''; };
+    const on=hsOn;
     const order=document.getElementById("hs_sort").value==="time"?"most time anomalous first":"latest first";
     const chip=HS_PICK?'<span class="hschip">'+ctEsc(HS_PICK)+'<button type="button" data-hsunpick="1" aria-label="show every machine">✕</button></span>':'';
     return '<div class="hssub"><button type="button" data-hsview="machines"'+on("machines")+'>By machine ('+machines+')</button><button type="button" data-hsview="episodes"'+on("episodes")+'>Episodes ('+episodes+')</button><span class="hint" style="margin:auto 0 auto auto">'+order+'</span></div>'+(chip?'<div style="margin-bottom:6px;font-size:12px;color:var(--dim)">machine:'+chip+'</div>':'');

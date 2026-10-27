@@ -10,6 +10,12 @@ pipeline {
     }
 
     environment {
+        // What SonarQube analyses: the serving code, the ML pipeline, and every script that runs in production or
+        // in a pipeline (the traffic agent, the k8s exporter, the Prometheus watchdog, which handles the Telegram
+        // token, the CI model gate and the model job's helpers). The other scripts in scripts/ and monitoring/ are
+        // read-only measurement tools and earlier traffic designs: run by hand, deployed nowhere, and the README's
+        // numbers are their output, so they are linted (ruff) but kept out of the gate (README, L3).
+        SONAR_SOURCES = "api,ml-model,monitoring/production_agent.py,monitoring/k8s_exporter.py,scripts/prometheus_watchdog.py,scripts/verify_model_manifest.py,scripts/verify_mlflow_artifacts.py,scripts/export_feedback_dataset.py,scripts/model_report_summary.py,scripts/smoke_test.py,scripts/ensure_minio_bucket.py,scripts/pin_versions.py,scripts/ci_config.py"
         IMAGE_NAME    = "devsecmlops-api"
         IMAGE_TAG     = "${readFile('VERSION').trim()}-b${BUILD_NUMBER}"
         REGISTRY      = "localhost:5000"
@@ -34,6 +40,9 @@ pipeline {
                 sh '''
                     python3 -m pip install --quiet --break-system-packages -r requirements-api.txt
                     python3 -m pip install --quiet --break-system-packages -r requirements-dev.txt
+                    # every Python file, the measurement scripts included: errors, undefined names, unused
+                    # imports and variables, likely bugs (B905, zip() without strict=, is not enforced)
+                    python3 -m ruff check --select E9,F,B --ignore B905 api ml-model monitoring scripts tests
                     python3 -m pytest tests/ -v --tb=short \
                         --cov=api --cov=ml-model --cov-report=xml:coverage.xml
                 '''
@@ -46,7 +55,7 @@ pipeline {
                     sh '''
                         sonar-scanner \
                           -Dsonar.projectKey=devsecmlops-pfe \
-                          -Dsonar.sources=api,ml-model,monitoring,scripts \
+                          -Dsonar.sources=${SONAR_SOURCES} \
                           -Dsonar.coverage.exclusions=monitoring/**,scripts/** \
                           -Dsonar.python.version=3.12 \
                           -Dsonar.python.coverage.reportPaths=coverage.xml

@@ -119,7 +119,7 @@ def restore_jenkins(j: Api, src: Path) -> None:
 
 def restore_sonar(s: Api, project: str, src: Path) -> None:
     q = urllib.parse.urlencode({"project": project, "name": project})
-    status, resp = s.call("POST", f"/api/projects/create?{q}")
+    status, _ = s.call("POST", f"/api/projects/create?{q}")
     print(f"  sonarqube project {project}: HTTP {status}"
           + (" (already exists is fine)" if status == 400 else ""))
     hooks = src / "webhooks.json"

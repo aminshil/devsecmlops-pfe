@@ -80,7 +80,10 @@ def image_ref(container):
     if not digests:
         raise RuntimeError(f"{container}: no registry digest for {repo} (image built locally?)")
     version = ((info.get("Config") or {}).get("Labels") or {}).get("org.opencontainers.image.version", "")
-    tag = version if re.match(r"^v?\d+(\.\d+)+", version or "") else ("" if tag in ("", "latest") else tag)
+    if re.match(r"^v?\d+(\.\d+)+", version or ""):
+        tag = version                 # the image's own version label beats a floating tag
+    elif tag == "latest":
+        tag = ""                      # :latest says nothing: the digest alone
     return f"{repo}{':' + tag if tag else ''}@{digests[0].split('@')[1]}"
 
 
@@ -202,11 +205,10 @@ def main():
         print(f"  {k}=={v}")
     if args.dry_run:
         print("dry run: nothing written")
-        return 0
-    write(pins, images, pkgs)
-    print("written: jenkins/Dockerfile, ansible/group_vars/all.yml, the three postgres manifests, requirements-api.txt")
-    return 0
+    else:
+        write(pins, images, pkgs)
+        print("written: jenkins/Dockerfile, ansible/group_vars/all.yml, the three postgres manifests, requirements-api.txt")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

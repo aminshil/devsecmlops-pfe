@@ -87,6 +87,22 @@ class Watchdog:
             self.log(target, "Telegram send failed", type(e).__name__)
 
     def step(self, now):
+        went_down, came_back = self._observe()
+        self._record(went_down, came_back, now)
+        both = {"prometheus", "alertmanager"}
+        if set(went_down) == both:
+            self._direct("both", "🔴 <b>Prometheus and Alertmanager are down</b>: no alert can fire or be delivered")
+        elif set(came_back) == both:
+            self._both_back(now)
+        else:
+            for target in went_down:
+                self._went_down(target)
+            for target in came_back:
+                self._came_back(target, now)
+        self._refresh(now)
+
+    def _observe(self):
+        """Check both targets; (targets that just went down, targets that just came back)."""
         went_down, came_back = [], []
         for target in ("alertmanager", "prometheus"):
             ok = self.check(target)
@@ -95,31 +111,33 @@ class Watchdog:
                 went_down.append(target)
             elif ok and self.down[target]:
                 came_back.append(target)
+        return went_down, came_back
+
+    def _record(self, went_down, came_back, now):
         for target in came_back:
             self.down[target] = False
             self.log(target, "up", f"down for {now - self.down_since[target]:.0f} s")
         for target in went_down:
             self.down[target], self.down_since[target] = True, now
             self.log(target, "down", f"after {self.failures} failed checks")
-        both = {"prometheus", "alertmanager"}
-        if set(went_down) == both:
-            self._direct("both", "🔴 <b>Prometheus and Alertmanager are down</b>: no alert can fire or be delivered")
-        elif set(came_back) == both:
-            if self.alert_in_am and self._to_am(now, False):
-                self.log("prometheus", "alert resolved in Alertmanager", ALERT_NAME)
-            self.alert_in_am = False
-            self._direct("both", "✅ <b>Prometheus and Alertmanager are back</b>: alerts fire and are delivered again")
-        else:
-            for target in went_down:
-                self._went_down(target, now)
-            for target in came_back:
-                self._came_back(target, now)
-        if self.down["prometheus"] and not self.down["alertmanager"] and (self.last_post is None or now - self.last_post >= self.refresh):
-            first = not self.alert_in_am
-            if self._to_am(now, True) and first:
-                self.log("prometheus", "alert posted to Alertmanager", ALERT_NAME)
 
-    def _went_down(self, target, now):
+    def _both_back(self, now):
+        if self.alert_in_am and self._to_am(now, False):
+            self.log("prometheus", "alert resolved in Alertmanager", ALERT_NAME)
+        self.alert_in_am = False
+        self._direct("both", "✅ <b>Prometheus and Alertmanager are back</b>: alerts fire and are delivered again")
+
+    def _refresh(self, now):
+        """While Prometheus is down and Alertmanager up, post PrometheusDown, then again every `refresh` s."""
+        if not self.down["prometheus"] or self.down["alertmanager"]:
+            return
+        if self.last_post is not None and now - self.last_post < self.refresh:
+            return
+        first = not self.alert_in_am
+        if self._to_am(now, True) and first:
+            self.log("prometheus", "alert posted to Alertmanager", ALERT_NAME)
+
+    def _went_down(self, target):
         if target == "prometheus":
             if self.down["alertmanager"]:
                 self._direct(target, "🔴 <b>Prometheus is down</b> (Alertmanager too): no alert can fire or be delivered")
