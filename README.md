@@ -1983,6 +1983,17 @@ that Alertmanager 0.28.1 crashes (nil pointer in its Telegram notifier) when Tel
 sent message; the real Bot API always returns it. Nothing watches the watchdog itself except systemd
 (`Restart=always`).
 
+Run on the VM on 27 October (`sudo python3 scripts/watchdog_test.py`, output in
+`models/results/watchdog_test_20261027.json`), with the real service, Prometheus unit and Alertmanager
+container:
+
+| Step | Seconds |
+|---|---|
+| `systemctl stop prometheus` → `PrometheusDown` active in Alertmanager (Telegram within 1 s) | 8.1 |
+| `systemctl start prometheus` → `PrometheusDown` resolved | 5.0 |
+| `docker stop alertmanager` → "Alertmanager is down" sent straight to Telegram | 10.1 |
+| `docker start alertmanager` → "Alertmanager is back" sent straight to Telegram | 5.1 |
+
 **Limits.** If Prometheus stops, the rules stop: only `PrometheusDown` is reported (by the watchdog) until
 it is back, and while it is down the alerts it had sent expire in Alertmanager, which can send their
 "resolved" messages although nothing was checked (the Status tab still shows each layer). For about a minute after Alertmanager restarts the anomaly list is incomplete: Alertmanager
