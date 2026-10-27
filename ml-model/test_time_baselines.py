@@ -6,7 +6,7 @@ Head-to-head comparison: 3 baseline strategies
 
 Time windows: night=0-6, morning=6-12, afternoon=12-18, evening=18-24
 """
-import sys, time
+import time
 from pathlib import Path
 import numpy as np
 import pandas as pd

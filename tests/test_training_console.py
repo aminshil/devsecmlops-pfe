@@ -24,6 +24,18 @@ def test_dataset_outside_whitelist_is_refused(data_dir, name):
         training._resolve_dataset(name)
 
 
+def test_the_evaluation_fleets_cannot_be_trained_on(data_dir):
+    """The test (and validation) fleet scores the runs, so the console does not offer it for training
+    (external review, 27 October); the console still reads it to score a run."""
+    names = {d["name"] for d in training.list_datasets()}
+    assert training.TEST_DATASET not in names and not any(n.endswith(("_val.csv", "_test.csv")) for n in names)
+    with pytest.raises(ValueError):
+        training._resolve_dataset(training.TEST_DATASET)
+    assert training._resolve_dataset(training.TEST_DATASET, for_eval=True).name == training.TEST_DATASET
+    with pytest.raises(ValueError):
+        training._resolve_dataset("telecom_fleet_v2_labeled.csv", for_eval=True)
+
+
 def test_sample_is_spread_over_the_whole_file(data_dir):
     df, note = training._load_sampled("telecom_fleet_v2_labeled.csv", 3000)
     assert 2000 < len(df) < 4000

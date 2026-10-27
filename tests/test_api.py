@@ -160,12 +160,65 @@ def test_history_rejects_missing_keys():
 
 def test_v4_decision_threshold():
     # p_normal below PREDICT_THRESHOLD -> anomalous, with the top cause
-    is_anom, cause = app_module._decide_v4_anomaly(
-        0.10, [("cpu_spike", 0.8), ("memory_leak", 0.1)])
+    vote = app_module._decision.classifier_vote
+    is_anom, cause = vote(0.10, [("cpu_spike", 0.8), ("memory_leak", 0.1)], app_module.PREDICT_THRESHOLD)
     assert is_anom and cause == "cpu_spike"
-    is_anom, cause = app_module._decide_v4_anomaly(
-        0.99, [("cpu_spike", 0.005), ("memory_leak", 0.005)])
+    is_anom, cause = vote(0.99, [("cpu_spike", 0.005), ("memory_leak", 0.005)], app_module.PREDICT_THRESHOLD)
     assert not is_anom
+
+
+def test_serving_uses_the_shared_feature_and_decision_functions():
+    """No private copy of the rolling features or of the decision rule in the API: both paths call
+    the functions the training and evaluation pipeline uses (README L0, file table)."""
+    import inspect
+    src = inspect.getsource(app_module)
+    assert "def _decide_v4_anomaly" not in src and "statistics.stdev" not in src
+    assert inspect.getsource(app_module._compute_rolling_features).count("rolling_features_from_history(") == 1
+    assert inspect.getsource(app_module._predict_v4).count("_decision.classifier_vote(") == 1
+    assert inspect.getsource(app_module._predict_v3_v4).count("_decision.classifier_vote(") == 1
+
+
+def _former_rolling_copy(history):
+    """The API's own copy of the rolling features until 27 October (verbatim), kept as a reference."""
+    import statistics
+    feats = []
+    for col in ("cpu", "ram", "load_avg"):
+        vals = list(history[col])
+        feats.extend([sum(vals) / len(vals), statistics.stdev(vals) if len(vals) >= 2 else 0.0, vals[-1] - vals[0]])
+    return feats
+
+
+def _former_decision_copy(p_normal, non_normal, threshold, per_class=None):
+    """The API's own copy of the v4 decision until 27 October (verbatim), kept as a reference."""
+    if per_class is not None:
+        exceed = [(cls, prob, prob - per_class.get(cls, 1.01)) for cls, prob in non_normal
+                  if prob >= per_class.get(cls, 1.01)]
+        if exceed:
+            return True, max(exceed, key=lambda x: x[2])[0]
+        return False, "normal"
+    if p_normal < threshold:
+        return True, max(non_normal, key=lambda x: x[1])[0]
+    return False, "normal"
+
+
+def test_shared_functions_give_the_answers_the_former_copies_gave():
+    """Replacing the API's copies with the shared functions changed nothing: 6,000 random windows and
+    6,000 random probability vectors, single-threshold and per-class modes (README L0)."""
+    import random
+    import numpy as np
+    rng = random.Random(27)
+    causes = ["cpu_spike", "memory_leak", "network_flood", "disk_saturation", "silent_failure"]
+    per_class = {c: rng.uniform(0.2, 0.9) for c in causes}
+    for _ in range(6000):
+        hist = {c: [rng.uniform(0, 100) for _ in range(10)] for c in ("cpu", "ram", "load_avg")}
+        assert np.allclose(app_module._compute_rolling_features(hist), _former_rolling_copy(hist), rtol=1e-12, atol=1e-9)
+        w = [rng.random() for _ in range(6)]
+        probs = [x / sum(w) for x in w]
+        non_normal = list(zip(causes, probs[1:]))
+        thr = rng.choice([0.5, 0.6, 0.91, rng.random()])
+        for pc in (None, per_class):
+            assert app_module._decision.classifier_vote(probs[0], non_normal, thr, pc) == \
+                _former_decision_copy(probs[0], non_normal, thr, pc)
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +345,25 @@ def test_artifact_integrity_check_rejects_modified_file(tmp_path, monkeypatch):
         app_module._verify_artifact_integrity()
 
 
+def test_artifact_integrity_check_fails_closed(tmp_path, monkeypatch):
+    """A manifest that lists nothing is refused (it used to pass), and so is a loaded file the
+    manifest does not cover: the check hashes what the app loads, not only what the manifest names."""
+    import json as _json
+    manifest = _json.loads(app_module.MANIFEST_PATH.read_text())
+    empty = _json.loads(_json.dumps(manifest)); empty["production"]["artifacts"] = {}
+    fake = tmp_path / "manifest.json"
+    fake.write_text(_json.dumps(empty))
+    monkeypatch.setattr(app_module, "MANIFEST_PATH", fake)
+    with pytest.raises(RuntimeError, match="lists no production artifact"):
+        app_module._verify_artifact_integrity()
+    fake.write_text(_json.dumps(manifest))
+    stray = tmp_path / "swapped_model.pkl"
+    stray.write_bytes(b"not the promoted model")
+    with pytest.raises(RuntimeError, match="not in the manifest"):
+        app_module._verify_artifact_integrity((app_module.XGB_PATH, stray))
+    app_module._verify_artifact_integrity((app_module.XGB_PATH, app_module.XGB_V4_PATH))   # listed: accepted
+
+
 # ---------------------------------------------------------------------------
 # Physical-range validation: out-of-range readings are rejected, not scored
 # ---------------------------------------------------------------------------
@@ -339,6 +411,26 @@ def test_feedback_requires_token_when_configured(monkeypatch):
                        headers={"X-Feedback-Token": "s3cret-token"}).status_code == 503
 
 
+READ_ROUTES = ["/predictions/recent", "/feedback/stats",
+               "/predictions/by-machine?machine=web-01&start=0&end=3600"]
+
+
+@pytest.mark.parametrize("url", READ_ROUTES)
+def test_feedback_reads_require_token_when_configured(monkeypatch, url):
+    """The prediction log and the verdict counts (raw telemetry, operator notes) are behind the same
+    opt-in token as the verdicts (external review, 27 October: they were open)."""
+    monkeypatch.setenv("FEEDBACK_TOKEN", "s3cret-token")
+    assert client.get(url).status_code == 401
+    assert client.get(url, headers={"X-Feedback-Token": "wrong"}).status_code == 401
+    assert client.get(url, headers={"X-Feedback-Token": "s3cret-token"}).status_code == 503   # past auth: no DB
+
+
+@pytest.mark.parametrize("url", READ_ROUTES)
+def test_feedback_reads_open_when_no_token_configured(monkeypatch, url):
+    monkeypatch.delenv("FEEDBACK_TOKEN", raising=False)
+    assert client.get(url).status_code == 503
+
+
 @pytest.mark.parametrize("name", ["__windows__", "__feature_order__", "__has_windows__", "__global__", "__type__web"])
 def test_reserved_machine_names_are_rejected_not_a_500(name):
     """Found by an external review: internal baseline keys used as a machine name raised a 500."""
@@ -362,3 +454,19 @@ def test_predict_rejects_non_finite_numbers_with_a_422(token):
     r = client.post("/predict", content=body, headers={"Content-Type": "application/json"})
     assert r.status_code == 422, r.text
     assert r.json()["detail"]
+
+
+@pytest.mark.parametrize("machine", ["web-01|night", "web 01", "a" * 65, "web;01", ""])
+def test_predict_machine_name_follows_the_queryable_pattern(machine):
+    """/predict accepts the same machine names /predictions/by-machine can query back; '|' (the internal
+    window keys, e.g. "web-01|night") is refused instead of matching a baseline (external review, 27 October)."""
+    resp = client.post("/predict", json={"machine": machine, "hour": 14, "metrics": NORMAL})
+    assert resp.status_code == 422
+
+
+@pytest.mark.parametrize("hour", [-1, 24, 99])
+def test_predict_hour_out_of_range_is_422(hour, monkeypatch):
+    for windows in (True, False):          # checked at parse time, with or without windowed baselines
+        monkeypatch.setattr(app_module, "HAS_WINDOWS", windows)
+        assert client.post("/predict", json={"machine": "web-01", "hour": hour,
+                                             "metrics": NORMAL}).status_code == 422

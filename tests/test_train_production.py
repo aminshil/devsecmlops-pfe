@@ -292,3 +292,18 @@ def test_guardrail_without_promote_is_a_test_set_preview(tiny_fleet, promoted, t
     run = json.loads(report.read_text())
     assert run["guardrail_set"] == "test"
     assert run["candidate_guardrail_evaluation"] is None
+
+
+def test_gate_model_name_check_cannot_be_skipped_by_formatting(tmp_path):
+    """A file that sets MODEL_NAME in a form the gate's pattern cannot read is a failure, not a silent
+    skip (external review, 27 October); an unquoted Ansible value is read, not skipped."""
+    prod = {"serving": {"model_name": "telecom_v3"}}
+    (tmp_path / "kubernetes").mkdir()
+    (tmp_path / "kubernetes" / "deployment.yaml").write_text("            - name: MODEL_NAME\n              value: telecom_v2\n")
+    (tmp_path / "ansible" / "group_vars").mkdir(parents=True)
+    (tmp_path / "ansible" / "group_vars" / "all.yml").write_text("cp_model_name: telecom_v2\n")
+    _, checked, problems = gate.check_model_name(prod, tmp_path)
+    assert any("deployment.yaml: sets MODEL_NAME in a form" in p for p in problems)
+    assert "ansible/group_vars/all.yml: MODEL_NAME=telecom_v2, expected telecom_v3" in problems
+    _, checked, problems = gate.check_model_name(prod, ROOT)          # the repository itself passes
+    assert problems == [] and "ansible/group_vars/all.yml" in checked and "ansible/group_vars/demo.yml" in checked

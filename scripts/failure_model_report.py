@@ -50,7 +50,6 @@ def main() -> int:
     local = np.zeros((len(routers), n), dtype=np.int16)        # dependents anomalous for a local cause
     r_lab = np.zeros((len(routers), n), dtype=np.int8)
     r_reach = np.ones((len(routers), n), dtype=np.int8)
-    first_hit = {}                                             # (router, incident start) -> first dependent step
     ts_index, rows = {}, 0
     cols = ["timestamp", "machine", "label", "anomaly_type", "root_cause", "reachable"]
     for chunk in pd.read_csv(args.data, usecols=cols, chunksize=1_000_000,

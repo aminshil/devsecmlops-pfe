@@ -13,8 +13,15 @@
 #
 # jenkins_home (jobs, credentials, build history) is a separate Docker
 # volume, untouched by rebuilding this image.
+#
+# Pinned (external review, 27 October): the base image by digest, and every
+# downloaded tool by version AND SHA-256, checked before it is installed, so a
+# rebuild gets exactly these bytes or fails. The values were written by
+# scripts/pin_versions.py from the official checksum files and from the images
+# running on the VM; re-run it to move a pin.
 # =============================================================================
-FROM jenkins/jenkins:lts
+ARG JENKINS_BASE=__PIN__
+FROM ${JENKINS_BASE}
 
 USER root
 
@@ -42,31 +49,46 @@ RUN install -m 0755 -d /etc/apt/keyrings \
 # --- kubectl (pin matches the VM's own kubectl, so client/server skew stays
 #     minimal against the real cluster) --------------------------------------
 ARG KUBECTL_VERSION=v1.36.2
+ARG KUBECTL_SHA256=__PIN__
 RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
          -o /usr/local/bin/kubectl \
+    && echo "${KUBECTL_SHA256}  /usr/local/bin/kubectl" | sha256sum -c - \
     && chmod +x /usr/local/bin/kubectl
 
 # --- minikube CLI (pin matches the VM's own minikube, since `minikube image
 #     load`/status talk to a specific cluster profile format) ---------------
 ARG MINIKUBE_VERSION=v1.38.1
+ARG MINIKUBE_SHA256=__PIN__
 RUN curl -fsSL "https://storage.googleapis.com/minikube/releases/${MINIKUBE_VERSION}/minikube-linux-amd64" \
          -o /usr/local/bin/minikube \
+    && echo "${MINIKUBE_SHA256}  /usr/local/bin/minikube" | sha256sum -c - \
     && chmod +x /usr/local/bin/minikube
 
 # --- SonarQube scanner CLI (stage 3) -----------------------------------------
 ARG SONAR_SCANNER_VERSION=5.0.1.3006
-RUN curl -sL "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip" \
+ARG SONAR_SCANNER_SHA256=__PIN__
+RUN curl -fsSL "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip" \
          -o /tmp/sonar-scanner.zip \
+    && echo "${SONAR_SCANNER_SHA256}  /tmp/sonar-scanner.zip" | sha256sum -c - \
     && unzip -q /tmp/sonar-scanner.zip -d /opt \
     && mv "/opt/sonar-scanner-${SONAR_SCANNER_VERSION}-linux" /opt/sonar-scanner \
     && ln -sf /opt/sonar-scanner/bin/sonar-scanner /usr/local/bin/sonar-scanner \
     && rm /tmp/sonar-scanner.zip
 
-# --- Trivy CVE scanner (stage 5) -- official install script resolves the
-#     current release itself, so this never goes stale the way a pinned
-#     version number would (see the ensurepip/msgpack CVE incident) --------
-RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-       | sh -s -- -b /usr/local/bin
+# --- Trivy CVE scanner (stages 3 and 6) -- a pinned release tarball, checked
+#     against Trivy's published checksum. The vulnerability DATABASE is not part
+#     of the binary: Trivy downloads the current one on every scan, so pinning
+#     the binary does not make the scan stale (the ensurepip/msgpack CVE
+#     incident was a stale database, not a stale binary). It replaces
+#     `curl .../main/contrib/install.sh | sh`, which ran whatever the main
+#     branch held at build time. -----------------------------------------------
+ARG TRIVY_VERSION=__PIN__
+ARG TRIVY_SHA256=__PIN__
+RUN curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+         -o /tmp/trivy.tar.gz \
+    && echo "${TRIVY_SHA256}  /tmp/trivy.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
+    && rm /tmp/trivy.tar.gz
 
 # --- let the jenkins user (uid 1000) reach the mounted docker.sock; its GID
 #     must match the socket's actual host GID (999 on this VM) -- see the

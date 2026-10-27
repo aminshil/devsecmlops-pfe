@@ -65,7 +65,7 @@ def main():
     ap.add_argument("--out", type=Path, default=ROOT / "build" / "agent_stop_test.json")
     args = ap.parse_args()
     prom = args.prometheus.rstrip("/")
-    ready = f'count(count_over_time(fleet:machine_report_gap:seconds[5m]) >= 3) or vector(0)'
+    ready = 'count(count_over_time(fleet:machine_report_gap:seconds[5m]) >= 3) or vector(0)'
     report = {"started_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     try:
         agent("start", args.unit)

@@ -5,9 +5,14 @@ k8s_namespace: ml-serving
 # read by the API (/health) and the Jenkins build tag.
 api_version: "{{ lookup('ansible.builtin.file', playbook_dir + '/../VERSION') | trim }}"
 api_image: "devsecmlops-api:{{ api_version }}"
+# Third-party images, pinned by digest to the ones running on the VM (scripts/pin_versions.py writes
+# these lines; re-run it to move a pin). A floating tag (:latest, :community) would pull whatever is
+# newest at the next run.
 img_grafana: "grafana/grafana:latest"
 img_node_exporter: "prom/node-exporter:latest"
 img_registry: "registry:2"
+img_minio: "minio/minio"
+img_sonarqube: "sonarqube:community"
 port_control_panel: 8000
 port_grafana: 3000
 port_prometheus: 9090
@@ -31,4 +36,4 @@ kubeconfig_path: /home/pfe/.kube/config
 minikube_home: /home/pfe/.minikube
 minio_root_user: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
 minio_root_password: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
-jenkins_image_tag: "2.1"
+jenkins_image_tag: "2.2"   # 2.2: base image and tools pinned with checksums (jenkins/Dockerfile)

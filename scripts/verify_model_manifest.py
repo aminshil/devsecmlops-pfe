@@ -57,24 +57,32 @@ STATIC_THRESHOLD_PATTERNS = [
 # every place the serving model selector is configured. telecom_v3 is the
 # selector that enables the hybrid path: v4 when history is supplied, v3
 # otherwise (api/app.py). Any other value silently serves a different model.
+# (file, pattern that reads the value, marker that says the file sets MODEL_NAME at all). A file that
+# sets it in a form the pattern cannot read is a failure, not a skip: otherwise reformatting the value
+# (no quotes, another spacing) would take the file out of the check (external review, 27 October).
 MODEL_NAME_SOURCES = [
-    ("kubernetes/deployment.yaml", r'name:\s*MODEL_NAME\s*\n\s*value:\s*"([^"]+)"'),
-    ("ansible/roles/kubernetes/templates/deployment.yaml.j2", r'name:\s*MODEL_NAME\s*\n\s*value:\s*"([^"]+)"'),
-    ("Dockerfile", r'ENV\s+MODEL_NAME=(\S+)'),
-    ("api/app.py", r'os\.environ\.get\("MODEL_NAME",\s*"([^"]+)"\)'),
-    ("ansible/group_vars/all.yml", r'cp_model_name:\s*"([^"]+)"'),
+    ("kubernetes/deployment.yaml", r'name:\s*MODEL_NAME\s*\n\s*value:\s*"([^"]+)"', r'name:\s*MODEL_NAME\b'),
+    ("ansible/roles/kubernetes/templates/deployment.yaml.j2", r'name:\s*MODEL_NAME\s*\n\s*value:\s*"([^"]+)"',
+     r'name:\s*MODEL_NAME\b'),
+    ("Dockerfile", r'ENV\s+MODEL_NAME=(\S+)', r'^\s*ENV\b[^\n]*\bMODEL_NAME\b'),
+    ("api/app.py", r'os\.environ\.get\("MODEL_NAME",\s*"([^"]+)"\)', r'environ[^\n]*MODEL_NAME'),
+    ("ansible/group_vars/all.yml", r'^\s*cp_model_name:\s*"?([A-Za-z0-9_]+)"?\s*$', r'^\s*cp_model_name\s*:'),
+    ("ansible/group_vars/demo.yml", r'^\s*cp_model_name:\s*"?([A-Za-z0-9_]+)"?\s*$', r'^\s*cp_model_name\s*:'),
 ]
 
 
 def check_model_name(prod: dict, root: Path) -> tuple[str, list[str], list[str]]:
     expected = (prod.get("serving") or {}).get("model_name", "telecom_v3")
     problems, checked = [], []
-    for rel, pattern in MODEL_NAME_SOURCES:
+    for rel, pattern, marker in MODEL_NAME_SOURCES:
         path = root / rel
         if not path.exists():
             continue
-        m = re.search(pattern, path.read_text())
+        text = path.read_text()
+        m = re.search(pattern, text, re.M)
         if not m:
+            if re.search(marker, text, re.M):
+                problems.append(f"{rel}: sets MODEL_NAME in a form this check cannot read")
             continue
         checked.append(rel)
         if m.group(1) != expected:

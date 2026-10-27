@@ -16,7 +16,6 @@ Read-only: reads the CSV and models/dependency_graph.json, writes one SVG.
 """
 import argparse
 import json
-import math
 import sys
 from pathlib import Path
 

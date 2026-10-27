@@ -14,19 +14,23 @@ if [ "$MODEL_NAME" = "telecom_v2" ]; then
   : "${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set for MODEL_NAME=telecom_v2}"
   : "${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set for MODEL_NAME=telecom_v2}"
   MINIO_BUCKET="${MINIO_BUCKET:-model-artifacts}"
+  # The keys reach Python through the environment, never pasted into its source: pasted, they were
+  # visible in the process list (python3 -c "...key..."), and a quote in a key broke the script.
+  export MINIO_ENDPOINT MINIO_ACCESS_KEY MINIO_SECRET_KEY MINIO_BUCKET
 
   mkdir -p /app/models
 
-  python3 -c "
+  python3 - <<'PY' || { echo "FATAL: failed to fetch model artifacts from MinIO"; exit 1; }
+import os
+
 import boto3
 from botocore.client import Config
-import sys
 
 s3 = boto3.client(
     's3',
-    endpoint_url='${MINIO_ENDPOINT}',
-    aws_access_key_id='${MINIO_ACCESS_KEY}',
-    aws_secret_access_key='${MINIO_SECRET_KEY}',
+    endpoint_url=os.environ['MINIO_ENDPOINT'],
+    aws_access_key_id=os.environ['MINIO_ACCESS_KEY'],
+    aws_secret_access_key=os.environ['MINIO_SECRET_KEY'],
     config=Config(signature_version='s3v4'),
     region_name='us-east-1',
 )
@@ -39,12 +43,11 @@ files = [
 
 for key, dest in files:
     print(f'  Fetching {key} -> {dest} ...')
-    s3.download_file('${MINIO_BUCKET}', key, dest)
-    print(f'  Done.')
+    s3.download_file(os.environ['MINIO_BUCKET'], key, dest)
+    print('  Done.')
 
 print('All v2 artifacts fetched successfully.')
-" || { echo "FATAL: failed to fetch model artifacts from MinIO"; exit 1; }
-
+PY
 fi
 
 exec "$@"

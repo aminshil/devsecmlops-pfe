@@ -8,7 +8,8 @@
 //   4  Train candidate -> (full + PROMOTE) select the candidate's own threshold on the independent
 //      validation fleet -> evaluate candidate AND production on the test set -> guardrail
 //   5  Evidence                 report summary; smoke: the real models/ is byte-for-byte untouched
-//   6  Verify MLflow + MinIO    full only: the run exists and its model files are readable from MinIO
+//   6  Verify MLflow + MinIO    full only: the run's six model files are downloaded back from MLflow (MinIO)
+//                               and each SHA-256 compared with the one the run recorded
 //   7  Commit promoted model    run the CI model gate on the promoted manifest, then git commit + push
 //   8  Trigger the application pipeline, which gates, builds, scans, deploys and verifies the image
 //
@@ -167,15 +168,11 @@ pipeline {
             when { expression { params.SCOPE == 'full' } }
             steps {
                 sh '''
-                    RUN=$(python3 -c "import json;print(json.load(open('build/model-report.json')).get('mlflow_run_id') or '')")
-                    test -n "$RUN" || { echo "MLflow logging was skipped: the report has no run id"; exit 1; }
-                    echo "MLflow run: $RUN"
-                    curl -sf "${MLFLOW_TRACKING_URI}/api/2.0/mlflow/artifacts/list?run_id=${RUN}&path=model" | python3 -c "
-import json, sys
-files = [f['path'] for f in json.load(sys.stdin).get('files', [])]
-print('model files readable from MLflow (stored in MinIO):', len(files))
-[print('  ', f) for f in files]
-sys.exit(0 if len(files) >= 6 else 1)"
+                    # Download the candidate's six files back from MLflow (stored in MinIO) and
+                    # compare each SHA-256 with the hashes the run recorded: proof the store holds
+                    # exactly the files that were evaluated, not just six names.
+                    python3 scripts/verify_mlflow_artifacts.py --report build/model-report.json \
+                        --tracking-uri "${MLFLOW_TRACKING_URI}"
                 '''
             }
         }
@@ -193,7 +190,13 @@ sys.exit(0 if len(files) >= 6 else 1)"
                         git config user.email "model-pipeline@devsecmlops.local"
                         git add models/
                         git commit -m "model: promote candidate from Jenkins model build ${BUILD_NUMBER} (served v4 F1 ${F1})"
-                        git push "https://${GIT_USER}:${GIT_TOKEN}@github.com/aminshil/devsecmlops-pfe.git" HEAD:main
+                        # The token never goes on a command line (it would be visible in the process
+                        # list): git asks this helper, which reads it from the environment at run time.
+                        ASKPASS="$(mktemp)"
+                        printf '#!/bin/sh\ncase "$1" in Username*) echo "$GIT_USER" ;; *) echo "$GIT_TOKEN" ;; esac\n' > "$ASKPASS"
+                        chmod 700 "$ASKPASS"
+                        GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0 git push https://github.com/aminshil/devsecmlops-pfe.git HEAD:main
+                        rm -f "$ASKPASS"
                     '''
                 }
             }
@@ -208,7 +211,9 @@ sys.exit(0 if len(files) >= 6 else 1)"
     }
 
     post {
-        always   { archiveArtifacts artifacts: 'build/model-report.json,build/feedback/*', allowEmptyArchive: true }
+        // the feedback export itself (raw metrics, operator notes) is not archived: only its fingerprint;
+        // its row counts are in the report
+        always   { archiveArtifacts artifacts: 'build/model-report.json,build/feedback/*.sha256', allowEmptyArchive: true }
         success  { echo "Model pipeline (${params.SCOPE}): ${env.MODEL_OUTCOME}" }
         unstable { echo "Model pipeline (${params.SCOPE}): candidate rejected by the guardrail; production unchanged" }
         failure  { echo "Model pipeline FAILED at ${env.STAGE_NAME}" }

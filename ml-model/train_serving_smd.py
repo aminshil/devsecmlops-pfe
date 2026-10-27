@@ -9,7 +9,6 @@ Outputs:
   models/smd_serving_model.pkl
   models/smd_serving_baselines.json
 """
-import json
 import sys
 from pathlib import Path
 
@@ -20,7 +19,7 @@ from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from preprocess import build_baselines, apply_zscore, save_baselines, add_window_column
+from preprocess import build_baselines, apply_zscore, save_baselines
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data" / "smd_multi.csv"

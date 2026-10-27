@@ -10,7 +10,7 @@
 #      /etc/devsecmlops/alertmanager/telegram_token (never in the repository, never printed);
 #      chat id: found from the message you send to the bot (getUpdates), stored in alerting.env
 #   2. scripts/check_alerting.sh: rules, rule unit tests, prometheus.yml, alertmanager.yml
-#   3. Alertmanager (:9093) and the blackbox exporter (:9115) as containers that restart with Docker
+#   3. Alertmanager (127.0.0.1:9093) and the blackbox exporter (:9115) as containers that restart with Docker
 #   4. Prometheus restarted (its config, monitoring/prometheus.yml, now loads the rules)
 #   5. the watchdog (prometheus-watchdog.service): reports Prometheus or Alertmanager down, from outside both
 #   6. verification: rules loaded, Alertmanager connected, each layer's probe result, the watchdog, a test alert
@@ -81,14 +81,16 @@ chmod 644 "$CONF/alertmanager.yml" "$CONF/telegram.tmpl"
 docker rm -f alertmanager blackbox-exporter >/dev/null 2>&1 || true
 docker run -d --name blackbox-exporter --restart unless-stopped --network host \
   -v "$REPO/monitoring/alerting/blackbox.yml:/etc/blackbox_exporter/config.yml:ro" "$BB_IMG" >/dev/null
+# Alertmanager answers on 127.0.0.1 only: its API takes silences with no authentication, so from the LAN
+# anyone could mute every alert. Prometheus, the watchdog and the panel (its Mute) are on this host.
 docker run -d --name alertmanager --restart unless-stopped --network host \
   -v "$CONF:/etc/alertmanager:ro" -v alertmanager-data:/alertmanager "$AM_IMG" \
   --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager \
-  --web.listen-address=:9093 --cluster.listen-address= >/dev/null
+  --web.listen-address=127.0.0.1:9093 --cluster.listen-address= >/dev/null
 for _ in $(seq 1 30); do curl -sf localhost:9093/-/ready >/dev/null && curl -sf localhost:9115/-/healthy >/dev/null && break; sleep 2; done
 curl -sf localhost:9093/-/ready >/dev/null || { echo "Alertmanager not ready:"; docker logs --tail 20 alertmanager; exit 1; }
 curl -sf localhost:9115/-/healthy >/dev/null || { echo "blackbox exporter not ready:"; docker logs --tail 20 blackbox-exporter; exit 1; }
-echo "Alertmanager :9093 and blackbox exporter :9115 up"
+echo "Alertmanager 127.0.0.1:9093 (this host only) and blackbox exporter :9115 up"
 
 echo "== 4. Prometheus"
 systemctl restart prometheus
@@ -128,4 +130,4 @@ echo "layer probes (1 = up):"
 curl -sG localhost:9090/api/v1/query --data-urlencode 'query=probe_success{job="blackbox-layers"}' | \
   python3 -c "import sys,json; [print(f'   {r[\"metric\"][\"layer\"]:<32} {r[\"value\"][1]}') for r in json.load(sys.stdin)['data']['result']]"
 send_test_alert
-echo "done. Alerts: http://<vm-ip>:9093   Rules and states: http://<vm-ip>:9090/alerts"
+echo "done. Rules and states: http://<vm-ip>:9090/alerts   Alertmanager: on this host only (ssh -L 9093:127.0.0.1:9093 to open its UI)"

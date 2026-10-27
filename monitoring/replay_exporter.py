@@ -141,7 +141,7 @@ def _publish_row(per_machine, types, idx):
 if __name__ == "__main__":
     per_machine, types, n_steps, hours, hour_to_indices = load_dataset()
     start_http_server(9200)
-    print(f"Replay exporter running: http://localhost:9200/metrics")
+    print("Replay exporter running: http://localhost:9200/metrics")
     print(f"Mode: {REPLAY_MODE}")
 
     if REPLAY_MODE == "fastcycle":

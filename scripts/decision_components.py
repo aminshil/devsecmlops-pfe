@@ -134,7 +134,7 @@ def main():
     print("  real anomalies by cause: " + ", ".join(f"{k} {v:,}" for k, v in out["safety_net_only"]["real_anomalies_by_cause"].items()))
     cascades = types.get("cascade", 0)
     out["isolation_forest_cutoffs"] = []
-    print(f"\nserved decision with a stricter IsolationForest cut-off (0 = the trained one):")
+    print("\nserved decision with a stricter IsolationForest cut-off (0 = the trained one):")
     print(f"{'cut-off':>8}{'precision':>10}{'recall':>9}{'F1':>8}{'cascade recall':>16}{'net-only flags':>16}{'net-only precision':>20}")
     for c in cuts:
         sw = sweep[c]

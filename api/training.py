@@ -54,9 +54,13 @@ sys.path.insert(0, str(ROOT / "ml-model"))
 
 
 def list_datasets() -> list[dict]:
-    """Return the real CSVs under data/ with size (rows are counted lazily)."""
+    """Return the real CSVs under data/ with size (rows are counted lazily). The validation and test
+    fleets (*_val.csv, *_test.csv) are not offered: they select the threshold and score the models,
+    so nothing may be trained on them."""
     out = []
     for p in sorted(DATA_DIR.glob("*.csv")):
+        if p.stem.endswith(("_val", "_test")):
+            continue
         size_mb = p.stat().st_size / (1024 * 1024)
         out.append({
             "name": p.name,
@@ -66,17 +70,18 @@ def list_datasets() -> list[dict]:
     return out
 
 
-def _resolve_dataset(dataset: str) -> Path:
+def _resolve_dataset(dataset: str, for_eval: bool = False) -> Path:
     """Only files listed by list_datasets() are accepted: the name is matched
     against that list, never joined into a path, so '../', absolute paths
-    and other files cannot be read through this API."""
-    allowed = {d["name"] for d in list_datasets()}
+    and other files cannot be read through this API. The evaluation file
+    (TEST_DATASET) is read only by the console itself, to score a run."""
+    allowed = {TEST_DATASET} if for_eval else {d["name"] for d in list_datasets()}
     if dataset not in allowed:
         raise ValueError(f"unknown dataset: {dataset!r}")
     return DATA_DIR / dataset
 
 
-def _load_sampled(dataset: str, sample_rows: int, seed: int = 42):
+def _load_sampled(dataset: str, sample_rows: int, seed: int = 42, for_eval: bool = False):
     """
     Uniform random sample of about sample_rows rows across the WHOLE file
     (not the first N rows, which would cover only the first machines/days of a
@@ -90,7 +95,7 @@ def _load_sampled(dataset: str, sample_rows: int, seed: int = 42):
     # it cannot be seeded, so the "seed 42" reproducibility this function
     # documents would be impossible.
     import random
-    path = _resolve_dataset(dataset)
+    path = _resolve_dataset(dataset, for_eval)
     if not sample_rows or sample_rows <= 0:
         df = pd.read_csv(path)
         return df, f"full dataset ({len(df):,} rows)"
@@ -154,7 +159,7 @@ def _train_isoforest(df, features, params):
                             random_state=42, n_jobs=-1)
     model.fit(x_tr)
 
-    df_eval, _ = _load_sampled(TEST_DATASET, EVAL_ROWS, seed=123)
+    df_eval, _ = _load_sampled(TEST_DATASET, EVAL_ROWS, seed=123, for_eval=True)
     df_eval = add_window_column(df_eval)
     metrics = _eval_iso(model, baselines, features, df_eval)
     prod = _eval_iso(joblib.load(PRODUCTION_ISO), json.load(open(PRODUCTION_BASELINES)),

@@ -17,7 +17,7 @@ from datetime import datetime
 from prometheus_client import Gauge, start_http_server
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ml-model"))
-from generate_telecom_fleet import PROFILES, NETWORK_GEAR, build_fleet
+from generate_telecom_fleet import NETWORK_GEAR, build_fleet
 import json
 
 FLEET = build_fleet(200)
@@ -101,7 +101,7 @@ def tick():
 
 if __name__ == "__main__":
     start_http_server(9200)
-    print(f"Fleet simulator running: http://localhost:9200/metrics")
+    print("Fleet simulator running: http://localhost:9200/metrics")
     print(f"Simulating {len(FLEET)} machines, updating every 30s\n")
     while True:
         tick()

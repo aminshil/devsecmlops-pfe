@@ -12,7 +12,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from generate_telecom_fleet import build_fleet, NETWORK_GEAR
+from generate_telecom_fleet import build_fleet
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "models" / "dependency_graph.json"

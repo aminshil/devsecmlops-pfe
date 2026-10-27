@@ -75,7 +75,7 @@ def main() -> int:
         print(f"  -> other/blank verdicts:  {n_other:,}   (ignored)")
     print()
     print(f"Empirical anomaly fraction of the judged pool: {emp:.4f}")
-    print(f"  (this is the real precision-like number, measured, not assumed)")
+    print("  (this is the real precision-like number, measured, not assumed)")
     print()
     print(f"Base fleet:                 {base_n:,} rows at contamination {rate:.4f}")
     print(f"Case A  add judged as-is:   {cont_A:.6f}   (delta {cont_A - rate:+.6f})")

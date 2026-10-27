@@ -3,6 +3,12 @@
 pipeline {
     agent any
 
+    // One build at a time: two builds would race on the image tag, the registry's :latest and the
+    // Deployment (the model job already has this; external review, 27 October).
+    options {
+        disableConcurrentBuilds()
+    }
+
     environment {
         IMAGE_NAME    = "devsecmlops-api"
         IMAGE_TAG     = "${readFile('VERSION').trim()}-b${BUILD_NUMBER}"
@@ -40,7 +46,8 @@ pipeline {
                     sh '''
                         sonar-scanner \
                           -Dsonar.projectKey=devsecmlops-pfe \
-                          -Dsonar.sources=api,ml-model \
+                          -Dsonar.sources=api,ml-model,monitoring,scripts \
+                          -Dsonar.coverage.exclusions=monitoring/**,scripts/** \
                           -Dsonar.python.version=3.12 \
                           -Dsonar.python.coverage.reportPaths=coverage.xml
                     '''
@@ -133,10 +140,10 @@ pipeline {
         stage('7. Push to registry') {
             steps {
                 sh '''
+                    # Only the build's own tag here: :latest moves in stage 10, once this
+                    # version is deployed and has passed its smoke test.
                     docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-                    docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY}/${IMAGE_NAME}:latest
                     docker push ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-                    docker push ${REGISTRY}/${IMAGE_NAME}:latest
                     echo "── Registry catalog ──"
                     curl -sf http://registry:5000/v2/${IMAGE_NAME}/tags/list
                 '''
@@ -173,6 +180,25 @@ pipeline {
                         -n ml-serving --timeout=180s
                 '''
             }
+            post {
+                failure {
+                    // A rollout that does not finish (pods not Ready in 180 s) is put back, but only if
+                    // this build had already set its image: a failure before `set image` (the image load)
+                    // left the Deployment unchanged, and undoing then would roll back a good version.
+                    sh '''
+                        export KUBECONFIG=/home/pfe/.kube/config
+                        CUR=$(kubectl get deployment/anomaly-api -n ml-serving \
+                              -o jsonpath='{.spec.template.spec.containers[?(@.name=="api")].image}')
+                        if [ "$CUR" = "${IMAGE_NAME}:${IMAGE_TAG}" ]; then
+                            echo "Rollout of ${IMAGE_TAG} did not finish -- rolling back to the previous revision"
+                            kubectl rollout undo deployment/anomaly-api -n ml-serving
+                            kubectl rollout status deployment/anomaly-api -n ml-serving --timeout=180s
+                        else
+                            echo "Deployment still runs $CUR: nothing to roll back"
+                        fi
+                    '''
+                }
+            }
         }
 
         stage('9. Post-deploy smoke test') {
@@ -203,6 +229,16 @@ pipeline {
                 }
             }
         }
+
+        stage('10. Tag latest') {
+            steps {
+                // Only a version that is deployed and passed its smoke test becomes :latest.
+                sh '''
+                    docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY}/${IMAGE_NAME}:latest
+                    docker push ${REGISTRY}/${IMAGE_NAME}:latest
+                '''
+            }
+        }
     }
 
     post {
@@ -210,7 +246,7 @@ pipeline {
             echo "Pipeline SUCCESS — ${IMAGE_NAME}:${IMAGE_TAG} built, scanned, pushed, deployed, verified"
         }
         failure {
-            echo "Pipeline FAILED at stage: ${env.STAGE_NAME}. Stages 1-7 deploy nothing. If it failed at stage 8 the rollout did not finish (check the pods); if at stage 9 the new version was live and was rolled back automatically."
+            echo "Pipeline FAILED at stage: ${env.STAGE_NAME}. Stages 1-7 deploy nothing. If it failed at stage 8 the rollout did not finish and, if the new image was already set, it was rolled back; if at stage 9 the new version was live and was rolled back automatically; at stage 10 only the registry's :latest tag was not moved."
         }
         always {
             sh 'docker rm -f api-ci-test 2>/dev/null || true'

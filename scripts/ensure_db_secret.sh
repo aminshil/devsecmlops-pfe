@@ -24,9 +24,9 @@ if "$KC" -n "$NS" get secret postgres-credentials >/dev/null 2>&1; then
 fi
 
 PW="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)"
-"$KC" -n "$NS" create secret generic postgres-credentials \
-  --from-literal=POSTGRES_USER="$DB_USER" \
-  --from-literal=POSTGRES_PASSWORD="$PW" \
-  --from-literal=POSTGRES_DB="$DB_NAME" >/dev/null
+# The Secret goes to kubectl on stdin (printf is a shell builtin): the password is never an argument of
+# a command, so it never shows in the process list (it did with --from-literal).
+printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: postgres-credentials\n  namespace: "%s"\ntype: Opaque\nstringData:\n  POSTGRES_USER: "%s"\n  POSTGRES_PASSWORD: "%s"\n  POSTGRES_DB: "%s"\n' \
+  "$NS" "$DB_USER" "$PW" "$DB_NAME" | "$KC" create -f - >/dev/null
 unset PW
 echo "postgres-credentials created with a generated password"

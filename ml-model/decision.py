@@ -21,8 +21,7 @@ SAFETY_NET_CAUSE = "unknown (flagged by safety-net model only)"
 
 def classifier_vote(p_normal: float, non_normal: list[tuple[str, float]],
                     threshold: float, per_class: dict | None = None) -> tuple[bool, str]:
-    """Scalar form. The API applies the same rule per request with its own copy (api/app.py,
-    _decide_v4_anomaly), which must stay identical to this one."""
+    """Scalar form: what the API calls on every request (api/app.py, v4 and v3 paths)."""
     if per_class is not None:
         exceed = [(cls, prob, prob - per_class.get(cls, 1.01))
                   for cls, prob in non_normal

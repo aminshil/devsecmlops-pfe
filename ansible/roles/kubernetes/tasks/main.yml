@@ -75,14 +75,18 @@
   changed_when: "'created' in pg_secret_apply.stdout"
 
 - name: Create or update the optional feedback token Secret (only when FEEDBACK_TOKEN is set)
+  # The Secret is built by Python from the environment and applied on stdin: the token is never an
+  # argument of a command (it was, with --from-literal, visible in the process list).
   ansible.builtin.shell: |
     set -o pipefail
-    {{ bin_kubectl }} create secret generic feedback-token -n {{ k8s_namespace }} \
-      --from-literal=token="$FEEDBACK_TOKEN" --dry-run=client -o yaml | {{ bin_kubectl }} apply -f -
+    python3 -c 'import json, os; print(json.dumps({"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+      "metadata": {"name": "feedback-token", "namespace": os.environ["NS"]},
+      "stringData": {"token": os.environ["FEEDBACK_TOKEN"]}}))' | {{ bin_kubectl }} apply -f -
   args:
     executable: /bin/bash
   environment:
     FEEDBACK_TOKEN: "{{ feedback_token }}"
+    NS: "{{ k8s_namespace }}"
   when: feedback_token | length > 0
   register: fb_secret
   changed_when: "'created' in fb_secret.stdout or 'configured' in fb_secret.stdout"

@@ -31,7 +31,6 @@ import sys
 import threading
 import urllib.error
 import urllib.request
-from collections import deque
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path

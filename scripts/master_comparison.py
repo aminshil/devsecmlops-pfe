@@ -8,7 +8,7 @@ One run, one table. Honest, no test-set leakage:
 XGBoost-only metrics (the safety-net IsolationForest is unsupervised and
 unaffected by feedback; it's a separate live OR-gate).
 """
-import gc, json, time, sys
+import gc, json, sys
 from datetime import datetime, timezone
 import numpy as np, pandas as pd
 from sklearn.metrics import f1_score, precision_score, recall_score
@@ -85,7 +85,7 @@ def flag_single(pr,le,thr):
     return (pr[:,ni]<thr).astype(int)
 
 def tune_perclass(pr,le,yv):
-    cls=list(le.classes_); ni=cls.index("normal")
+    cls=list(le.classes_)
     grid=np.round(np.arange(0.05,0.96,0.05),2)
     thr={c:0.5 for c in CAUSES if c in cls}
     def flag(pr,tm):

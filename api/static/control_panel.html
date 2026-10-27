@@ -337,7 +337,6 @@
             <option value="20000" selected>20,000 — fast</option>
             <option value="100000">100,000 — slower</option>
             <option value="500000">500,000 — slow</option>
-            <option value="0">full dataset — slowest, memory-heavy</option>
           </select>
         </div>
         <div>
@@ -978,7 +977,7 @@
     const anom=d.is_anomaly===1;
     const v=document.getElementById("op_verdict");
     v.className="verdict "+(anom?"anom":"norm");
-    v.innerHTML='<span class="dot"></span>'+(anom?"ANOMALY":"NORMAL")+" "+(anom?("· "+d.likely_cause):"");
+    v.innerHTML='<span class="dot"></span>'+(anom?"ANOMALY":"NORMAL")+" "+(anom?("· "+ctEsc(d.likely_cause)):"");
     let h=kv("model",d.model)+kv("window",d.window||"—");
     if(d.xgb_vote){ h+=kv("XGBoost",(d.xgb_vote.is_anomaly?"anomaly":"normal")+" ("+d.xgb_vote.cause+")"); }
     if(d.iso_vote){ h+=kv("IsolationForest",(d.iso_vote.is_anomaly?"anomaly":"normal")+" · "+d.iso_vote.score); }
@@ -999,7 +998,7 @@
     const causes=(d.likely_root_causes||[]).join(", ")||"none";
     let h='<div style="margin-bottom:10px">Likely root cause: <span class="tag rc">'+causes+'</span></div>';
     h+='<table><thead><tr><th>Machine</th><th>Role</th><th>Score</th><th>Downstream</th><th>Router</th></tr></thead><tbody>';
-    (d.ranked||[]).forEach(function(x){ h+='<tr><td class="mono">'+x.machine+'</td><td><span class="tag '+roleClass(x.role)+'">'+x.role+'</span></td><td class="mono">'+x.own_score+'</td><td class="mono">'+(x.downstream_anomalous_count||0)+'</td><td class="mono">'+(x.upstream_router||"—")+'</td></tr>'; });
+    (d.ranked||[]).forEach(function(x){ h+='<tr><td class="mono">'+ctEsc(x.machine)+'</td><td><span class="tag '+roleClass(x.role)+'">'+ctEsc(x.role)+'</span></td><td class="mono">'+ctEsc(x.own_score)+'</td><td class="mono">'+ctEsc(x.downstream_anomalous_count||0)+'</td><td class="mono">'+ctEsc(x.upstream_router||"—")+'</td></tr>'; });
     h+='</tbody></table>';
     document.getElementById("rc_body").innerHTML=h;
   }
@@ -1036,35 +1035,35 @@
     let h=sectionTitle(title);
     if(!rows.length){ return h+'<div class="hint">none</div>'; }
     h+='<table><thead><tr>'+cols.map(function(c){ return "<th>"+c+"</th>"; }).join("")+'</tr></thead><tbody>';
-    rows.forEach(function(r){ h+="<tr>"+cols.map(function(c){ const val=(r[c]!==null&&r[c]!==undefined&&r[c]!=="")?r[c]:"—"; return '<td class="mono">'+val+'</td>'; }).join("")+"</tr>"; });
+    rows.forEach(function(r){ h+="<tr>"+cols.map(function(c){ const val=(r[c]!==null&&r[c]!==undefined&&r[c]!=="")?r[c]:"—"; return '<td class="mono">'+ctEsc(val)+'</td>'; }).join("")+"</tr>"; });
     return h+"</tbody></table>";
   }
   function infraPods(rows){
     let h=sectionTitle("Kubernetes pods");
     if(!rows.length){ return h+'<div class="hint">cluster unreachable</div>'; }
     h+='<table><thead><tr><th>Pod</th><th>Image</th><th>Ready</th><th>Restarts</th><th>Status</th></tr></thead><tbody>';
-    rows.forEach(function(r){ const rt=r.ready?"norm":"anom"; const pt=r.phase==="Running"?"norm":"anom"; h+='<tr><td class="mono">'+r.name+'</td><td class="mono">'+r.image+'</td><td><span class="tag '+rt+'">'+(r.ready?"yes":"no")+'</span></td><td class="mono">'+r.restarts+'</td><td><span class="tag '+pt+'">'+r.phase+'</span></td></tr>'; });
+    rows.forEach(function(r){ const rt=r.ready?"norm":"anom"; const pt=r.phase==="Running"?"norm":"anom"; h+='<tr><td class="mono">'+ctEsc(r.name)+'</td><td class="mono">'+ctEsc(r.image)+'</td><td><span class="tag '+rt+'">'+(r.ready?"yes":"no")+'</span></td><td class="mono">'+ctEsc(r.restarts)+'</td><td><span class="tag '+pt+'">'+ctEsc(r.phase)+'</span></td></tr>'; });
     return h+"</tbody></table>";
   }
   function infraHpa(rows){
     let h=sectionTitle("Autoscaling (HPA)");
     if(!rows.length){ return h+'<div class="hint">no HPA</div>'; }
     h+='<table><thead><tr><th>HPA</th><th>Current</th><th>Desired</th><th>Min</th><th>Max</th><th>CPU %</th></tr></thead><tbody>';
-    rows.forEach(function(r){ const cpu=(r.cpu_util!==null&&r.cpu_util!==undefined)?(r.cpu_util+"%"):"—"; h+='<tr><td class="mono">'+r.name+'</td><td class="mono">'+r.current+'</td><td class="mono">'+r.desired+'</td><td class="mono">'+r.min+'</td><td class="mono">'+r.max+'</td><td class="mono">'+cpu+'</td></tr>'; });
+    rows.forEach(function(r){ const cpu=(r.cpu_util!==null&&r.cpu_util!==undefined)?(r.cpu_util+"%"):"—"; h+='<tr><td class="mono">'+ctEsc(r.name)+'</td><td class="mono">'+ctEsc(r.current)+'</td><td class="mono">'+ctEsc(r.desired)+'</td><td class="mono">'+ctEsc(r.min)+'</td><td class="mono">'+ctEsc(r.max)+'</td><td class="mono">'+ctEsc(cpu)+'</td></tr>'; });
     return h+"</tbody></table>";
   }
   function infraTargets(rows){
     let h=sectionTitle("Prometheus targets");
     if(!rows.length){ return h+'<div class="hint">Prometheus unreachable</div>'; }
     h+='<table><thead><tr><th>Job</th><th>Health</th></tr></thead><tbody>';
-    rows.forEach(function(r){ const tag=r.health==="up"?"norm":"anom"; h+='<tr><td class="mono">'+r.job+'</td><td><span class="tag '+tag+'">'+r.health+'</span></td></tr>'; });
+    rows.forEach(function(r){ const tag=r.health==="up"?"norm":"anom"; h+='<tr><td class="mono">'+ctEsc(r.job)+'</td><td><span class="tag '+tag+'">'+ctEsc(r.health)+'</span></td></tr>'; });
     return h+"</tbody></table>";
   }
   function infraAnomalies(rows){
     let h=sectionTitle("Live anomalies");
     if(!rows.length){ return h+'<div class="hint">none currently</div>'; }
     h+='<table><thead><tr><th>Machine</th><th>Type</th><th>Reported by pod</th></tr></thead><tbody>';
-    rows.forEach(function(r){ h+='<tr><td class="mono">'+r.machine+'</td><td class="mono">'+r.type+'</td><td class="mono">'+r.pod+'</td></tr>'; });
+    rows.forEach(function(r){ h+='<tr><td class="mono">'+ctEsc(r.machine)+'</td><td class="mono">'+ctEsc(r.type)+'</td><td class="mono">'+ctEsc(r.pod)+'</td></tr>'; });
     return h+"</tbody></table>";
   }
   function renderInfra(d){

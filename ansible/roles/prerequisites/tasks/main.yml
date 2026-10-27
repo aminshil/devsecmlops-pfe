@@ -51,7 +51,7 @@
 - name: Ensure MinIO (MLflow artifact store) is running
   community.docker.docker_container:
     name: minio
-    image: "minio/minio"
+    image: "{{ img_minio }}"
     state: started
     restart_policy: always
     command: 'server /data --console-address ":9001"'
@@ -128,7 +128,7 @@
 - name: Ensure SonarQube (SAST) is running
   community.docker.docker_container:
     name: sonarqube
-    image: "sonarqube:community"
+    image: "{{ img_sonarqube }}"
     state: started
     restart_policy: always
     ports: ["9000:9000"]

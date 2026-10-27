@@ -27,7 +27,6 @@ import mlflow
 import mlflow.sklearn
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
-from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from preprocess_robust import (build_baselines, apply_zscore, save_baselines,

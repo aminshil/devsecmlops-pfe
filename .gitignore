@@ -12,6 +12,7 @@ __pycache__/
 data/smd-raw/
 data/*.csv
 data/demo_labels.jsonl
+data/demo_labels.jsonl.lock
 data/*.incidents.json
 
 # MLflow local runs
@@ -52,9 +53,13 @@ build/
 data/feedback/
 
 # benchmark.py run outputs -- regenerate by running the script; not the
-# real served baselines (those are the allow-listed telecom_*.json above)
-models/results/
+# real served baselines (those are the allow-listed telecom_*.json above).
+# The two committed ones are the runs the README quotes. models/results/ is NOT
+# ignored: every result file there is the output a README number comes from,
+# committed on purpose (it used to be ignored while 41 of its files were tracked).
 models/baselines_*.json
+!models/baselines_smd_multi.json
+!models/baselines_telecom_fleet.json
 .prometheus-data/
 .kube/
 

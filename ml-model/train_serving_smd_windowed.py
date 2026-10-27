@@ -3,7 +3,7 @@ Variant A: SMD serving model WITH time-of-day window baselines,
 using the synthetic per-minute timestamps load_smd.py assigns.
 Compare against train_serving_smd.py (Variant B, constant window).
 """
-import json, sys
+import sys
 from pathlib import Path
 import joblib
 import pandas as pd

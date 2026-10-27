@@ -266,3 +266,24 @@ measurements are the evidence that it works as configured; these pages define wh
     2016, ch. 6: "Effective alerting systems have good signal and very low noise", and never alert "simply
     because 'something seems a bit weird'" (why the Telegram list leaves out the safety net's alarms alone,
     README Decision 10b). https://www.oreilly.com/radar/monitoring-distributed-systems
+
+**The 27 October review and its fixes** (27 October)
+
+92. External repository review of `main` at `a2075f4`, 27 October 2026 (provided by the project's author):
+    the contradictions, stale facts, security and CI findings fixed or listed in README Known limitations.
+93. Jenkins, *Pipeline syntax: options* (`disableConcurrentBuilds`) and *post* conditions (the stage-8
+    rollback). https://www.jenkins.io/doc/book/pipeline/syntax/
+94. Kubernetes, *kubectl rollout undo*. https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_undo/
+95. Kubernetes, *Install and set up kubectl on Linux*: the release's `.sha256` file and `sha256sum --check`.
+    https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
+96. minikube, release binaries and their `.sha256` files. https://storage.googleapis.com/minikube/releases/
+97. SonarSource, SonarScanner CLI downloads and their `.sha256` files.
+    https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/
+98. Aqua Security, Trivy releases: the release tarball and `trivy_<version>_checksums.txt`.
+    https://github.com/aquasecurity/trivy/releases
+99. Docker, *docker image pull*: pulling by digest, an immutable reference (the pinned images).
+    https://docs.docker.com/reference/cli/docker/image/pull/
+100. Git, *gitcredentials* and `GIT_ASKPASS`: credentials asked from a helper, not put in the URL.
+     https://git-scm.com/docs/gitcredentials
+101. Python, *fcntl.flock*: the lock that serialises the two processes writing the demo label file.
+     https://docs.python.org/3/library/fcntl.html#fcntl.flock

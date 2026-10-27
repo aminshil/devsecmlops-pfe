@@ -3,7 +3,6 @@ Rigorous evaluation: per-machine per-time-window baselines (C)
 vs current per-machine baselines (A), with threshold tuning.
 Full fleet sample + fair threshold comparison.
 """
-import numpy as np
 import pandas as pd
 from pathlib import Path
 from sklearn.ensemble import IsolationForest

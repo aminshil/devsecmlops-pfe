@@ -7,7 +7,7 @@ training (the models are trained on the seed-42 file). The first --days days
 are taken; every machine is checked every --every-hours hours, so all 200
 machines and all four time windows are covered.
 
-Each request carries the machine's 10 preceding readings as `history`,
+Each request carries the machine's last 10 readings as `history` (the 9 before it and the current one),
 exactly what a monitoring agent would hold, so the deployment answers with
 the v4 model; the script reports which model actually served each request
 instead of assuming it. Requests go through the NodePort, like any external
@@ -129,7 +129,7 @@ def main():
     df = load_slice(a.data, a.days)
     items = build_requests(df, a.every_hours)
     print(f"{len(items):,} requests ({df['machine'].nunique()} machines, every {a.every_hours} h, "
-          f"each with its 10 preceding readings as history) -> {a.url}")
+          f"each with its last 10 readings, the current one included, as history) -> {a.url}")
 
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=a.workers) as ex:

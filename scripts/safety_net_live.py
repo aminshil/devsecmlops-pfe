@@ -18,6 +18,7 @@ the false alarms. Read-only; run on the VM, where the label store and the NodePo
 import argparse
 import datetime as dt
 import json
+import os
 import sys
 import urllib.parse
 import urllib.request
@@ -33,7 +34,10 @@ SAFETY_NET = "unknown (flagged by safety-net model only)"
 
 def logged_predictions(cluster, machine, start, end):
     q = urllib.parse.urlencode({"machine": machine, "start": start, "end": end, "limit": 2000})
-    with urllib.request.urlopen(f"{cluster}/predictions/by-machine?{q}", timeout=30) as r:
+    req = urllib.request.Request(f"{cluster}/predictions/by-machine?{q}")
+    if os.environ.get("FEEDBACK_TOKEN"):          # the pods require it on this route when it is set
+        req.add_header("X-Feedback-Token", os.environ["FEEDBACK_TOKEN"])
+    with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)
 
 

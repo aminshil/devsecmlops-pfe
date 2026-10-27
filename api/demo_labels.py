@@ -7,6 +7,7 @@ can show the truth next to the model's call. Each line also carries the machine 
 so the History tab can find the flagged readings of an anomaly episode (their reading time and true label).
 Demo only: serving, training and the guardrail never read this.
 """
+import fcntl
 import json
 import os
 import threading
@@ -16,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MAX_BYTES = 8_000_000     # past this size the oldest lines are dropped
 KEEP_LINES = 30000        # about 8 hours of the production agent's flagged readings (~60 a minute)
-_LOCK = threading.Lock()
+_LOCK = threading.Lock()   # threads of one process; the file lock below covers the other process
 
 
 def labels_path() -> Path:
@@ -35,11 +36,16 @@ def record(prediction_id, label, cause, source, reading_time=None, machine=None)
     try:
         with _LOCK:
             path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists() and path.stat().st_size > MAX_BYTES:
-                kept = path.read_text().splitlines()[-KEEP_LINES:]
-                path.write_text("\n".join(kept) + "\n")
-            with path.open("a") as f:
-                f.write(line)
+            # The control panel and the production agent are two processes writing this file: an exclusive
+            # lock on a sidecar file makes the truncation (read, then rewrite) and each append one step, so a
+            # line appended by one while the other truncates is not lost.
+            with open(str(path) + ".lock", "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if path.exists() and path.stat().st_size > MAX_BYTES:
+                    kept = path.read_text().splitlines()[-KEEP_LINES:]
+                    path.write_text("\n".join(kept) + "\n")
+                with path.open("a") as f:
+                    f.write(line)
         return True
     except OSError:
         return False

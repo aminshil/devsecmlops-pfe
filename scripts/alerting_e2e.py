@@ -299,7 +299,7 @@ def main():
         "no message in the 50 quiet seconds (re-sends, a clear expiring)": not quiet,
         f"a stopped machine listed within its limit ({limit:g} s) + 1.3 cadences + 15 s":
             delays["m1 not reporting"] is not None and delays["m1 not reporting"] <= limit + 1.3 * args.cadence + 15,
-        f"no information within the limit + 1.3 cadences + 15 s once every machine stopped":
+        "no information within the limit + 1.3 cadences + 15 s once every machine stopped":
             delays["no information"] is not None and delays["no information"] <= limit + 1.3 * args.cadence + 15,
         "reporting again within 15 s": delays["reporting again"] is not None and delays["reporting again"] <= 15,
         "largest list under 4,096 characters": size is not None and size < 4096,

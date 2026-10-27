@@ -1,6 +1,5 @@
 """A prediction is logged together with the history the request carried: without it, operator feedback on a v4
 prediction cannot become a v4 training example (found when a Jenkins smoke run used rows_used_v4 = 0)."""
-import os
 import sys
 from pathlib import Path
 

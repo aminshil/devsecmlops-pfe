@@ -32,6 +32,7 @@ Endpoints:
 """
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime
@@ -87,7 +88,7 @@ PER_CLASS_THRESHOLDS = json.loads(_pct_raw) if _pct_raw.strip() else None
 sys.path.insert(0, str(ROOT / "ml-model"))
 from root_cause import score_root_causes, load_graph
 import decision as _decision
-from preprocess import rolling_features_from_history
+from preprocess import ROLLING_FEATURE_BASE_COLS, rolling_features_from_history
 
 SAFETY_NET_CAUSE = _decision.SAFETY_NET_CAUSE
 
@@ -100,7 +101,6 @@ from api.feedback_db import (
     recent_predictions,
     predictions_for_machine,
     verdict_stats,
-    VALID_VERDICTS,
 )
 
 # MODEL_NAME=telecom: the v1 IsolationForest-only model, kept as the baseline
@@ -137,22 +137,32 @@ PREDICT_THRESHOLD, PREDICT_THRESHOLD_SOURCE = _resolve_threshold()
 MODEL_LINEAGE.update({"threshold": PREDICT_THRESHOLD, "threshold_source": PREDICT_THRESHOLD_SOURCE})
 
 
-def _verify_artifact_integrity() -> None:
+def _verify_artifact_integrity(loaded=()) -> None:
     """Refuse to serve artifacts that differ from the promoted ones: every
     file listed in models/manifest.json must match its recorded SHA-256
     before it is unpickled (unpickling executes code, so a swapped file must
-    never be loaded). Also records the lineage reported by /health."""
+    never be loaded). Fails closed: a manifest that lists no artifact is
+    refused, and so is any file in `loaded` (the files the app is about to
+    load) that the manifest does not list. Also records the lineage reported
+    by /health."""
     import hashlib
     if not MANIFEST_PATH.exists():
         raise RuntimeError(f"model manifest not found: {MANIFEST_PATH}")
     prod = json.loads(MANIFEST_PATH.read_text()).get("production") or {}
-    for rel, expected in (prod.get("artifacts") or {}).items():
+    listed = prod.get("artifacts") or {}
+    if not listed:
+        raise RuntimeError("model manifest lists no production artifact: refusing to load unverified models")
+    for rel, expected in listed.items():
         path = ROOT / rel
         if not path.exists():
             raise RuntimeError(f"production artifact missing: {rel} (listed in the manifest)")
         h = hashlib.sha256(path.read_bytes()).hexdigest()
         if h != expected:
             raise RuntimeError(f"artifact integrity check failed: {rel}")
+    covered = {(ROOT / rel).resolve() for rel in listed}
+    unlisted = [str(Path(f)) for f in loaded if Path(f).exists() and Path(f).resolve() not in covered]
+    if unlisted:
+        raise RuntimeError(f"artifact integrity check failed: not in the manifest: {', '.join(unlisted)}")
     ev = prod.get("evaluation") or {}
     MODEL_LINEAGE.update({
         "source": prod.get("source"),
@@ -185,10 +195,13 @@ elif IS_V3:
     LE_PATH  = MODELS_DIR / "telecom_xgb_label_encoder_v2.pkl"
     ISO_PATH = MODELS_DIR / "telecom_iso_v2.pkl"
     BASELINES_PATH = MODELS_DIR / "telecom_baselines_v2.json"
+    XGB_V4_PATH = MODELS_DIR / "telecom_xgb_v4_rolling.pkl"
+    LE_V4_PATH  = MODELS_DIR / "telecom_xgb_v4_rolling_encoder.pkl"
     for path in (XGB_PATH, LE_PATH, ISO_PATH, BASELINES_PATH):
         if not path.exists():
             raise RuntimeError(f"v3 artifact not found: {path}")
-    _verify_artifact_integrity()
+    # every file loaded below, v4 included, must be one the manifest lists and hashes
+    _verify_artifact_integrity((XGB_PATH, LE_PATH, ISO_PATH, BASELINES_PATH, XGB_V4_PATH, LE_V4_PATH))
     xgb_model = joblib.load(XGB_PATH)
     xgb_label_encoder = joblib.load(LE_PATH)
     iso_model = joblib.load(ISO_PATH)
@@ -200,8 +213,6 @@ elif IS_V3:
     # When the /predict caller provides a 'history' field, we use v4's
     # 15-feature model instead of v3's 6-feature one. See README section
     # 'Rolling features and gradual-onset detection (v4)'.
-    XGB_V4_PATH = MODELS_DIR / "telecom_xgb_v4_rolling.pkl"
-    LE_V4_PATH  = MODELS_DIR / "telecom_xgb_v4_rolling_encoder.pkl"
     if XGB_V4_PATH.exists() and LE_V4_PATH.exists():
         xgb_v4_model = joblib.load(XGB_V4_PATH)
         xgb_v4_label_encoder = joblib.load(LE_V4_PATH)
@@ -257,17 +268,16 @@ def _resolve_window(reading) -> str | None:
     """Determine the time window from hour or timestamp, if provided."""
     if not HAS_WINDOWS:
         return None
-    if reading.hour is not None:
-        if not 0 <= reading.hour <= 23:
-            raise HTTPException(status_code=400,
-                                detail="hour must be between 0 and 23")
+    if reading.hour is not None:          # 0-23, checked by Reading
         return hour_to_window(reading.hour)
     if reading.timestamp is not None:
         try:
             ts = datetime.fromisoformat(reading.timestamp)
         except ValueError:
             raise HTTPException(status_code=400,
-                                detail="timestamp must be ISO format, e.g. 2026-06-29T03:00:00")
+                                detail="timestamp must be ISO format, e.g. 2026-06-29T03:00:00") from None
+        # the hour as written: the baselines' windows are the fleet's local day (night = its quiet hours),
+        # so a timestamp with an offset is not converted to UTC
         return hour_to_window(ts.hour)
     return None
 
@@ -583,6 +593,9 @@ def _check_physical_range(name: str, value: float) -> None:
         raise ValueError(f"{name}={value} must not be negative")
 
 
+_MACHINE_NAME = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+
+
 class Reading(BaseModel):
     # NaN/inf are rejected at parse time: a non-finite value would silently
     # propagate through the z-score into the models.
@@ -591,7 +604,8 @@ class Reading(BaseModel):
     machine: str
     metrics: dict[str, float]
     machine_type: str | None = None   # optional hint for unknown machines
-    hour: int | None = None           # 0-23, picks the time window
+    # 0-23, picks the time window; checked at parse time (422), with or without windowed baselines
+    hour: int | None = Field(default=None, ge=0, le=23)
     timestamp: str | None = None      # ISO string, alternative to hour
     # v4 rolling features (optional). When present, the caller supplies the
     # recent history of cpu/ram/load_avg so the API can compute rolling
@@ -604,8 +618,10 @@ class Reading(BaseModel):
     @field_validator("machine")
     @classmethod
     def _machine_bounded(cls, v: str) -> str:
-        if not v or len(v) > 64:
-            raise ValueError("machine must be 1-64 characters")
+        # The same rule as GET /predictions/by-machine, so every machine logged here can be queried back;
+        # it also keeps out '|' (internal window keys such as "web-01|night" are not machine names).
+        if not _MACHINE_NAME.fullmatch(v):
+            raise ValueError("machine must be 1-64 characters: letters, digits, '_', '.', '-'")
         if v.startswith("__"):   # reserved for internal baseline keys (__global__, __windows__, ...)
             raise ValueError("machine names starting with '__' are reserved")
         return v
@@ -678,45 +694,14 @@ def list_machines():
 
 
 def _compute_rolling_features(history: dict) -> list[float] | None:
-    """
-    Compute the 9 v4 rolling features from a caller-supplied history dict.
-
-    history format: {"cpu": [...], "ram": [...], "load_avg": [...]}
-    where each list is up to 10 recent readings, LAST value = most recent.
-
-    Returns a 9-element list in the exact order the v4 model expects:
-      [cpu_rolling_mean, cpu_rolling_std, cpu_delta,
-       ram_rolling_mean, ram_rolling_std, ram_delta,
-       load_avg_rolling_mean, load_avg_rolling_std, load_avg_delta]
-
-    Matches ml-model/preprocess.add_rolling_features exactly:
-      - rolling_mean: mean of the window
-      - rolling_std:  sample std (ddof=1) of the window; 0.0 if < 2 values
-      - delta:        last value - first value in the window
-        (training used diff(periods=window-1), i.e. current minus the
-        value window-1 steps back; with a full 10-value window that is
-        history[-1] - history[0])
-
-    Returns None if history is malformed (missing keys / empty lists),
-    signalling the caller to fall back to the v3 model.
-    """
-    import statistics
-
-    required = ("cpu", "ram", "load_avg")
-    if not all(k in history and history[k] for k in required):
+    """The 9 v4 rolling features of a caller-supplied history ({"cpu": [...], "ram": [...],
+    "load_avg": [...]}, last value = the current reading), computed by the SAME function the
+    training pipeline uses for feedback rows (ml-model/preprocess.rolling_features_from_history),
+    in the order the v4 model expects. None when a key is missing or empty: the caller then falls
+    back to the v3 model. (Reading.history already enforces exactly 10 finite values per key.)"""
+    if not all(history.get(k) for k in ROLLING_FEATURE_BASE_COLS):
         return None
-
-    feats = []
-    for col in required:
-        vals = list(history[col])
-        if not vals:
-            return None
-        rolling_mean = sum(vals) / len(vals)
-        rolling_std = statistics.stdev(vals) if len(vals) >= 2 else 0.0
-        delta = vals[-1] - vals[0]
-        feats.extend([rolling_mean, rolling_std, delta])
-    return feats
-
+    return rolling_features_from_history(history)
 
 
 def _predict_v2(reading, X, z_scores, window, machine_type, baseline_used):
@@ -752,29 +737,6 @@ def _predict_v2(reading, X, z_scores, window, machine_type, baseline_used):
     }
     
 
-def _decide_v4_anomaly(v4_p_normal, v4_non_normal):
-    """
-    Decide (is_anomaly, cause) for the v4 path from the class probabilities.
-
-    Per-class mode (PER_CLASS_THRESHOLDS set): anomaly if ANY non-normal class
-    clears its own threshold; cause = the class exceeding its bar by the
-    largest margin. Single-threshold mode: anomaly if P(normal) 
-    PREDICT_THRESHOLD; cause = the top non-normal class. Extracted from
-    _predict_v4 to keep that function's cognitive complexity under the limit.
-    """
-    if PER_CLASS_THRESHOLDS is not None:
-        exceed = [(cls, prob, prob - PER_CLASS_THRESHOLDS.get(cls, 1.01))
-                  for cls, prob in v4_non_normal
-                  if prob >= PER_CLASS_THRESHOLDS.get(cls, 1.01)]
-        if exceed:
-            return True, max(exceed, key=lambda x: x[2])[0]
-        return False, "normal"
-    # Single-threshold mode
-    if v4_p_normal < PREDICT_THRESHOLD:
-        return True, max(v4_non_normal, key=lambda x: x[1])[0]
-    return False, "normal"
-
-
 def _predict_v4(reading, X, z_scores, window, machine_type, baseline_used):
     """
     v4 rolling-features prediction. Returns a response dict, or None if the
@@ -803,7 +765,9 @@ def _predict_v4(reading, X, z_scores, window, machine_type, baseline_used):
     v4_normal_idx = v4_classes.index("normal")
     v4_p_normal = float(v4_proba[v4_normal_idx])
     v4_non_normal = [(v4_classes[i], v4_proba[i]) for i in range(len(v4_classes)) if i != v4_normal_idx]
-    v4_is_anomaly, v4_cause = _decide_v4_anomaly(v4_p_normal, v4_non_normal)
+    # the served rule, shared with offline evaluation (ml-model/decision.py)
+    v4_is_anomaly, v4_cause = _decision.classifier_vote(v4_p_normal, v4_non_normal, PREDICT_THRESHOLD,
+                                                        PER_CLASS_THRESHOLDS)
     # IsolationForest safety net still runs on the base 6 features
     iso_is_anomaly = bool(iso_model.predict(X.to_numpy())[0] == -1)
     iso_score = float(-iso_model.score_samples(X.to_numpy())[0])
@@ -866,13 +830,9 @@ def _predict_v3_v4(reading, X, z_scores, window, machine_type, baseline_used):
     classes = list(xgb_label_encoder.classes_)
     normal_idx = classes.index("normal")
     p_normal = float(xgb_proba[normal_idx])
-    xgb_is_anomaly = p_normal < PREDICT_THRESHOLD
-    # Reported cause: if not normal, pick the most probable non-normal class
-    if xgb_is_anomaly:
-        non_normal_scores = [(classes[i], xgb_proba[i]) for i in range(len(classes)) if i != normal_idx]
-        cause = max(non_normal_scores, key=lambda x: x[1])[0]
-    else:
-        cause = "normal"
+    non_normal_scores = [(classes[i], xgb_proba[i]) for i in range(len(classes)) if i != normal_idx]
+    # the served rule (ml-model/decision.py), single-threshold mode: per-class thresholds are v4's
+    xgb_is_anomaly, cause = _decision.classifier_vote(p_normal, non_normal_scores, PREDICT_THRESHOLD)
     
     # IsolationForest: unchanged safety net for novel patterns.
     iso_is_anomaly = bool(iso_model.predict(X.to_numpy())[0] == -1)
@@ -1074,12 +1034,25 @@ class FeedbackIn(BaseModel):
 _FEEDBACK_DB_DOWN = {"description": "Feedback DB unavailable"}
 
 
+_TOKEN_REFUSED = {"description": "FEEDBACK_TOKEN is set and the X-Feedback-Token header is missing or wrong"}
+
+
+def _require_feedback_token(x_feedback_token: str | None) -> None:
+    """Opt-in access control for the feedback routes: when FEEDBACK_TOKEN is set on the API, the
+    caller must send the same value in X-Feedback-Token (compared in constant time). Applies to the
+    verdicts (writes) and to the prediction log and verdict counts (reads: raw telemetry and operator
+    notes). Unset (the demo default): open, as before."""
+    expected = os.environ.get("FEEDBACK_TOKEN", "")
+    if expected and not hmac.compare_digest((x_feedback_token or "").encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="missing or wrong X-Feedback-Token")
+
+
 @app.post(
     "/feedback/{prediction_id}",
     responses={
         404: {"description": "prediction_id not found in the feedback DB"},
         400: {"description": "Invalid verdict value"},
-        401: {"description": "FEEDBACK_TOKEN is set and the X-Feedback-Token header is missing or wrong"},
+        401: _TOKEN_REFUSED,
         503: _FEEDBACK_DB_DOWN,
     },
 )
@@ -1103,14 +1076,12 @@ def submit_feedback(prediction_id: str, feedback: FeedbackIn,
     Idempotent: submitting a second verdict for the same prediction_id
     overwrites the first with the newer timestamp.
     """
-    expected = os.environ.get("FEEDBACK_TOKEN", "")
-    if expected and not hmac.compare_digest((x_feedback_token or "").encode(), expected.encode()):
-        raise HTTPException(status_code=401, detail="missing or wrong X-Feedback-Token")
+    _require_feedback_token(x_feedback_token)
     _require_db()
     try:
         row = update_verdict(prediction_id, feedback.verdict, feedback.notes)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     if row is None:
         raise HTTPException(status_code=404, detail=f"prediction_id {prediction_id!r} not found")
     return {
@@ -1129,15 +1100,17 @@ def submit_feedback(prediction_id: str, feedback: FeedbackIn,
 
 @app.get(
     "/predictions/by-machine",
-    responses={400: {"description": "Time window not valid"}, 503: _FEEDBACK_DB_DOWN},
+    responses={400: {"description": "Time window not valid"}, 401: _TOKEN_REFUSED, 503: _FEEDBACK_DB_DOWN},
 )
 def get_machine_predictions(machine: Annotated[str, Query(pattern=r"^[A-Za-z0-9_.-]{1,64}$")],
-                            start: float, end: float, limit: int = 1000):
+                            start: float, end: float, limit: int = 1000,
+                            x_feedback_token: Annotated[str | None, Header()] = None):
     """
     One machine's logged predictions between `start` and `end` (Unix seconds, at most 8 days apart),
     oldest first, at most `limit` (capped at 2000). Read by the control panel's History tab (episode
     details) to show every reading of an episode with its metrics, score and verdict.
     """
+    _require_feedback_token(x_feedback_token)
     if not 0 < end - start <= 8 * 86400:
         raise HTTPException(status_code=400, detail="end must be after start, at most 8 days later")
     _require_db()
@@ -1147,14 +1120,15 @@ def get_machine_predictions(machine: Annotated[str, Query(pattern=r"^[A-Za-z0-9_
 
 @app.get(
     "/predictions/recent",
-    responses={503: _FEEDBACK_DB_DOWN},
+    responses={401: _TOKEN_REFUSED, 503: _FEEDBACK_DB_DOWN},
 )
-def get_recent_predictions(limit: int = 100):
+def get_recent_predictions(limit: int = 100, x_feedback_token: Annotated[str | None, Header()] = None):
     """
     Return the N most recent predictions from the feedback DB.
     Defaults to 100, capped at 1000. Useful for inspecting accumulated
     data and for feeding the retrain pipeline.
     """
+    _require_feedback_token(x_feedback_token)
     _require_db()
     rows = recent_predictions(limit=limit)
     return {"count": len(rows), "predictions": rows}
@@ -1162,15 +1136,16 @@ def get_recent_predictions(limit: int = 100):
 
 @app.get(
     "/feedback/stats",
-    responses={503: _FEEDBACK_DB_DOWN},
+    responses={401: _TOKEN_REFUSED, 503: _FEEDBACK_DB_DOWN},
 )
-def get_feedback_stats():
+def get_feedback_stats(x_feedback_token: Annotated[str | None, Header()] = None):
     """
     Return counts of each verdict type across the whole DB.
     Predictions with no operator verdict yet are grouped under '_pending'.
     Useful for monitoring how much labeled data has been collected for
     the retrain pipeline.
     """
+    _require_feedback_token(x_feedback_token)
     _require_db()
     return verdict_stats()
 
@@ -1282,7 +1257,7 @@ _PORT_LAYERS = [
 def ui_status():
     """Live health of every platform layer."""
     layers = [{"layer": "L0/L1", "name": "Anomaly API", "up": True,
-               "detail": f"{MODEL_NAME} v2.20.3"}]
+               "detail": f"{MODEL_NAME} v{APP_VERSION}"}]
     for host, port, layer, name, detail in _PORT_LAYERS:
         if layer == "L5":
             continue  # add L5 after the K8s layer for ordering
@@ -1521,7 +1496,7 @@ def ui_fleet():
 
 
 # ---------------------------------------------------------------------------
-# Real-data sampler for the demo (independent test set, true labels + causes)
+# Real-data sampler for the demo (the operator-stream fleet, true labels + causes)
 # ---------------------------------------------------------------------------
 _SAMPLE_CACHE = {"rows": None}
 
@@ -1602,7 +1577,7 @@ def _load_sample_pool():
 
 @app.get("/ui/sample")
 def ui_sample(n: int = 20):
-    """N real labeled readings from the independent test set, with true cause."""
+    """N real labeled readings from the operator-stream fleet (not the test set), with true cause."""
     import random as _random
     _rng = _random.SystemRandom()
     pool = _load_sample_pool()
@@ -1653,11 +1628,13 @@ from api import training as _training
 
 
 class _TrainIn(BaseModel):
+    # Bounded (external review, 27 October): a full read of a 17M-row file is the VM's known
+    # out-of-memory path, and an unbounded tree count only burns the shared CPU.
     dataset: str
     model: str = "isolation_forest"
-    contamination: float = 0.068
-    n_estimators: int = 200
-    sample_rows: int = 20000  # 0 = full dataset
+    contamination: float = Field(0.068, gt=0, le=0.5)
+    n_estimators: int = Field(200, ge=10, le=1000)
+    sample_rows: int = Field(20000, ge=1000, le=500_000)
 
 
 class _RunRef(BaseModel):
@@ -1912,7 +1889,7 @@ def _prom_scalar(metric: str):
 
 @app.get("/ui/sample-one")
 def ui_sample_one():
-    """One real labeled reading from the test set, with its REAL hour parsed
+    """One real labeled reading from the operator-stream fleet, with its REAL hour parsed
     from the row timestamp - for the Operator tab's 'load a real row' button.
     The window therefore comes from the metric's own time, not an app default."""
     try:
@@ -1920,7 +1897,7 @@ def ui_sample_one():
     except Exception as e:
         return {"ok": False, "error": str(e)}
     if not rows:
-        return {"ok": False, "error": "no sample available (test set missing?)"}
+        return {"ok": False, "error": "no sample available (operator-stream fleet missing?)"}
     r = rows[0]
     return {"ok": True, "machine": r["machine"], "hour": r.get("hour"),
             "metrics": r["metrics"], "true_label": r.get("true_label"),
@@ -2052,27 +2029,13 @@ def _process_already_running(target):
         return False
 
 
-def _spawn_process(target, layer_name):
-    logf = _open_safe_log(f"fix_{layer_name.replace(' ', '_')}.log")
-    if target == "prometheus":
-        _sp.Popen(["prometheus", "--config.file=monitoring/prometheus.yml",
-                   "--storage.tsdb.path=/tmp/prom_data"],
-                  stdout=logf, stderr=logf, cwd=str(ROOT))
-    else:
-        _sp.Popen([str(ROOT / "venv" / "bin" / "python3"), target], stdout=logf, stderr=logf, cwd=str(ROOT))
-
-
 def _start_process(target, layer_name):
+    """Every process layer is a systemd unit (Restart=always): start it through systemctl, never by
+    spawning a second copy outside systemd (README L1, real bugs)."""
     unit = _UNIT_FOR_TARGET.get(target)
-    if unit:
-        return _systemctl("start", unit, layer_name)
-    if _process_already_running(target):
-        return _fix_result(True, note=f"{layer_name} already running")
-    try:
-        _spawn_process(target, layer_name)
-        return _fix_result(True, note=f"{layer_name} started")
-    except Exception as e:
-        return _fix_result(False, error=str(e))
+    if not unit:
+        return _fix_result(False, error=f"{layer_name}: no systemd unit known for {target}")
+    return _systemctl("start", unit, layer_name)
 
 
 def _start_k8s():
@@ -2085,7 +2048,7 @@ def _start_k8s():
         return _fix_result(True, note="Kubernetes full recovery started in the background "
                 "(~1-4 min: tries a gentle start, then a full rebuild if wedged). "
                 "Keep demoing other tabs; K8s goes green when it finishes. "
-                "Progress is in /tmp/k8s_recover.log. If even this fails, Docker "
+                f"Progress is in {_safe_log_path('k8s_recover.log')}. If even this fails, Docker "
                 "itself may be down — that needs the terminal.", **{"async": True})
     except Exception as e:
         return _fix_result(False, error=str(e))

@@ -1,0 +1,59 @@
+{
+  "checked_at": "2026-10-27T20:31:16Z",
+  "tracking_uri": "http://localhost:5001",
+  "run_id": "d81b7ea68cb84ca68c6f485676d2ecf5",
+  "expected_from": "models/manifest.json (production.artifacts)",
+  "files_in_run": [
+    "telecom_baselines_v2.json",
+    "telecom_iso_v2.pkl",
+    "telecom_xgb_classifier_v2.pkl",
+    "telecom_xgb_label_encoder_v2.pkl",
+    "telecom_xgb_v4_rolling.pkl",
+    "telecom_xgb_v4_rolling_encoder.pkl"
+  ],
+  "files": [
+    {
+      "file": "telecom_baselines_v2.json",
+      "expected_sha256": "750902f7dc26ab0e37621dc044363d7e609cf44382ce8feb4389f93d0776aed3",
+      "bytes": 335157,
+      "downloaded_sha256": "750902f7dc26ab0e37621dc044363d7e609cf44382ce8feb4389f93d0776aed3",
+      "result": "match"
+    },
+    {
+      "file": "telecom_iso_v2.pkl",
+      "expected_sha256": "310a1afb81a877bf72cb1556a6e7a2c5d1c23efbb385b99347a80be975fd6de5",
+      "bytes": 1870121,
+      "downloaded_sha256": "310a1afb81a877bf72cb1556a6e7a2c5d1c23efbb385b99347a80be975fd6de5",
+      "result": "match"
+    },
+    {
+      "file": "telecom_xgb_classifier_v2.pkl",
+      "expected_sha256": "febc927a2d93c8f98af92f140f945627347ae91d6f6e4c35fd56680e45bb8016",
+      "bytes": 3838836,
+      "downloaded_sha256": "febc927a2d93c8f98af92f140f945627347ae91d6f6e4c35fd56680e45bb8016",
+      "result": "match"
+    },
+    {
+      "file": "telecom_xgb_label_encoder_v2.pkl",
+      "expected_sha256": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
+      "bytes": 559,
+      "downloaded_sha256": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
+      "result": "match"
+    },
+    {
+      "file": "telecom_xgb_v4_rolling.pkl",
+      "expected_sha256": "cb54a1a6310a02f29385740bcc1a5cb045f72bae3300be983bc387f92822f532",
+      "bytes": 4013571,
+      "downloaded_sha256": "cb54a1a6310a02f29385740bcc1a5cb045f72bae3300be983bc387f92822f532",
+      "result": "match"
+    },
+    {
+      "file": "telecom_xgb_v4_rolling_encoder.pkl",
+      "expected_sha256": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
+      "bytes": 559,
+      "downloaded_sha256": "16081db3c238af780f20b3134afd83202cad3a9645360a772a3e7a6bc6c15039",
+      "result": "match"
+    }
+  ],
+  "all_match": true
+}
