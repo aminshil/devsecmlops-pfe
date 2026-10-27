@@ -46,7 +46,7 @@ import base64
 import hmac
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -98,6 +98,7 @@ from api.feedback_db import (
     insert_prediction,
     update_verdict,
     recent_predictions,
+    predictions_for_machine,
     verdict_stats,
     VALID_VERDICTS,
 )
@@ -1070,13 +1071,16 @@ class FeedbackIn(BaseModel):
     notes: str | None = None
 
 
+_FEEDBACK_DB_DOWN = {"description": "Feedback DB unavailable"}
+
+
 @app.post(
     "/feedback/{prediction_id}",
     responses={
         404: {"description": "prediction_id not found in the feedback DB"},
         400: {"description": "Invalid verdict value"},
         401: {"description": "FEEDBACK_TOKEN is set and the X-Feedback-Token header is missing or wrong"},
-        503: {"description": "Feedback DB unavailable"},
+        503: _FEEDBACK_DB_DOWN,
     },
 )
 def submit_feedback(prediction_id: str, feedback: FeedbackIn,
@@ -1124,8 +1128,26 @@ def submit_feedback(prediction_id: str, feedback: FeedbackIn,
 
 
 @app.get(
+    "/predictions/by-machine",
+    responses={400: {"description": "Time window not valid"}, 503: _FEEDBACK_DB_DOWN},
+)
+def get_machine_predictions(machine: Annotated[str, Query(pattern=r"^[A-Za-z0-9_.-]{1,64}$")],
+                            start: float, end: float, limit: int = 1000):
+    """
+    One machine's logged predictions between `start` and `end` (Unix seconds, at most 8 days apart),
+    oldest first, at most `limit` (capped at 2000). Read by the control panel's History tab (episode
+    details) to show every reading of an episode with its metrics, score and verdict.
+    """
+    if not 0 < end - start <= 8 * 86400:
+        raise HTTPException(status_code=400, detail="end must be after start, at most 8 days later")
+    _require_db()
+    rows, truncated = predictions_for_machine(machine, start, end, limit=limit)
+    return {"count": len(rows), "truncated": truncated, "predictions": rows}
+
+
+@app.get(
     "/predictions/recent",
-    responses={503: {"description": "Feedback DB unavailable"}},
+    responses={503: _FEEDBACK_DB_DOWN},
 )
 def get_recent_predictions(limit: int = 100):
     """
@@ -1140,7 +1162,7 @@ def get_recent_predictions(limit: int = 100):
 
 @app.get(
     "/feedback/stats",
-    responses={503: {"description": "Feedback DB unavailable"}},
+    responses={503: _FEEDBACK_DB_DOWN},
 )
 def get_feedback_stats():
     """
@@ -1795,6 +1817,7 @@ def _review_row(p: dict, real: dict | None) -> dict:
     label recorded for it (None when it did not come from a labelled demo source)."""
     return {
         "id": p.get("id"), "timestamp": p.get("timestamp"), "machine": p.get("machine"),
+        "is_anomaly": p.get("final_is_anomaly"),
         "model_version": p.get("model_version"), "cause": p.get("final_cause"),
         "p_normal": p.get("xgb_p_normal"), "threshold": p.get("predict_threshold"),
         "verdict": p.get("operator_verdict"),
@@ -2442,4 +2465,23 @@ def ui_history_episode(machine: Annotated[str, _Query(pattern=r"^[A-Za-z0-9_.-]{
     out["readings"] = [{"logged": e["logged"], "reading_time": e.get("time") or "", "label": e.get("label"),
                         "cause": e.get("cause") or "", "source": e.get("source") or ""}
                        for e in _demo_labels.for_machine(machine, start - 60, end + 15)]
+    out.update(_episode_predictions(machine, start - _EPISODE_READINGS_PAD_S, min(end + _EPISODE_READINGS_PAD_S, time.time())))
     return out
+
+
+_EPISODE_READINGS_PAD_S = 60     # the readings table starts 1 minute before the episode and ends 1 minute after
+_EPISODE_READINGS_MAX = 1000
+
+
+def _episode_predictions(machine: str, lo: float, hi: float) -> dict:
+    """Every reading the cluster logged for the machine in [lo, hi] (its prediction log in Postgres, any
+    age), as Review-tab rows with the true label where one was recorded. A cluster that cannot answer
+    leaves the rest of the details intact: the reason is returned instead of the rows."""
+    q = _up.urlencode({"machine": machine, "start": lo, "end": hi, "limit": _EPISODE_READINGS_MAX})
+    try:
+        data = _cluster_call("GET", "/predictions/by-machine?" + q, timeout=20)
+    except _ClusterError as e:
+        return {"predictions": [], "predictions_truncated": False, "predictions_error": str(e)}
+    labels = _demo_labels.load()
+    rows = [_review_row(p, labels.get(p.get("id"))) for p in data.get("predictions") or []]
+    return {"predictions": rows, "predictions_truncated": bool(data.get("truncated")), "predictions_error": ""}

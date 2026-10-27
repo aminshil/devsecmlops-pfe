@@ -22,6 +22,9 @@ NOW = 1_800_000_000.0
 
 @pytest.fixture
 def client(monkeypatch):
+    def no_cluster(*a, **k):
+        raise app_module._ClusterError("no cluster in this test")
+    monkeypatch.setattr(app_module, "_cluster_call", no_cluster)      # never reach a real NodePort from a test
     monkeypatch.setattr(app_module, "OPS_UI_ENABLED", True)
     monkeypatch.setattr(app_module, "_OPS_UI_USER", CREDS[0])
     monkeypatch.setattr(app_module, "_OPS_UI_PASSWORD", CREDS[1])
@@ -190,3 +193,86 @@ def test_episode_details_need_the_credentials_and_report_prometheus_down(client,
 def test_episode_details_are_reachable_from_the_tab():
     page = (ROOT / "api" / "static" / "control_panel.html").read_text()
     assert 'data-hsdetail="' in page and '"/ui/history/episode?"' in page and "function hsOpen(" in page
+
+
+# ---- Details: every reading of the episode, from the cluster's prediction log ----
+
+def _logged(pid, t, flagged, cpu):
+    import datetime as dt
+    return {"id": pid, "timestamp": dt.datetime.fromtimestamp(t, dt.timezone.utc).isoformat(), "machine": "web-01",
+            "final_is_anomaly": flagged, "final_cause": "cpu_spike" if flagged else "normal", "xgb_p_normal": 0.1,
+            "predict_threshold": 0.91, "iso_score": 0.4, "model_version": "telecom_v4_rolling",
+            "raw_metrics_json": '{"cpu": %s, "ram": 50}' % cpu, "features_json": "{}", "history_json": None}
+
+
+def test_episode_details_list_every_reading_with_its_metrics_verdict_and_real_label(client, monkeypatch, labels):
+    start, end = NOW - 600, NOW - 300
+    calls = []
+
+    def cluster(method, path, body=None, timeout=15):
+        calls.append((method, path))
+        return {"count": 3, "truncated": False, "predictions": [
+            _logged("p1", start - 30, 0, 20), _logged("p2", start + 10, 1, 95), _logged("p3", start + 40, 1, 97)]}
+    monkeypatch.setattr(app_module, "_cluster_call", cluster)
+    monkeypatch.setattr(app_module, "_prom_range", lambda *a, **k: [])
+    monkeypatch.setattr(labels.time, "time", lambda: start + 10)
+    labels.record("p2", 1, "cpu_spike", "production agent", "2026-06-29 00:00:00", "web-01")
+    labels.record("p3", 0, "normal", "production agent", "2026-06-29 00:00:30", "web-01")
+    monkeypatch.setattr(app_module.time, "time", lambda: NOW)
+    d = client.get("/ui/history/episode", params={"machine": "web-01", "start": start, "end": end}, auth=CREDS).json()
+    (method, path), = calls
+    q = dict(p.split("=") for p in path.split("?", 1)[1].split("&"))
+    assert method == "GET" and path.startswith("/predictions/by-machine?") and q["machine"] == "web-01"
+    assert (float(q["start"]), float(q["end"])) == (start - 60, end + 60)     # a minute before and after
+    rows = {r["id"]: r for r in d["predictions"]}
+    assert [r["id"] for r in d["predictions"]] == ["p1", "p2", "p3"] and d["predictions_error"] == ""
+    assert rows["p2"]["is_anomaly"] == 1 and rows["p2"]["metrics"] == {"cpu": 95, "ram": 50}
+    assert rows["p2"]["real"]["label"] == 1 and rows["p3"]["real"]["label"] == 0 and rows["p1"]["real"] is None
+
+
+def test_episode_details_still_open_when_the_cluster_log_does_not_answer(client, monkeypatch, labels):
+    monkeypatch.setattr(app_module, "_prom_range", lambda *a, **k: [])
+    d = client.get("/ui/history/episode", params={"machine": "web-01", "start": NOW - 600, "end": NOW - 300},
+                   auth=CREDS).json()
+    assert d["predictions"] == [] and "no cluster" in d["predictions_error"] and "metrics" in d
+
+
+def test_the_pods_answer_one_machines_readings_and_refuse_a_bad_window(monkeypatch):
+    seen = []
+    monkeypatch.setattr(app_module, "_db_ready", lambda: True)
+    monkeypatch.setattr(app_module, "predictions_for_machine",
+                        lambda m, s, e, limit=1000: seen.append((m, s, e, limit)) or ([{"id": "p1"}], True))
+    c = TestClient(app_module.app)
+    r = c.get("/predictions/by-machine", params={"machine": "web-01", "start": 100, "end": 200, "limit": 50})
+    assert r.status_code == 200 and r.json() == {"count": 1, "truncated": True, "predictions": [{"id": "p1"}]}
+    assert seen == [("web-01", 100.0, 200.0, 50)]
+    assert c.get("/predictions/by-machine", params={"machine": "web-01", "start": 200, "end": 100}).status_code == 400
+    assert c.get("/predictions/by-machine", params={"machine": "web 01;", "start": 1, "end": 2}).status_code == 422
+
+
+def test_the_machine_window_query_compares_utc_iso_text_and_reports_truncation(monkeypatch):
+    from api import feedback_db
+    executed = []
+
+    class Cur:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, args): executed.append((sql, args))
+        def fetchall(self): return [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+
+    class Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def cursor(self): return Cur()
+    monkeypatch.setattr(feedback_db, "_connect", lambda: Conn())
+    rows, truncated = feedback_db.predictions_for_machine("web-01", 0, 60, limit=2)
+    sql, args = executed[0]
+    assert "machine = %s" in sql and "ORDER BY timestamp" in sql
+    assert args == ("web-01", "1970-01-01T00:00:00+00:00", "1970-01-01T00:01:00+00:00", 3)
+    assert [r["id"] for r in rows] == ["a", "b"] and truncated is True
+
+
+def test_the_readings_table_is_in_the_details_window():
+    page = (ROOT / "api" / "static" / "control_panel.html").read_text()
+    assert "function hsReadings(" in page and 'hsReadings(ep,d),true)' in page
+

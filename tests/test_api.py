@@ -237,6 +237,7 @@ def test_predict_served_when_db_unavailable():
 @pytest.mark.parametrize("method,path,payload", [
     ("post", "/feedback/abc", {"verdict": "true_positive"}),
     ("get", "/predictions/recent", None),
+    ("get", "/predictions/by-machine?machine=web-01&start=1&end=2", None),
     ("get", "/feedback/stats", None),
 ])
 def test_feedback_endpoints_return_503_without_db(method, path, payload):

@@ -98,6 +98,15 @@ def init_db() -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON predictions(timestamp DESC)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_verdict ON predictions(operator_verdict)")
         conn.commit()
+    # one machine's readings over a time window (History tab, episode details). Built CONCURRENTLY, outside
+    # a transaction, so a large table keeps taking /predict inserts while the index is created; best effort:
+    # without it the query is only slower, so a failure here (two pods building it at once) must not turn
+    # prediction logging off.
+    try:
+        with psycopg.connect(DATABASE_URL, autocommit=True, connect_timeout=3) as conn:
+            conn.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_machine_timestamp ON predictions(machine, timestamp)")
+    except psycopg.Error as e:
+        print(f"index idx_machine_timestamp not created ({type(e).__name__}); machine queries will scan")
 
 
 def insert_prediction(
@@ -180,6 +189,24 @@ def recent_predictions(limit: int = 100) -> list[dict]:
                 (limit,)
             )
             return list(cur.fetchall())
+
+
+def predictions_for_machine(machine: str, since: float, until: float, limit: int = 1000) -> tuple[list[dict], bool]:
+    """One machine's predictions between `since` and `until` (Unix seconds), oldest first, at most `limit`
+    (capped at 2000); the flag says whether more were left out. Timestamps are stored as UTC ISO-8601 text,
+    so the window is compared in the same form."""
+    limit = min(max(int(limit), 1), 2000)
+    lo = datetime.fromtimestamp(since, timezone.utc).isoformat()
+    hi = datetime.fromtimestamp(until, timezone.utc).isoformat()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM predictions WHERE machine = %s AND timestamp >= %s AND timestamp <= %s "
+                "ORDER BY timestamp LIMIT %s",
+                (machine, lo, hi, limit + 1),
+            )
+            rows = list(cur.fetchall())
+    return rows[:limit], len(rows) > limit
 
 
 def verdict_stats() -> dict:

@@ -149,7 +149,7 @@ def test_review_lists_only_unjudged_anomalies_by_default(client, cluster):
     body = r.json()
     assert body["scanned"] == 4 and body["count"] == 2
     assert [a["id"] for a in body["anomalies"]] == ["id-1", "id-4"]
-    assert set(body["anomalies"][0]) == {"id", "timestamp", "machine", "model_version", "cause", "p_normal", "threshold", "verdict",
+    assert set(body["anomalies"][0]) == {"id", "timestamp", "machine", "is_anomaly", "model_version", "cause", "p_normal", "threshold", "verdict",
                                          "machine_type", "window", "xgb_cause", "iso_score", "flagged_by",
                                          "metrics", "features", "history", "real"}
     assert "features_json" not in body["anomalies"][0]                       # parsed fields only, never the raw DB columns

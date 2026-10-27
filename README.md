@@ -46,7 +46,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Weakest cause | `cascade`, recall 0.268 (label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7731** · precision 0.7166 · recall 0.8391. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on 25 October against the served 21 October model (image `2.20.3-b116`); the 19 October model scored 0.7755 on the same sample | `scripts/live_k8s_validation.py`, run on 25 October; output in `models/results/live_validation_20261025_b116.json` |
 | Latest green pipeline | Build `2.20.3-b117` (commit `7666e3c9`, 26 October: the alerts for machines that miss their reports, and the panel's anomaly mute on the list label): all 11 stages green, 225 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS). Before it: b116 (`c416cb99`, 25 October: the Notifications card, the History tab with episode details, the label store's machine and time, mlflow 3.17.2, 223 tests) | [L3 run history](#l3--cicd) |
-| Tests | 235 passing, in 22 files; build b117 ran 225 (b116 ran 223, b112 ran 188; the 37 added after b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute; the 10 added after b117 check the watchdog) | `pytest tests/` (stage 1b) |
+| Tests | 241 passing, in 22 files; build b117 ran 225 (b116 ran 223, b112 ran 188; the 37 added after b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute; the 16 added after b117 check the watchdog and the History tab's episode readings) | `pytest tests/` (stage 1b) |
 | Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, cleared, persistent, fleet surge), machines that miss their reports, no data, any layer down, pods, Kubernetes, traffic stopped, disk and memory. 26 rules (17 alerts, 9 recording rules) unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
 | Dashboard | 27 Grafana panels in 6 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-21: the model promoted by Jenkins `devsecmlops-model` build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, model files read back from MinIO, committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); the current image `2.20.3-b112` carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
@@ -965,6 +965,8 @@ Verdict semantics:
 
 **`GET /predictions/recent?limit=N`** -- returns the N most recent predictions from the DB.
 
+**`GET /predictions/by-machine?machine=M&start=T1&end=T2&limit=N`** -- one machine's predictions between two Unix times (at most 8 days apart), oldest first, at most N (capped at 2,000), with `truncated` when more were left out. Used by the History tab's episode details.
+
 **`GET /feedback/stats`** -- returns counts of each verdict type across the whole DB.
 
 All feedback-DB endpoints now return `503` (not an uncaught `500`) when the database is genuinely unreachable — see [Engineering decision 23](#23-why-feedback-logging-is-best-effort-not-fail-loud-graceful-degradation).
@@ -1194,6 +1196,7 @@ POST /predict               anomaly score for one machine reading (v3 or v4, aut
 POST /root-cause            rank a batch of anomalous machines by root-cause likelihood
 POST /feedback/{id}         record an operator verdict
 GET  /predictions/recent    recent logged predictions
+GET  /predictions/by-machine  one machine's logged predictions in a time window
 GET  /feedback/stats        verdict counts
 GET  /metrics                Prometheus exposition
 GET  /ui/*                   operations console -- see Security posture
@@ -1311,7 +1314,19 @@ Tabs:
   when each flagged reading was logged; they exist only for readings sent by the Demo tab or the
   production agent since that change, and the store keeps about the last 8 hours (30,000 lines, about 60
   flagged readings a minute). Checked against a real Prometheus with two pods reporting the same machine:
-  the stale pod's values never appear.
+  the stale pod's values never appear. Below the charts, **every reading** of the episode, from a minute
+  before to a minute after it, as the cluster logged it (its Postgres prediction log, through the pods'
+  `GET /predictions/by-machine`): the time, the verdict (anomalous or normal), the real label as **TP** or
+  **FP** where one was recorded, cpu, ram, network, disk_io, disk_usage and load_avg, P(anomaly), the cause,
+  the IsolationForest score and the model (v3 or v4), with the rows inside the episode shaded and a count
+  on top (readings in the episode, flagged, TP and FP). The Review tab reads only the latest 1,000 logged
+  predictions (about 2.5 minutes of traffic), so episodes need this query by machine and time, served by
+  an index on (machine, timestamp) built without blocking the inserts. TN and FN cannot be shown: the
+  true label is recorded only for flagged readings, and only for about the last 8 hours. If the cluster
+  does not answer, the rest of the window still opens and says why. Checked against a real PostgreSQL 16
+  on 27 October: the index is created (and creating it twice is harmless), the query returns only that
+  machine's rows in the window, oldest first, reports truncation at the limit, and uses the index; a failure
+  to create the index (two pods at once) leaves prediction logging on.
 - **Continuous training** — read-only view of the retraining loop: predictions logged by the cluster and how many an operator judged, the model the cluster serves (from its `/health`), the model in the repository manifest, the recent retraining runs, and links to the Jenkins job and MLflow. The retraining itself runs in Jenkins (`Jenkinsfile.model`).
 - **Training** — the training console, see [below](#training-console-interactive-mlops-train-and-verify).
 - **Review** — the anomalies the pods flagged that nobody has judged yet. *Real* or *False alarm*
@@ -1431,7 +1446,7 @@ found and fixed in the most recent security pass; see
 | `api/demo_labels.py` | Keeps the true label of replayed readings beside the cluster's prediction id, for the Review tab's real-label column, with the machine and the time it was logged, for the History tab's episode details. |
 | `api/training.py` | Backend for the training console — dataset selection (with the path-traversal fix), representative sampling, comparing a candidate against production. |
 | `api/static/control_panel.html` | The mission-control UI, served at `/ui`. |
-| `tests/test_api.py` (47 tests), `test_decision.py`, `test_training_console.py`, `test_ui_cluster.py`, `test_ui_fleet.py`, `test_review_details.py` | Covered in full in [Testing](#testing) below. |
+| `tests/test_api.py` (48 tests), `test_decision.py`, `test_training_console.py`, `test_ui_cluster.py`, `test_ui_fleet.py`, `test_review_details.py` | Covered in full in [Testing](#testing) below. |
 
 ---
 
@@ -2993,9 +3008,9 @@ this project.)
 
 ## Testing
 
-**235 tests** in 22 files (up from 15; build b117 ran 225), `pytest`, in `tests/`:
+**241 tests** in 22 files (up from 15; build b117 ran 225), `pytest`, in `tests/`:
 
-- `test_api.py` (47 tests) — every endpoint, input validation (NaN/inf
+- `test_api.py` (48 tests) — every endpoint, input validation (NaN/inf
   rejection, including raw `NaN`/`Infinity` tokens answered with 422 rather than 500, reserved `__` machine names, physical-range rejection (cpu=150 is a 422), the opt-in feedback token, machine length, metrics count, history shape), v3/v4
   auto-selection, Prometheus metrics, DB-unavailable behavior (503, not
   500), ops-UI auth (required, wrong password rejected, absent when
@@ -3058,13 +3073,16 @@ this project.)
   both down or both back at once is one message, a refused post is logged and retried, the bot token
   never reaches a log line or an error, the alert takes the critical route, and the setup script installs
   the service.
-- `test_ui_history.py` (18) — the History tab with Prometheus replaced by a recorder: the route needs the
+- `test_ui_history.py` (23) — the History tab with Prometheus replaced by a recorder: the route needs the
   ops credentials, episodes split on a gap and the last one is ongoing, the per-machine summary, the step
   keeps every series under Prometheus's point limit, a window outside 1–168 hours is refused, the list
   cap says how many are left out, Prometheus down is a 502, and the query is the alert rule's expression
   and the one promtool runs against the alert. Episode details: every query reads that machine from the
   pod that served it last, the cause time counts only the episode, the recorded labels are the ones logged
-  during it, and a machine name that could inject PromQL or a bad window is refused.
+  during it, and a machine name that could inject PromQL or a bad window is refused. Every reading: the
+  panel asks the pods for the episode's window plus a minute each side and joins the real labels, the
+  window still opens when the cluster does not answer, the pods' route validates the machine and the
+  window, and the database query compares UTC ISO text and reports truncation.
 
 ```bash
 pip install -r requirements-dev.txt

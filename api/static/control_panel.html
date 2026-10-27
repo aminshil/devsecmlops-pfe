@@ -133,6 +133,7 @@
   .rvzv.far{color:var(--red)}
   .rvspark polyline{fill:none;stroke:var(--teal);stroke-width:2;stroke-linejoin:round}
   .rvspark .hsband{fill:rgba(255,107,107,.16)}
+  tr.hsin td{background:rgba(255,107,107,.07)}
   .rvhist{margin:8px 0}
   .rvhist .rvk{display:flex;justify-content:space-between}
   .rvbig{font-size:18px;font-weight:700;margin-bottom:4px}
@@ -1218,13 +1219,40 @@
       return '<div class="rvhist"><div class="rvk"><span>'+ctEsc(k)+'</span><span>'+ctEsc(label)+'</span></div>'+hsSpark(m[k],ep,d)+'</div>';
     }).join("");
   }
-  const HS_HOW='<div class="hint" style="margin-top:0">Charts run from 2 minutes before the episode to 2 minutes after it (or to now); the red band is the episode. Values come from the pod that served the machine last. Values are the pods\' last reading per scrape. Reading time and real label come from the flagged readings the Demo tab and the production agent recorded during the episode.</div>';
+  const HS_COLS=["cpu","ram","network","disk_io","disk_usage","load_avg"];
+  function hsReadingRow(x,ep){
+    const t=Date.parse(x.timestamp)/1000, inside=t>=ep.start&&(ep.ongoing||t<ep.end);
+    const flagged=x.is_anomaly===1, m=x.metrics||{};
+    const verdict=flagged?'<span class="tag anom">anomalous</span>':'<span class="tag norm">normal</span>';
+    let real='<span class="hint">—</span>';
+    if(x.real){ const v=verdictOf(x.real.label===1,flagged); real='<span class="tag '+(v==="TP"||v==="TN"?"norm":"anom")+'">'+v+'</span>'+(x.real.label===1&&x.real.cause?' '+ctEsc(x.real.cause):''); }
+    const pa=(typeof x.p_normal==="number")?rvNum(1-x.p_normal,3):"—";
+    const cells=HS_COLS.map(function(k){ return '<td class="mono">'+(typeof m[k]==="number"?rvNum(m[k],1):"—")+'</td>'; }).join("");
+    return '<tr'+(inside?' class="hsin"':'')+'><td class="mono">'+ctEsc(rvLocal(t*1000))+'</td><td>'+verdict+'</td><td>'+real+'</td>'+cells
+      +'<td class="mono">'+pa+'</td><td>'+ctEsc(x.cause||"—")+'</td><td class="mono">'+(typeof x.iso_score==="number"?rvNum(x.iso_score,3):"—")+'</td><td class="mono">'+ctEsc(x.model_version||"—")+'</td></tr>';
+  }
+  function hsReadings(ep,d){
+    if(d.predictions_error){ return '<div class="hint">the cluster\'s prediction log did not answer: '+ctEsc(d.predictions_error)+'</div>'; }
+    const r=d.predictions||[];
+    if(!r.length){ return '<div class="hint">no reading logged for this machine in this window</div>'; }
+    const inside=r.filter(function(x){ const t=Date.parse(x.timestamp)/1000; return t>=ep.start&&(ep.ongoing||t<ep.end); });
+    const flagged=inside.filter(function(x){ return x.is_anomaly===1; }).length;
+    const judged=inside.filter(function(x){ return x.real; });
+    const tp=judged.filter(function(x){ return x.real.label===1&&x.is_anomaly===1; }).length;
+    const fp=judged.filter(function(x){ return x.real.label!==1&&x.is_anomaly===1; }).length;
+    const head='<tr><th>Time (your time)</th><th>Verdict</th><th>Real</th>'+HS_COLS.map(function(k){ return '<th>'+ctEsc(k)+'</th>'; }).join("")+'<th>P(anomaly)</th><th>Cause</th><th>IsolationForest</th><th>Model</th></tr>';
+    const summary='<div class="rvbig">'+inside.length+' reading(s) in the episode, '+flagged+' flagged</div><div class="hint">real label known for '+judged.length+': '+tp+' TP · '+fp+' FP'
+      +(d.predictions_truncated?' · the first '+r.length+' readings of the window are shown':'')+' · shaded rows are inside the episode, the others are the minute before and after</div>';
+    return summary+'<div style="max-height:360px;overflow:auto"><table><thead>'+head+'</thead><tbody>'+r.map(function(x){ return hsReadingRow(x,ep); }).join("")+'</tbody></table></div>';
+  }
+  const HS_HOW='<div class="hint" style="margin-top:0">Charts run from 2 minutes before the episode to 2 minutes after it (or to now); the red band is the episode. Values come from the pod that served the machine last. Values are the pods\' last reading per scrape. Reading time and real label come from the flagged readings the Demo tab and the production agent recorded during the episode. Every reading lists what the cluster logged for each request (Postgres, kept as long as its volume allows): the real label, and so TP or FP, is known only for flagged readings of the last 8 hours or so.</div>';
   function hsModalHtml(ep,d){
     return '<div class="rvwin">'+hsHead(ep)+'<div class="rvbody">'
       +rvBox("Times",hsTimes(ep,d))+rvBox("Real label (demo)",hsTruth(d))
       +rvBox("Classifier P(anomaly)",hsScore(d.p_anomaly,ep,d,3,"classifier score"))+rvBox("Likely cause (time in the episode)",hsCauses(d))
       +rvBox("The readings (first in the episode → peak)",hsMetrics(ep,d),true)
       +rvBox("IsolationForest score",hsScore(d.iso_score,ep,d,3,"IsolationForest score"))
+      +rvBox("Every reading (the cluster\'s prediction log)",hsReadings(ep,d),true)
       +rvBox("How to read this",HS_HOW)+'</div></div>';
   }
   async function hsOpen(btn){
