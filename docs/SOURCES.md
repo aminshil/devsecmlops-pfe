@@ -250,3 +250,12 @@ measurements are the evidence that it works as configured; these pages define wh
 87. Prometheus, *Template reference*: `query`, `first`, `value` and `humanizeDuration` in alert annotations
     (`MachineSilent` gives each machine's usual interval and last verdict).
     https://prometheus.io/docs/visualization/template_reference/
+
+**The watchdog** (27 October)
+
+88. Prometheus, *Management API*: `/-/healthy` and `/-/ready`, what `prometheus_watchdog.py` checks.
+    https://prometheus.io/docs/prometheus/2.49/management_api/
+89. Prometheus, *Alertmanager management API*: Alertmanager's `/-/healthy` and `/-/ready`.
+    https://prometheus.io/docs/alerting/latest/management_api/
+90. systemd, *systemd.exec*: `RuntimeDirectory=` and `RuntimeDirectoryPreserve=` (the watchdog's
+    `/run/prometheus-watchdog/`). https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html

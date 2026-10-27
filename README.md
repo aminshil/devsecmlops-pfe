@@ -46,7 +46,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Weakest cause | `cascade`, recall 0.268 (label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7731** · precision 0.7166 · recall 0.8391. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on 25 October against the served 21 October model (image `2.20.3-b116`); the 19 October model scored 0.7755 on the same sample | `scripts/live_k8s_validation.py`, run on 25 October; output in `models/results/live_validation_20261025_b116.json` |
 | Latest green pipeline | Build `2.20.3-b117` (commit `7666e3c9`, 26 October: the alerts for machines that miss their reports, and the panel's anomaly mute on the list label): all 11 stages green, 225 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS). Before it: b116 (`c416cb99`, 25 October: the Notifications card, the History tab with episode details, the label store's machine and time, mlflow 3.17.2, 223 tests) | [L3 run history](#l3--cicd) |
-| Tests | 225 passing, in 21 files, all run by build b117 (b116 ran 223, b112 ran 188; the 37 added since b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute) | `pytest tests/` (stage 1b) |
+| Tests | 235 passing, in 22 files; build b117 ran 225 (b116 ran 223, b112 ran 188; the 37 added after b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute; the 10 added after b117 check the watchdog) | `pytest tests/` (stage 1b) |
 | Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, cleared, persistent, fleet surge), machines that miss their reports, no data, any layer down, pods, Kubernetes, traffic stopped, disk and memory. 26 rules (17 alerts, 9 recording rules) unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
 | Dashboard | 27 Grafana panels in 6 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-21: the model promoted by Jenkins `devsecmlops-model` build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, model files read back from MinIO, committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); the current image `2.20.3-b112` carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
@@ -1812,6 +1812,8 @@ anyone has the control panel open, including when the panel itself is down.
 | `PodNotReady`, `ServingReplicasMissing` | a pod not Ready, or fewer replicas than desired, for 2 min (longer than a rollout or an HPA scale-up) | critical / warning |
 | `PredictionsStopped` | no prediction served for a minute, for 15 s (the traffic agent or the serving path stopped; it took 10 minutes before 26 October) | warning |
 | `DiskAlmostFull`, `MemoryLow` | root disk above 90% (SonarQube turns read-only at 95%), less than 1.5 GB of memory free | warning |
+| `PrometheusDown` (the watchdog, below) | Prometheus fails two health checks in a row (every 5 s): posted to Alertmanager by `prometheus-watchdog`, outside Prometheus | critical |
+| Alertmanager down (the watchdog) | Alertmanager fails two health checks in a row: sent straight to Telegram by the watchdog, and again when it is back | — |
 
 The anomaly alerts read the same state as the Fleet tab: each machine's verdict from the replica that
 served it last, and only for machines that reported in the last 5 minutes, so a stale replica does not
@@ -1962,8 +1964,28 @@ the checks above and stops before changing anything if one fails, starts Alertma
 exporter as containers that restart with Docker, restarts Prometheus, shows each layer's probe result and
 sends a test alert. `sudo bash scripts/setup_alerting.sh --test` sends only the test alert.
 
-**Limits.** Prometheus cannot alert about itself: if it stops, nothing fires (the Status tab still
-shows it). For about a minute after Alertmanager restarts the anomaly list is incomplete: Alertmanager
+**The watchdog.** Prometheus cannot alert about itself, and nothing reaches Telegram while Alertmanager
+is down. Until 27 October that was only a documented limit; then Prometheus and the Kubernetes exporter
+were stopped from the panel and no message came at all. `scripts/prometheus_watchdog.py` now runs outside
+both, as the systemd service `prometheus-watchdog` (installed and started by `setup_alerting.sh`), and
+checks `/-/healthy` on each every 5 s. Prometheus failing twice in a row is posted to Alertmanager as
+`PrometheusDown` (critical: Telegram within a second), refreshed while it lasts and resolved when Prometheus
+answers again (the resolved message follows within 30 s, when critical groups are flushed). Alertmanager
+failing twice is sent straight to Telegram through the Bot API, and so is its return; both down, or both
+back, at the same moment is one message. Those direct messages ignore the panel's mutes: the mutes are
+Alertmanager silences, and Alertmanager is the part that is down. The bot token is read inside the process from the root-only file,
+never on a command line or in a log line. Every state change is written to
+`/run/prometheus-watchdog/events.json`. `tests/test_prometheus_watchdog.py` checks when it alerts and through
+which path (a single failed check is not an outage, refresh and resolve, Alertmanager down and back, both at
+once, a refused post retried, the token kept out of logs and errors, the critical route, the install step).
+Run here against a real Prometheus 2.53.2 and Alertmanager 0.28.1 with a stand-in Telegram, it also showed
+that Alertmanager 0.28.1 crashes (nil pointer in its Telegram notifier) when Telegram answers without the
+sent message; the real Bot API always returns it. Nothing watches the watchdog itself except systemd
+(`Restart=always`).
+
+**Limits.** If Prometheus stops, the rules stop: only `PrometheusDown` is reported (by the watchdog) until
+it is back, and while it is down the alerts it had sent expire in Alertmanager, which can send their
+"resolved" messages although nothing was checked (the Status tab still shows each layer). For about a minute after Alertmanager restarts the anomaly list is incomplete: Alertmanager
 does not keep alerts across a restart, and Prometheus re-sends each firing alert once a minute. A
 machine is judged against its own past reports, so one that reports more slowly than every 5 minutes
 has no known interval and is listed as not reporting only after 15 minutes; a machine seen for the first
@@ -2044,6 +2066,7 @@ mlflow server --host 0.0.0.0 --port 5001 \
 | `monitoring/alerting/alertmanager.yml.tmpl`, `telegram.tmpl`, `blackbox.yml` | Alertmanager routing (template, no secret), the Telegram message, the layer probes. |
 | `scripts/check_alerting.sh`, `scripts/setup_alerting.sh` | Validate the alerting configuration; install it on the VM (Telegram, Alertmanager, blackbox exporter). |
 | `scripts/alerting_e2e.py` | The anomaly list end to end: the repository's rules and templates in a real Prometheus and Alertmanager, a stand-in pod and a stand-in Telegram; timings, message size and the mute, written to JSON. |
+| `scripts/prometheus_watchdog.py`, `scripts/watchdog_test.py` | The watchdog service that reports Prometheus or Alertmanager down from outside both, and its stop test on the VM (written to JSON). |
 | `scripts/agent_stop_test.py` | Stops and restarts the real production agent on the VM and times `MachineSilent`, `PredictionsStopped`, `FleetNoData` and the recovery, written to JSON. |
 | `monitoring/replay_exporter.py`, `anomaly_bridge.py` | Earlier traffic designs, kept and functional, not started by default. |
 | `docs/machine_roster.txt` | All 200 machines: 40 web, 35 app, 30 db, 20 cache, 20 queue, 15 batch, 15 edge, 8 router, 7 firewall, 5 dns, 5 voip. |
@@ -2958,7 +2981,7 @@ this project.)
 
 ## Testing
 
-**225 tests** in 21 files (up from 15), all run by build b117, `pytest`, in `tests/`:
+**235 tests** in 22 files (up from 15; build b117 ran 225), `pytest`, in `tests/`:
 
 - `test_api.py` (47 tests) — every endpoint, input validation (NaN/inf
   rejection, including raw `NaN`/`Infinity` tokens answered with 422 rather than 500, reserved `__` machine names, physical-range rejection (cpu=150 is a 422), the opt-in feedback token, machine length, metrics count, history shape), v3/v4
@@ -3017,6 +3040,12 @@ this project.)
   panel's silences for that row, a mute made before the list had its label is still shown and can be
   unmuted, the anomaly mute matches the route and every alert of the Telegram list, and Alertmanager
   down is a 502.
+- `test_prometheus_watchdog.py` (10) — the watchdog with the checks, Alertmanager and Telegram replaced by
+  recorders: one failed check is not an outage, Prometheus down is posted to Alertmanager on the second
+  failure, refreshed and resolved, Alertmanager down goes straight to Telegram once and once when back,
+  both down or both back at once is one message, a refused post is logged and retried, the bot token
+  never reaches a log line or an error, the alert takes the critical route, and the setup script installs
+  the service.
 - `test_ui_history.py` (18) — the History tab with Prometheus replaced by a recorder: the route needs the
   ops credentials, episodes split on a gap and the last one is ongoing, the per-machine summary, the step
   keeps every series under Prometheus's point limit, a window outside 1–168 hours is refused, the list
@@ -3104,7 +3133,7 @@ python monitoring/k8s_exporter.py &
 |---|---|
 | `docs/TROUBLESHOOTING.md` | A runbook written from real incidents: Docker networking staleness, Minikube API timeouts, a rejected retrain (the guardrail working as intended), MLflow service checks, browser-vs-VM connectivity, Jenkins pytest/venv failures. Corrected in this pass: it referenced the deleted `retrain_from_feedback.py` and told operators to hand-launch MLflow with hardcoded MinIO credentials. |
 | `docs/MINIKUBE_RELIABILITY.md` | Why the cluster was unreachable after a reboot (Jenkins taking the node's fixed address, no autostart, missing `--force`), the permanent fix, and how to verify it |
-| `docs/SOURCES.md` | Every external source the project took information from (87), grouped by what it informed: network failures and root cause, the SMD benchmark, alerting and monitoring, the CI quality and security gates, assets, the report's Chapter 1 bibliography, and the reference documentation for each layer (L0–L6). |
+| `docs/SOURCES.md` | Every external source the project took information from (90), grouped by what it informed: network failures and root cause, the SMD benchmark, alerting and monitoring, the CI quality and security gates, assets, the report's Chapter 1 bibliography, and the reference documentation for each layer (L0–L6). |
 | `docs/INFRASTRUCTURE_SETUP.md` | Rebuilding the whole platform on a blank Ubuntu machine, step by step, with expected outputs. Brought up for real on the original VM only, not yet on a clean second machine; its status table says which steps are proven. |
 | `docs/DEMO_SCRIPT.md` | The defense demo, step by step: what to show, what to say, and which steps were proven in a real log versus to rehearse. |
 | `docs/fleet_status.svg` | A fleet snapshot drawn by `scripts/fleet_status.py` (by default the worst moment of the fleet, routers and their dependents). |

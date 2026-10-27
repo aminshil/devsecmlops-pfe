@@ -61,7 +61,8 @@ def test_every_layer_on_the_status_tab_is_watched_by_an_alert():
         "Docker registry": "Docker registry" in probed, "Jenkins": "Jenkins" in probed,
         "SonarQube": "SonarQube" in probed, "MLflow": "MLflow" in probed, "Grafana": "Grafana" in probed,
         "Node exporter": "node-exporter" in scraped, "K8s exporter": "k8s-exporter" in scraped,
-        "Prometheus": True,   # cannot alert on itself; documented in the README (alerting limits)
+        # Prometheus cannot alert on itself: the watchdog service does, from outside it
+        "Prometheus": (ROOT / "scripts" / "prometheus_watchdog.py").exists(),
     }
     for _, _, _, name, _ in app_module._PORT_LAYERS:
         assert watched_by.get(name), f"Status-tab layer {name!r} has no alert"

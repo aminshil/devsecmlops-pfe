@@ -12,7 +12,8 @@
 #   2. scripts/check_alerting.sh: rules, rule unit tests, prometheus.yml, alertmanager.yml
 #   3. Alertmanager (:9093) and the blackbox exporter (:9115) as containers that restart with Docker
 #   4. Prometheus restarted (its config, monitoring/prometheus.yml, now loads the rules)
-#   5. verification: rules loaded, Alertmanager connected, each layer's probe result, and a test alert
+#   5. the watchdog (prometheus-watchdog.service): reports Prometheus or Alertmanager down, from outside both
+#   6. verification: rules loaded, Alertmanager connected, each layer's probe result, the watchdog, a test alert
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
@@ -94,7 +95,30 @@ systemctl restart prometheus
 for _ in $(seq 1 30); do curl -sf localhost:9090/-/ready >/dev/null && break; sleep 2; done
 curl -sf localhost:9090/-/ready >/dev/null || { echo "Prometheus not ready:"; journalctl -u prometheus -n 20 --no-pager; exit 1; }
 
-echo "== 5. verification"
+echo "== 5. watchdog (Prometheus or Alertmanager down -> Telegram, from outside both)"
+cat > /etc/systemd/system/prometheus-watchdog.service <<UNIT
+[Unit]
+Description=Watchdog: reports Prometheus or Alertmanager down on Telegram (scripts/prometheus_watchdog.py)
+After=network-online.target docker.service
+
+[Service]
+ExecStart=/usr/bin/python3 $REPO/scripts/prometheus_watchdog.py
+Restart=always
+RestartSec=5
+RuntimeDirectory=prometheus-watchdog
+RuntimeDirectoryPreserve=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now prometheus-watchdog >/dev/null 2>&1
+systemctl restart prometheus-watchdog
+sleep 2
+systemctl is-active --quiet prometheus-watchdog || { echo "watchdog not running:"; journalctl -u prometheus-watchdog -n 20 --no-pager; exit 1; }
+echo "prometheus-watchdog running: $(python3 scripts/prometheus_watchdog.py --once)"
+
+echo "== 6. verification"
 sleep 20   # one scrape and one rule evaluation
 rules=$(curl -s localhost:9090/api/v1/rules | json 'sum(len(g["rules"]) for g in d["data"]["groups"])')
 ams=$(curl -s localhost:9090/api/v1/alertmanagers | json 'len(d["data"]["activeAlertmanagers"])')
