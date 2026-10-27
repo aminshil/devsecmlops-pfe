@@ -9,7 +9,8 @@ DevSecMLOps · Alertmanager :9093
 
 {{/* Machine anomalies as ONE running list, re-sent whenever it changes: every machine anomalous now,
      alphabetical, with how long each has been anomalous (🆕 + marks a machine that turned anomalous in the
-     last minute); the machines that just turned normal (✅ −); the machines that missed their reports (⚫),
+     last minute, ⏱ one anomalous on every reading for 10 minutes: AnomalyPersistent); the machines that just
+     turned normal (✅ −); the machines that missed their reports (⚫),
      with how long ago they missed them (more than three of their usual intervals without a report), their
      usual interval and their last verdict; the machines that
      report again (🔌). With no machine reporting at all, the list says "no information". At most 40 + 10 +
@@ -17,14 +18,14 @@ DevSecMLOps · Alertmanager :9093
      incident. Needs Alertmanager >= 0.28. */}}
 {{ define "devsecmlops.anomalies" -}}
 {{- /* counts are kept as strings of "x" (Alertmanager templates have no arithmetic) */ -}}
-{{- $nodata := false }}{{ $n := "" }}{{ $s := "" }}{{ range .Alerts.Firing }}{{ if eq .Labels.alertname "FleetNoData" }}{{ $nodata = true }}{{ end }}{{ if eq .Labels.alertname "AnomalyDetected" }}{{ $n = print $n "x" }}{{ end }}{{ if eq .Labels.alertname "MachineSilent" }}{{ $s = print $s "x" }}{{ end }}{{ end -}}
+{{- $nodata := false }}{{ $n := "" }}{{ $s := "" }}{{ $p := "" }}{{ range .Alerts.Firing }}{{ if eq .Labels.alertname "FleetNoData" }}{{ $nodata = true }}{{ end }}{{ if eq .Labels.alertname "AnomalyDetected" }}{{ $n = print $n "x" }}{{ end }}{{ if eq .Labels.alertname "MachineSilent" }}{{ $s = print $s "x" }}{{ end }}{{ if eq .Labels.alertname "AnomalyPersistent" }}{{ $p = print $p "x" }}{{ end }}{{ end -}}
 {{ if $nodata }}⚪ <b>Anomalies</b> · no information: no machine is reporting
-{{ else if $n }}📋 <b>Anomalies</b> · {{ len $n }} machine(s) anomalous now
+{{ else if $n }}📋 <b>Anomalies</b> · {{ len $n }} machine(s) anomalous now{{ if $p }}, {{ len $p }} for 10+ min ⏱{{ end }}
 {{ else if $s }}✅ <b>Anomalies</b> · no anomaly on the machines reporting
 {{ else }}✅ <b>Anomalies</b> · all clear
 {{ end -}}
 {{ $shown := "" }}{{ range .Alerts.Firing }}{{ if and (eq .Labels.alertname "AnomalyDetected") (lt (len $shown) 40) }}{{ $shown = print $shown "x" }}{{ if lt (since .StartsAt).Seconds 60.0 }}🆕 <b>+ {{ .Labels.machine }}</b> ({{ .Labels.machine_type }}) · new
-{{ else }}• {{ .Labels.machine }} ({{ .Labels.machine_type }}) · {{ humanizeDuration (since .StartsAt).Seconds }}
+{{ else }}• {{ .Labels.machine }} ({{ .Labels.machine_type }}) · {{ humanizeDuration (since .StartsAt).Seconds }}{{ $m := .Labels.machine }}{{ range $.Alerts.Firing }}{{ if and (eq .Labels.alertname "AnomalyPersistent") (eq .Labels.machine $m) }} ⏱{{ end }}{{ end }}
 {{ end }}{{ end }}{{ end -}}
 {{ if gt (len $n) 40 }}… 40 of {{ len $n }} listed
 {{ end -}}

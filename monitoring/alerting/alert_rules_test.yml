@@ -178,6 +178,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              list: anomalies
               machine: web-01
               machine_type: web
             exp_annotations:

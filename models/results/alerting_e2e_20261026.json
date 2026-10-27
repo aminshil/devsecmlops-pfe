@@ -1,5 +1,5 @@
 {
-  "finished_at": "2026-10-25T23:58:33Z",
+  "finished_at": "2026-10-26T01:45:39Z",
   "prometheus": "prometheus, version 2.53.2 (branch: HEAD, revision: 6e971a7dc905696d4bc4ffa150bf282fcfac5fa9)",
   "alertmanager": "alertmanager, version 0.28.1 (branch: HEAD, revision: b2099eaa2c9ebc25edb26517cb9c732738e93910)",
   "cadence_s": 5.0,
@@ -27,14 +27,15 @@
     }
   ],
   "delays_s": {
-    "back to normal": 2.9,
-    "m1 not reporting": 33.0,
-    "no information": 33.0,
-    "reporting again": 3.0
+    "back to normal": 3.5,
+    "m1 not reporting": 33.5,
+    "no information": 28.5,
+    "reporting again": 3.5
   },
-  "largest_list_chars": 3463,
+  "largest_list_chars": 3562,
   "mute_states": {
     "FleetNoData": "suppressed",
+    "AnomalyPersistent": "suppressed",
     "MachineSilent": "suppressed",
     "AnomalyCleared": "suppressed",
     "LayerDown": "active",
@@ -44,40 +45,36 @@
   "rule_errors": [],
   "messages": [
     {
-      "t": 7.9,
+      "t": 8.5,
       "text": "📋 <b>Anomalies</b> · 2 machine(s) anomalous now\n🆕 <b>+ m1</b> (web) · new\n🆕 <b>+ m4</b> (app) · new\n🔌 m1 (web) reporting\n🔌 m2 (db) reporting\n🔌 m3 (edge) reporting\n🔌 m4 (app) reporting\nDevSecMLOps · Alertmanager :9093"
     },
     {
-      "t": 18.3,
+      "t": 19.3,
       "text": "🔴 <b>PredictionsStopped</b> · firing · 1 alert(s) · warning\n• no predictions served for a minute\n<i>The traffic agent or the serving path has stopped.</i>\nDevSecMLOps · Alertmanager :9093"
     },
     {
-      "t": 42.9,
+      "t": 43.5,
       "text": "📋 <b>Anomalies</b> · 1 machine(s) anomalous now\n🆕 <b>+ m1</b> (web) · new\n✅ − m4 (app) back to normal\nDevSecMLOps · Alertmanager :9093"
     },
     {
-      "t": 143.0,
+      "t": 143.5,
       "text": "✅ <b>Anomalies</b> · no anomaly on the machines reporting\n⚫ <b>1 not reporting</b>\n⚫ m1 (web) · missed its reports just now (usually every 5s) · <b>last verdict anomalous</b>\nDevSecMLOps · Alertmanager :9093"
     },
     {
-      "t": 198.0,
-      "text": "✅ <b>Anomalies</b> · no anomaly on the machines reporting\n⚫ <b>3 not reporting</b>\n⚫ m1 (web) · missed its reports just now (usually every 5s) · <b>last verdict anomalous</b>\n⚫ m2 (db) · missed its reports just now (usually every 5s)\n⚫ m3 (edge) · missed its reports just now (usually every 5s)\nDevSecMLOps · Alertmanager :9093"
-    },
-    {
-      "t": 203.0,
+      "t": 198.5,
       "text": "⚪ <b>Anomalies</b> · no information: no machine is reporting\n⚫ all 4 machine(s) have missed their reports\nDevSecMLOps · Alertmanager :9093"
     },
     {
-      "t": 233.0,
-      "text": "📋 <b>Anomalies</b> · 1 machine(s) anomalous now\n🆕 <b>+ m1</b> (web) · new\n⚫ <b>2 not reporting</b>\n⚫ m3 (edge) · missed its reports just now (usually every 5s)\n⚫ m4 (app) · missed its reports just now (usually every 5s)\n🔌 m1 (web) reporting\n🔌 m2 (db) reporting\nDevSecMLOps · Alertmanager :9093"
+      "t": 233.5,
+      "text": "📋 <b>Anomalies</b> · 1 machine(s) anomalous now\n🆕 <b>+ m1</b> (web) · new\n⚫ <b>2 not reporting</b>\n⚫ m2 (db) · missed its reports just now (usually every 5s)\n⚫ m4 (app) · missed its reports just now (usually every 5s)\n🔌 m1 (web) reporting\n🔌 m3 (edge) reporting\nDevSecMLOps · Alertmanager :9093"
     },
     {
-      "t": 238.0,
+      "t": 238.5,
       "text": "📋 <b>Anomalies</b> · 1 machine(s) anomalous now\n🆕 <b>+ m1</b> (web) · new\n🔌 m1 (web) reporting\n🔌 m2 (db) reporting\n🔌 m3 (edge) reporting\n🔌 m4 (app) reporting\nDevSecMLOps · Alertmanager :9093"
     },
     {
-      "t": 263.0,
-      "text": "📋 <b>Anomalies</b> · 201 machine(s) anomalous now\n• firewall-000 (firewall) · 10m 3s\n• firewall-001 (firewall) · 10m 3s\n• firewall-002 (firewall) · 10m 3s\n• firewall-003 (firewall) · 10m 3s\n• firewall-004 (firewall) · 10m 3s\n• firewall-005 (firewall) · 10m 3s\n• firewall-006 (firewall) · 10m 3s\n• firewall-007 (firewall) · 10m 3s\n• firewall-008 (firewall) · 10m 3s\n• firewall-009 (firewall) · 10m 3s\n• firewall-010 (firewall) · 10m 3s\n• firewall-011 (firewall) · 10m 3s\n• firewall-012 (firewall) · 10m 3s\n• firewall-013 (firewall) · 10m 3s\n• firewall-014 (firewall) · 10m 3s\n• firewall-015 (firewall) · 10m 3s\n• firewall-016 (firewall) · 10m 3s\n• firewall-017 (firewall) · 10m 3s\n• firewall-018 (firewall) · 10m 3s\n• firewall-019 (firewall) · 10m 3s\n• firewall-020 (firewall) · 10m 3s\n• firewall-021 (firewall) · 10m 3s\n• firewall-022 (firewall) · 10m 3s\n• firewall-023 (firewall) · 10m 3s\n• firewall-024 (firewall) · 10m 3s\n• firewall-025 (firewall) · 10m 3s\n• firewall-026 (firewall) · 10m 3s\n• firewall-027 (firewall) · 10m 3s\n• firewall-028 (firewall) · 10m 3s\n• firewall-029 (firewall) · 10m 3s\n• firewall-030 (firewall) · 10m 3s\n• firewall-031 (firewall) · 10m 3s\n• firewall-032 (firewall) · 10m 3s\n• firewall-033 (firewall) · 10m 3s\n• firewall-034 (firewall) · 10m 3s\n• firewall-035 (firewall) · 10m 3s\n• firewall-036 (firewall) · 10m 3s\n• firewall-037 (firewall) · 10m 3s\n• firewall-038 (firewall) · 10m 3s\n• firewall-039 (firewall) · 10m 3s\n… 40 of 201 listed\n✅ − firewall-c00 (firewall) back to normal\n✅ − firewall-c01 (firewall) back to normal\n✅ − firewall-c02 (firewall) back to normal\n✅ − firewall-c03 (firewall) back to normal\n✅ − firewall-c04 (firewall) back to normal\n✅ − firewall-c05 (firewall) back to normal\n✅ − firewall-c06 (firewall) back to normal\n✅ − firewall-c07 (firewall) back to normal\n✅ − firewall-c08 (firewall) back to normal\n✅ − firewall-c09 (firewall) back to normal\n… 10 of 60 back to normal listed\n⚫ <b>60 not reporting</b>\n⚫ firewall-s00 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s01 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s02 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s03 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s04 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s05 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s06 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s07 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s08 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s09 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n… 10 of 60 listed\n🔌 firewall-r00 (firewall) reporting\n🔌 firewall-r01 (firewall) reporting\n🔌 firewall-r02 (firewall) reporting\n🔌 firewall-r03 (firewall) reporting\n🔌 firewall-r04 (firewall) reporting\n🔌 firewall-r05 (firewall) reporting\n🔌 firewall-r06 (firewall) reporting\n🔌 firewall-r07 (firewall) reporting\n🔌 firewall-r08 (firewall) reporting\n🔌 firewall-r09 (firewall) reporting\n… 10 of 60 reporting listed\nDevSecMLOps · Alertmanager :9093"
+      "t": 263.7,
+      "text": "📋 <b>Anomalies</b> · 201 machine(s) anomalous now, 200 for 10+ min ⏱\n• firewall-000 (firewall) · 10m 3s ⏱\n• firewall-001 (firewall) · 10m 3s ⏱\n• firewall-002 (firewall) · 10m 3s ⏱\n• firewall-003 (firewall) · 10m 3s ⏱\n• firewall-004 (firewall) · 10m 3s ⏱\n• firewall-005 (firewall) · 10m 3s ⏱\n• firewall-006 (firewall) · 10m 3s ⏱\n• firewall-007 (firewall) · 10m 3s ⏱\n• firewall-008 (firewall) · 10m 3s ⏱\n• firewall-009 (firewall) · 10m 3s ⏱\n• firewall-010 (firewall) · 10m 3s ⏱\n• firewall-011 (firewall) · 10m 3s ⏱\n• firewall-012 (firewall) · 10m 3s ⏱\n• firewall-013 (firewall) · 10m 3s ⏱\n• firewall-014 (firewall) · 10m 3s ⏱\n• firewall-015 (firewall) · 10m 3s ⏱\n• firewall-016 (firewall) · 10m 3s ⏱\n• firewall-017 (firewall) · 10m 3s ⏱\n• firewall-018 (firewall) · 10m 3s ⏱\n• firewall-019 (firewall) · 10m 3s ⏱\n• firewall-020 (firewall) · 10m 3s ⏱\n• firewall-021 (firewall) · 10m 3s ⏱\n• firewall-022 (firewall) · 10m 3s ⏱\n• firewall-023 (firewall) · 10m 3s ⏱\n• firewall-024 (firewall) · 10m 3s ⏱\n• firewall-025 (firewall) · 10m 3s ⏱\n• firewall-026 (firewall) · 10m 3s ⏱\n• firewall-027 (firewall) · 10m 3s ⏱\n• firewall-028 (firewall) · 10m 3s ⏱\n• firewall-029 (firewall) · 10m 3s ⏱\n• firewall-030 (firewall) · 10m 3s ⏱\n• firewall-031 (firewall) · 10m 3s ⏱\n• firewall-032 (firewall) · 10m 3s ⏱\n• firewall-033 (firewall) · 10m 3s ⏱\n• firewall-034 (firewall) · 10m 3s ⏱\n• firewall-035 (firewall) · 10m 3s ⏱\n• firewall-036 (firewall) · 10m 3s ⏱\n• firewall-037 (firewall) · 10m 3s ⏱\n• firewall-038 (firewall) · 10m 3s ⏱\n• firewall-039 (firewall) · 10m 3s ⏱\n… 40 of 201 listed\n✅ − firewall-c00 (firewall) back to normal\n✅ − firewall-c01 (firewall) back to normal\n✅ − firewall-c02 (firewall) back to normal\n✅ − firewall-c03 (firewall) back to normal\n✅ − firewall-c04 (firewall) back to normal\n✅ − firewall-c05 (firewall) back to normal\n✅ − firewall-c06 (firewall) back to normal\n✅ − firewall-c07 (firewall) back to normal\n✅ − firewall-c08 (firewall) back to normal\n✅ − firewall-c09 (firewall) back to normal\n… 10 of 60 back to normal listed\n⚫ <b>60 not reporting</b>\n⚫ firewall-s00 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s01 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s02 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s03 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s04 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s05 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s06 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s07 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s08 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n⚫ firewall-s09 (firewall) · missed its reports 1h 0m 3s ago (usually every 1m 0s) · <b>last verdict anomalous</b>\n… 10 of 60 listed\n🔌 firewall-r00 (firewall) reporting\n🔌 firewall-r01 (firewall) reporting\n🔌 firewall-r02 (firewall) reporting\n🔌 firewall-r03 (firewall) reporting\n🔌 firewall-r04 (firewall) reporting\n🔌 firewall-r05 (firewall) reporting\n🔌 firewall-r06 (firewall) reporting\n🔌 firewall-r07 (firewall) reporting\n🔌 firewall-r08 (firewall) reporting\n🔌 firewall-r09 (firewall) reporting\n… 10 of 60 reporting listed\nDevSecMLOps · Alertmanager :9093"
     }
   ],
   "checks": {

@@ -17,8 +17,8 @@ Scenario (machines report every --cadence seconds, +-30%, like the production ag
   110 s  m1 stops reporting          -> listed as not reporting, last verdict anomalous
   170 s  every machine stops         -> "no information"
   230 s  every machine reports again -> "reporting" lines
-Then, against Alertmanager alone: the largest list (200 anomalous, 60 back to normal, 60 not reporting,
-60 reporting again) must stay under Telegram's 4,096 characters, and the panel's anomaly mute must
+Then, against Alertmanager alone: the largest list (200 anomalous, all for 10+ minutes, 60 back to normal,
+60 not reporting, 60 reporting again) must stay under Telegram's 4,096 characters, and the panel's anomaly mute must
 silence every alert of the list and nothing else.
 
 Runs the pinned images with Docker (host network), or binaries given with --prometheus/--alertmanager.
@@ -204,6 +204,7 @@ def largest_list():
     alerts += [a("AnomalyCleared", f"firewall-c{i:02d}", 2) for i in range(60)]
     alerts += [a("MachineSilent", f"firewall-s{i:02d}", 3600, {"usual": "1m 0s", "last_verdict": "anomalous"}) for i in range(60)]
     alerts += [a("MachineReportingAgain", f"firewall-r{i:02d}", 2) for i in range(60)]
+    alerts += [a("AnomalyPersistent", f"firewall-{i:03d}", 600) for i in range(200)]       # every listed machine marked
     n = len(messages)
     call("POST", f"http://127.0.0.1:{AM}/api/v2/alerts", alerts)
     time.sleep(15)
@@ -212,7 +213,7 @@ def largest_list():
 
 
 def mute_check():
-    """The control panel's anomaly mute (api/app.py) silences the five alerts of the list, not the others."""
+    """The control panel's anomaly mute (api/app.py) silences the six alerts of the list, not the others."""
     src = (ROOT / "api" / "app.py").read_text()
     matchers = json.loads(re.search(r'"anomalies": \{"label": "the anomaly list",\s*"matchers": (\[.*?\])\}', src, re.S)
                           .group(1).replace("False", "false").replace("True", "true"))
@@ -220,7 +221,7 @@ def mute_check():
     iso = lambda t: dt.datetime.fromtimestamp(t, dt.timezone.utc).isoformat()
     sid = call("POST", f"http://127.0.0.1:{AM}/api/v2/silences",
                {"matchers": matchers, "startsAt": iso(now), "endsAt": iso(now + 600), "createdBy": "e2e", "comment": "e2e"})["silenceID"]
-    names = ["AnomalyDetected", "AnomalyCleared", "MachineSilent", "MachineReportingAgain", "FleetNoData"]
+    names = ["AnomalyDetected", "AnomalyCleared", "AnomalyPersistent", "MachineSilent", "MachineReportingAgain", "FleetNoData"]
     alerts = [{"labels": {"alertname": n, "severity": "info", "list": "anomalies", "machine": "mute-test"},
                "startsAt": iso(now), "endsAt": iso(now + 300)} for n in names]
     alerts.append({"labels": {"alertname": "LayerDown", "severity": "critical", "layer": "mute-test"},
@@ -288,7 +289,7 @@ def main():
         "largest list under 4,096 characters": size is not None and size < 4096,
         "the anomaly mute silences the list and only the list":
             muted.get("LayerDown") == "active" and all(v == "suppressed" for k, v in muted.items() if k != "LayerDown")
-            and len(muted) == 6,
+            and len(muted) == 7,
     }
     def version(binary, img):
         if not binary:

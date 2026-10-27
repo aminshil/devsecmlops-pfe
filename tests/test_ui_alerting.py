@@ -124,7 +124,8 @@ def test_the_anomaly_mute_covers_every_alert_of_the_telegram_list():
     assert route["matchers"] == [f'{m["name"]}="{m["value"]}"']           # the mute matches what the route sends
     listed = {r["alert"] for g in rules["groups"] for r in g["rules"]
               if (r.get("labels") or {}).get(m["name"]) == m["value"]}
-    assert listed == {"AnomalyDetected", "AnomalyCleared", "MachineSilent", "MachineReportingAgain", "FleetNoData"}
+    assert listed == {"AnomalyDetected", "AnomalyCleared", "AnomalyPersistent", "MachineSilent", "MachineReportingAgain",
+                      "FleetNoData"}
 
 
 def test_alertmanager_down_is_a_502_not_a_crash(client, am):

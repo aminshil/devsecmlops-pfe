@@ -1803,7 +1803,7 @@ anyone has the control panel open, including when the panel itself is down.
 | `MachineSilent` | a machine has missed its reports: nothing for more than three of its usual intervals (below); the `⚫` lines of the list, with its last verdict | info |
 | `MachineReportingAgain` | for one minute after a machine that had missed its reports (or is new) reports on time: the `🔌` line of the list | info |
 | `FleetNoData` | no machine reports on time any more: the list says "no information" instead of "all clear" | info |
-| `AnomalyPersistent` | a machine is anomalous for 10 minutes | warning |
+| `AnomalyPersistent` | a machine is anomalous on every reading for 10 minutes: marked `⏱` on its line of the list and counted in its header (part of the list, not a message of its own) | warning |
 | `FleetAnomalySurge` | at least 20 machines anomalous at once, and more than twice the 6-hour average, for 2 min | critical |
 | `LayerDown` | a platform layer fails two HTTP probes in a row (every 5 s, so 10 s): Docker registry, Jenkins, SonarQube, MLflow, MinIO, Grafana, the cluster NodePort; one message per layer | critical |
 | `ScrapeTargetDown` | the node exporter, the Kubernetes exporter or the control panel cannot be scraped for 30 s | critical |
@@ -1817,8 +1817,12 @@ The anomaly alerts read the same state as the Fleet tab: each machine's verdict 
 served it last, and only for machines that reported in the last 5 minutes, so a stale replica does not
 alert. Machine anomalies arrive as **one running list**, sent
 within 5 seconds of every change: every machine anomalous now, alphabetical, with how long each has
-been anomalous; `🆕 +` marks a machine that turned anomalous in the last minute, and `✅ −` a machine
-whose verdict just turned normal. A machine leaves the list on its first normal verdict (there is no
+been anomalous; `🆕 +` marks a machine that turned anomalous in the last minute, `⏱` one anomalous on
+every reading for 10 minutes (`AnomalyPersistent`, also counted in the header: "12 machine(s) anomalous
+now, 5 for 10+ min"), and `✅ −` a machine whose verdict just turned normal. Until 26 October
+`AnomalyPersistent` was a message of its own; once warnings were sent within 30 s, it was re-sent every
+time a flickering machine entered or left the 10-minute set (seen on the VM: five messages in six
+minutes, each naming almost the same machines), so it became part of the list. A machine leaves the list on its first normal verdict (there is no
 hold), so a verdict flickering around the threshold comes and goes with it. "Back to normal" is an alert
 of its own (`AnomalyCleared`), and the anomaly receiver ignores Alertmanager's resolved alerts
 (`send_resolved: false`): Prometheus re-sends a resolved alert every minute for 15 minutes, and while the
@@ -1857,8 +1861,8 @@ forgotten an hour after its last report.
 
 The list is capped at 40 anomalous machines and 10 lines each for back to normal, not reporting and
 reporting again, with a "… 40 of N listed" line when it is cut, so the message stays under Telegram's
-4,096-character limit in a fleet-wide incident (end to end, below: 200 anomalous, 60 back to normal, 60 not reporting and 60 reporting again, with
-names longer than the fleet's, gives 3,463 characters as Telegram counts them: UTF-16 units, after the
+4,096-character limit in a fleet-wide incident (end to end, below: 200 anomalous, all marked `⏱`, 60 back to normal, 60 not reporting and 60 reporting
+again, with names longer than the fleet's, gives 3,562 characters as Telegram counts them: UTF-16 units, after the
 HTML tags are parsed). The Grafana table "Anomalous machines now
 (the Telegram list)" and the "Anomalous machines over time" curve show the same machines, the table
 "Machines not reporting" the `⚫` lines (with how long each has been silent), and the curve's second line
@@ -1867,7 +1871,7 @@ used its own query, which also counted machines that had stopped reporting.) Eac
 down. Every change is a message (at most one every 5 seconds), so a busy fleet sends many; the list can be
 muted on its own without muting the down alerts (below). Every alert of the list carries the label
 `list="anomalies"`: Alertmanager routes on it and the panel's mute silences it, so a new line type cannot
-be left out of either (a unit test checks the route, the mute and the five alerts agree). Before, the
+be left out of either (a unit test checks the route, the mute and the six alerts agree). Before, the
 mute matched `AnomalyDetected` only, so a muted list still sent its back-to-normal and no-information
 messages; a mute made that way is still recognised, and Unmute expires it. The list
 needs Alertmanager 0.28 or later (`since`, `humanizeDuration` in templates); the image is pinned to
@@ -1879,10 +1883,13 @@ days) or Unmute. A mute is an Alertmanager silence (`POST /api/v2/silences`, aut
 it ends by itself, shows on the Alertmanager page with its author and comment, and only delivery stops:
 Prometheus keeps evaluating every alert, and the card shows what is firing meanwhile. Unmute expires the
 panel's own silences for that row and leaves silences made by hand on :9093 alone. Each mute and unmute
-is written to the panel's action log. `tests/test_ui_alerting.py` checks what the panel sends to
+is written to the panel's action log. The panel runs on the VM from the repository
+(`control-panel.service`), not in the Kubernetes pods that Jenkins deploys, so a change to `api/app.py`
+reaches it only after `sudo systemctl restart control-panel` (on 26 October build b117 was deployed but
+the panel still made the old `AnomalyDetected`-only mute until it was restarted). `tests/test_ui_alerting.py` checks what the panel sends to
 Alertmanager; the routes were also run against the real Alertmanager 0.28.1: muting the anomaly list
 suppressed `AnomalyDetected` and left `LayerDown` active (re-run with the label by the end-to-end script
-below: all five alerts of the list suppressed, `LayerDown` active), muting everything suppressed both, and unmuting
+below: all six alerts of the list suppressed, `LayerDown` active), muting everything suppressed both, and unmuting
 made them active again.
 
 **Time to Telegram.** Prometheus probes the layers and evaluates the rules every 5 seconds, and
@@ -1920,13 +1927,13 @@ without the restart case, also passed all eight on the VM with the Docker images
 
 | Step | Telegram |
 |---|---|
-| a machine turns normal | `✅ − m4 back to normal` 2.9 s later |
+| a machine turns normal | `✅ − m4 back to normal` 3.5 s later |
 | nothing changes for 50 s (Prometheus re-sends its alerts, the clear expires) | no message |
-| an anomalous machine stops reporting (limit 30 s: three 5 s intervals, floor 30 s) | `⚫ m1 … missed its reports · last verdict anomalous` 33.0 s later |
-| every machine stops | `⚪ no information` 33.0 s after the last stop |
-| every machine reports again | `🔌` lines 3.0 s later (the four machines over two messages) |
-| the largest list, posted to Alertmanager | 3,463 characters (limit 4,096) |
-| the panel's anomaly mute | the five alerts of the list suppressed, `LayerDown` active |
+| an anomalous machine stops reporting (limit 30 s: three 5 s intervals, floor 30 s) | `⚫ m1 … missed its reports · last verdict anomalous` 33.5 s later |
+| every machine stops | `⚪ no information` 28.5 s after the last stop |
+| every machine reports again | `🔌` lines 3.5 s later |
+| the largest list, posted to Alertmanager (200 anomalous, all `⏱`) | 3,562 characters (limit 4,096) |
+| the panel's anomaly mute | the six alerts of the list suppressed, `LayerDown` active |
 
 Every rule evaluated without error.
 

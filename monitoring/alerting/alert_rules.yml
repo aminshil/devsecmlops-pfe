@@ -144,11 +144,14 @@ groups:
           description: "No machine is reporting to the serving pods: every one has missed its reports."
 
       - alert: AnomalyPersistent
-        # an episode, not a blip: anomalous on every reading for 10 minutes
+        # an episode, not a blip: anomalous on every reading for 10 minutes. Part of the list (marked ⏱ on the
+        # machine's line, counted in the header), not a message of its own: as a separate message it was re-sent
+        # every time a machine entered or left the 10-minute set, which the list already shows (26 October)
         expr: fleet:machine_anomalous:now == 1
         for: 10m
         labels:
           severity: warning
+          list: anomalies
         annotations:
           summary: "{{ $labels.machine }} ({{ $labels.machine_type }}) anomalous for 10+ minutes"
           description: "Persistent anomaly on {{ $labels.machine }}: check the machine (Review tab: Details)."
