@@ -8,11 +8,11 @@ api_image: "devsecmlops-api:{{ api_version }}"
 # Third-party images, pinned by digest to the ones running on the VM (scripts/pin_versions.py writes
 # these lines; re-run it to move a pin). A floating tag (:latest, :community) would pull whatever is
 # newest at the next run.
-img_grafana: "grafana/grafana:latest"
-img_node_exporter: "prom/node-exporter:latest"
-img_registry: "registry:2"
-img_minio: "minio/minio"
-img_sonarqube: "sonarqube:community"
+img_grafana: "grafana/grafana@sha256:1c1bd67c54c5fcf6e759897852b5a584191bd6796e8d328a5ace457799801261"
+img_node_exporter: "prom/node-exporter@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0"
+img_registry: "registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+img_minio: "minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+img_sonarqube: "sonarqube:24.04@sha256:160bd2f6a3485bd09b655ef22dd63c02bd1fa7ba82aa5d9973fd010b8bcca0b3"
 port_control_panel: 8000
 port_grafana: 3000
 port_prometheus: 9090

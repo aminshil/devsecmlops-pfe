@@ -20,7 +20,7 @@
 # scripts/pin_versions.py from the official checksum files and from the images
 # running on the VM; re-run it to move a pin.
 # =============================================================================
-ARG JENKINS_BASE=__PIN__
+ARG JENKINS_BASE=jenkins/jenkins:2.568.3-lts@sha256:c1e4c349365f6d16d88595b2c5f7e8ff39b8ae1d061f62420bac193b4b9616d0
 FROM ${JENKINS_BASE}
 
 USER root
@@ -49,7 +49,7 @@ RUN install -m 0755 -d /etc/apt/keyrings \
 # --- kubectl (pin matches the VM's own kubectl, so client/server skew stays
 #     minimal against the real cluster) --------------------------------------
 ARG KUBECTL_VERSION=v1.36.2
-ARG KUBECTL_SHA256=__PIN__
+ARG KUBECTL_SHA256=1e9045ec32bea85da43de85f0065358529ea7c7a152eca78154fba5b58c27d82
 RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
          -o /usr/local/bin/kubectl \
     && echo "${KUBECTL_SHA256}  /usr/local/bin/kubectl" | sha256sum -c - \
@@ -58,7 +58,7 @@ RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kub
 # --- minikube CLI (pin matches the VM's own minikube, since `minikube image
 #     load`/status talk to a specific cluster profile format) ---------------
 ARG MINIKUBE_VERSION=v1.38.1
-ARG MINIKUBE_SHA256=__PIN__
+ARG MINIKUBE_SHA256=099477eaf248bcb5bcea8ce78a2898e93ac01461c35189da1848c3de82ecd22e
 RUN curl -fsSL "https://storage.googleapis.com/minikube/releases/${MINIKUBE_VERSION}/minikube-linux-amd64" \
          -o /usr/local/bin/minikube \
     && echo "${MINIKUBE_SHA256}  /usr/local/bin/minikube" | sha256sum -c - \
@@ -66,7 +66,7 @@ RUN curl -fsSL "https://storage.googleapis.com/minikube/releases/${MINIKUBE_VERS
 
 # --- SonarQube scanner CLI (stage 3) -----------------------------------------
 ARG SONAR_SCANNER_VERSION=5.0.1.3006
-ARG SONAR_SCANNER_SHA256=__PIN__
+ARG SONAR_SCANNER_SHA256=350dbdb517c10fcb3ce70425db95c415b313cad7296c407d416d88f3d50121f8
 RUN curl -fsSL "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip" \
          -o /tmp/sonar-scanner.zip \
     && echo "${SONAR_SCANNER_SHA256}  /tmp/sonar-scanner.zip" | sha256sum -c - \
@@ -82,8 +82,8 @@ RUN curl -fsSL "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/
 #     incident was a stale database, not a stale binary). It replaces
 #     `curl .../main/contrib/install.sh | sh`, which ran whatever the main
 #     branch held at build time. -----------------------------------------------
-ARG TRIVY_VERSION=__PIN__
-ARG TRIVY_SHA256=__PIN__
+ARG TRIVY_VERSION=0.74.0
+ARG TRIVY_SHA256=2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
 RUN curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
          -o /tmp/trivy.tar.gz \
     && echo "${TRIVY_SHA256}  /tmp/trivy.tar.gz" | sha256sum -c - \

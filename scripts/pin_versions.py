@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
 Pin what the platform downloads to exactly what runs on the VM today, with checksums from the official
-sources. Run as root on the VM, from the repository; it reads, it does not pull, build or restart anything.
+sources. Run as root on the VM, from the repository; it reads, it does not build or restart anything (it pulls
+the Jenkins base image only when it is no longer on the VM, by the version the running Jenkins has).
 
-  jenkins/Dockerfile          base image by digest (the local jenkins/jenkins:lts the image was built on);
+  jenkins/Dockerfile          base image by digest (the local jenkins/jenkins:lts the image was built on, or,
+                              if a cleanup removed it, the release of the running Jenkins, pulled by version);
                               kubectl, minikube, sonar-scanner: SHA-256 from the vendors' .sha256 files;
                               Trivy: the version the running Jenkins has, SHA-256 from Trivy's checksums.txt
   ansible/group_vars/all.yml  grafana, node-exporter, registry, minio, sonarqube: the digest of the image
@@ -82,15 +84,44 @@ def image_ref(container):
     return f"{repo}{':' + tag if tag else ''}@{digests[0].split('@')[1]}"
 
 
+def _jenkins_version(info):
+    return next((e.split("=", 1)[1] for e in (info.get("Config") or {}).get("Env") or []
+                 if e.startswith("JENKINS_VERSION=")), "")
+
+
+def jenkins_base():
+    """(jenkins/jenkins:<tag>@sha256:..., Jenkins version) of the base the running Jenkins was built on: the
+    local :lts image if it is still there; otherwise (a disk cleanup removed it) the same Jenkins release,
+    pulled by its version tag and checked to be that release."""
+    try:
+        info, tag = json.loads(sh("docker", "image", "inspect", "jenkins/jenkins:lts"))[0], "lts"
+    except RuntimeError:
+        running = sh("docker", "exec", "jenkins", "printenv", "JENKINS_VERSION")
+        if not re.fullmatch(r"\d+(\.\d+)+", running):
+            raise RuntimeError(f"cannot read the running Jenkins version ({running!r})") from None
+        info = tag = None
+        for candidate in (f"{running}-lts", running):
+            try:
+                sh("docker", "pull", "-q", f"jenkins/jenkins:{candidate}")
+            except RuntimeError:
+                continue
+            info, tag = json.loads(sh("docker", "image", "inspect", f"jenkins/jenkins:{candidate}"))[0], candidate
+            break
+        if info is None:
+            raise RuntimeError(f"jenkins/jenkins:lts is not on the VM and jenkins/jenkins:{running}(-lts) "
+                               "cannot be pulled") from None
+        if _jenkins_version(info) != running:
+            raise RuntimeError(f"jenkins/jenkins:{tag} is Jenkins {_jenkins_version(info)}, not {running}") from None
+    jd = [d for d in info.get("RepoDigests") or [] if d.startswith("jenkins/jenkins@")]
+    if not jd:
+        raise RuntimeError(f"jenkins/jenkins:{tag} has no registry digest")
+    return f"jenkins/jenkins:{tag}@" + jd[0].split("@")[1], _jenkins_version(info) or "?"
+
+
 def collect():
     df = DOCKERFILE.read_text()
     pins = {}
-    base = json.loads(sh("docker", "image", "inspect", "jenkins/jenkins:lts"))[0]
-    jd = [d for d in base.get("RepoDigests") or [] if d.startswith("jenkins/jenkins@")]
-    if not jd:
-        raise RuntimeError("the local jenkins/jenkins:lts has no registry digest")
-    jver = next((e.split("=", 1)[1] for e in base["Config"].get("Env", []) if e.startswith("JENKINS_VERSION=")), "?")
-    pins["JENKINS_BASE"] = "jenkins/jenkins:lts@" + jd[0].split("@")[1]
+    pins["JENKINS_BASE"], jver = jenkins_base()
     kv, mv, sv = arg(df, "KUBECTL_VERSION"), arg(df, "MINIKUBE_VERSION"), arg(df, "SONAR_SCANNER_VERSION")
     pins["KUBECTL_SHA256"] = first_hex(fetch(f"https://dl.k8s.io/release/{kv}/bin/linux/amd64/kubectl.sha256"))
     pins["MINIKUBE_SHA256"] = first_hex(fetch(
