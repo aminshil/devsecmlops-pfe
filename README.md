@@ -112,6 +112,24 @@ Git push -> Jenkins (ruff + pytest -> SonarQube + Quality Gate -> repo scan + mo
 
 Everything runs on a single self-hosted VM (Minikube) for the PFE. The image is built once and scanned once; moving to a multi-node cluster is a configuration change, not a code change: point `image:` at the registry Jenkins already pushes to and switch `imagePullPolicy` from `Never` (locally loaded images, the Minikube pattern used here) to `IfNotPresent`. That multi-node deployment has not been done in this project. Ansible brings the whole platform up from a bare provisioned VM in either profile (demo or production) — see [L6](#l6--ansible-infrastructure-as-code).
 
+### Technology stack and versions
+
+Everything the platform runs, with the version in use and the file that fixes it (a digest or SHA-256 where the README says "pinned").
+
+| Part | Component and version | Set in |
+|---|---|---|
+| Serving runtime | Python 3.12 (`python:3.12-slim-trixie`, pulled on every build on purpose, scanned in stage 6) | `Dockerfile` |
+| Serving libraries | FastAPI 0.135.3, uvicorn 0.44.0, Pydantic 2.12.5, pandas 2.3.3, scikit-learn 1.7.2, joblib 1.5.3, XGBoost 3.2.0, numpy 2.5.4, scipy 1.18.1, psycopg 3.2.3, prometheus-client 0.25.0 | `requirements-api.txt` |
+| In the image only | boto3 1.43.106 (legacy v2 MinIO path), msgpack 1.2.3 (security floor) | `Dockerfile` |
+| Host tooling (training, model job) | the serving libraries plus MLflow 3.17.2, requests 2.33.1, rich 14.1.0, boto3; security floors starlette ≥ 1.3.1, pyasn1 ≥ 0.6.4, cryptography ≥ 50.0.0 | `requirements.txt` |
+| Tests and lint | pytest 9.0.3, pytest-cov 7.1.0, httpx 0.28.1, PyYAML 6.0.2, ruff 0.16.8 | `requirements-dev.txt` |
+| CI | Jenkins 2.568.3 LTS (digest), kubectl v1.36.2, minikube v1.38.1, sonar-scanner 5.0.1.3006, Trivy 0.74.0 (each SHA-256), Docker CLI | `jenkins/Dockerfile` |
+| Support containers | SonarQube 24.04, Grafana, node-exporter, registry 2, MinIO (all by digest) | `ansible/group_vars/all.yml` |
+| Cluster | Minikube v1.38.1 (Docker driver, metrics-server addon), kubectl v1.36.2, PostgreSQL 16-alpine (digest) | `ansible/roles/system`, `kubernetes/*.yaml` |
+| Monitoring | Prometheus 2.53.0 (installed by Ansible when missing; the alerting tests also ran on 2.53.2), Alertmanager v0.28.1, blackbox-exporter v0.25.0, Grafana | `ansible/roles/system`, `scripts/setup_alerting.sh` |
+| Host | Ubuntu with Python 3.10, Docker 29.6.x, Ansible with the `community.docker` collection and the Docker SDK for Python 7.1.0 | `ansible/roles/system`, `ansible/requirements.yml`, `docs/INFRASTRUCTURE_SETUP.md` |
+| Notifications | Telegram Bot API (token in a root-only file) | `scripts/setup_alerting.sh` |
+
 ---
 
 ## Quick start
@@ -1170,6 +1188,7 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 | `ml-model/decision.py` | The served decision rule (`classifier OR IsolationForest`), scalar and vectorized forms, verified to agree exactly. Imported by every evaluation script; the API calls its `classifier_vote` on every request (v4 and v3 paths). |
 | `ml-model/train_production.py` | The single canonical training path — the only route the pipeline uses to promote a model (approval is enforced by process: see Known limitations). |
 | `ml-model/select_threshold.py` | Sweeps the decision threshold on the validation fleet and picks it by the rule in `config/model_policy.json`: since 19 October the highest precision whose recall is at least 0.80 (the highest recall when none reaches it). |
+| `ml-model/model_policy.py` | Reads and validates `config/model_policy.json` and holds the threshold rule (the highest precision at the recall target, F-beta when there is none); used by `train_production.py` and `select_threshold.py`, not by the API. |
 | `ml-model/benchmark.py` | The six-model unsupervised comparison, time-ordered per-machine split, per-machine point-adjustment. |
 | `ml-model/root_cause.py` | Dependency-graph root-cause ranking, backs `POST /root-cause`. |
 | `ml-model/zscore_demo.py` | A standalone demonstration that the same raw value is scored differently by machine and hour. |
@@ -1185,12 +1204,24 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 | `scripts/live_k8s_validation.py` | Real-cluster validation against the independent test set. |
 | `scripts/pod_kill_test.py` | Deletes one API pod under live traffic (gracefully, then a hard kill) and measures failed requests and the time to recover. |
 | `scripts/master_comparison.py` | The 12-configuration threshold/feedback experiment. |
+| `ml-model/build_dependency_graph.py` | Writes `models/dependency_graph.json` from the generator's own router assignment, so the graph is the ground truth of the synthetic fleet. |
+| `ml-model/test_timewindow_full.py` | The per-machine versus per-machine-and-window baseline comparison (F1 0.6434 against 0.6475). |
+| `ml-model/generate_telecom_fleet_v3.py`, `scripts/failure_model_report.py`, `scripts/v3_experiment.sh` | The realistic failure-model generator, its realism report, and the full-size v3 experiment that trains on it without touching production ([Decision 9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)). |
+| `scripts/cascade_check.py` | Whether a router's own label follows its dependents' failures (v2: 1.02×, v3: 28.86×; Decisions 9b and 9c). |
+| `scripts/compare_v2_v3.py`, `scripts/compare_curves.py` | Production against the v3-trained candidate: the evaluation table and the precision-recall curves on the same fleet (Decision 9c). |
+| `scripts/rack_rule_eval.py`, `scripts/rack_rule_sweep.py` | The Fleet tab's group rule run on every reading of a v3 fleet, and its window and share sweep (Decision 9c). |
+| `scripts/decision_components.py` | Classifier alone, IsolationForest alone and the served OR, from the same model outputs on the test fleet, plus the safety-net cut-off table (Decisions 10 and 10b). |
+| `scripts/safety_net_live.py`, `scripts/safety_net_router_rule.py` | Who raised each live alarm and how often it was right; the router-confirmation rule that was measured and rejected (Decision 10b). |
+| `scripts/contamination_ab.py`, `scripts/contamination_empirical.py` | What judged rows would do to the IsolationForest's `contamination`: projected, and measured on the real feedback export. |
+| `scripts/new_site_eval.py` | The served model on a fresh fleet (seed 777): same machines, renamed machines with and without a type, and a level shift. |
 | `models/telecom_xgb_classifier_v2.pkl`, `telecom_xgb_label_encoder_v2.pkl` | v3 XGBoost classifier + encoder. |
 | `models/telecom_xgb_v4_rolling.pkl`, `telecom_xgb_v4_rolling_encoder.pkl` | v4 XGBoost classifier + encoder. |
 | `models/telecom_iso_v2.pkl` | The IsolationForest safety net, shared by v3 and v4. |
 | `models/telecom_baselines_v2.json` | Per-machine, per-window z-score baselines. |
 | `models/dependency_graph.json` | Router -> machine relationships for root-cause ranking. |
 | `models/manifest.json` | Full lineage: artifact SHA-256 hashes, dataset fingerprints, the selected threshold and its evidence, the recorded evaluation. |
+| `models/telecom_serving_model.pkl`, `telecom_serving_baselines.json` | The v1 IsolationForest and its baselines (`MODEL_NAME=telecom`, written by `train_serving_telecom.py`), still in the image for the legacy path, which refuses to start without `ALLOW_LEGACY_MODELS=1`. |
+| `models/telecom_serving_baselines_novelty.json`, `telecom_serving_baselines_robust.json`, `smd_serving_baselines.json`, `smd_serving_baselines_windowed.json`, `smd_serving_baselines_top3.json`, `baselines_telecom_fleet.json`, `baselines_smd_multi.json` | Baselines written by the experiments (novelty detection, robust z-score, the three SMD variants, and `benchmark.py`'s `baselines_<dataset>.json`), kept as their output; none is served. |
 | `data/telecom_fleet_v2_labeled.csv` (seed 42), `_val.csv` (seed 7), `_test.csv` (seed 123) | Training, threshold-selection, and evaluation data — three separate files, never mixed. |
 | `data/telecom_fleet_v2_operator.csv` (seed 2026, 200 machines, 3 days) | The operator-stream fleet the control panel samples from. Judged readings become feedback rows used for retraining, so it is deliberately not the training, validation or test file. |
 | smoke-scope fleets (generated in the Jenkins workspace: 30 machines, 3 days, seeds 42 and 123) | A plumbing check for `Jenkinsfile.model` with `SCOPE=smoke`: 5 minutes, no memory risk, production untouched. They are not subsets of the real files, and their scores must never be quoted as performance (production scores 0.7292 on the real test file; a smoke-scope fleet gives a different number that means nothing). `SCOPE=full` uses the real files above. |
@@ -1468,6 +1499,7 @@ found and fixed in the most recent security pass; see
 | `api/demo_labels.py` | Keeps the true label of replayed readings beside the cluster's prediction id, for the Review tab's real-label column, with the machine and the time it was logged, for the History tab's episode details. |
 | `api/training.py` | Backend for the training console — dataset selection (with the path-traversal fix), representative sampling, comparing a candidate against production. |
 | `api/static/control_panel.html` | The mission-control UI, served at `/ui`. |
+| `start_control_panel.sh` | Starts the control panel by hand (`nohup`) for a quick local bring-up; the supervised path is `control-panel.service`, installed by Ansible. Do not run both: they compete for :8000. |
 | `tests/test_api.py` (68 tests), `test_decision.py`, `test_training_console.py`, `test_ui_cluster.py`, `test_ui_fleet.py`, `test_review_details.py` | Covered in full in [Testing](#testing) below. |
 
 ---
@@ -1502,6 +1534,7 @@ docker run -p 8000:8000 devsecmlops-api:$(cat VERSION)
 | `docker-entrypoint.sh` | Startup script; only does real work for the legacy `telecom_v2` path (MinIO fetch), fails closed if MinIO credentials aren't supplied. |
 | `.dockerignore` | Excludes `venv/`, `data/`, old models from the build context. |
 | `requirements-api.txt` | Pinned, curated dependencies — the same versions the host venv uses, since pickled models must be loaded by the version that wrote them. `boto3` (used only by the legacy v2 MinIO path) and `msgpack` (a security floor) are pinned in the Dockerfile; their transitive dependencies are bounded by those pins, not locked. |
+| `requirements.txt`, `requirements-dev.txt` | The host's packages (the serving set plus MLflow and security floors) and the test and lint tools; see [Technology stack and versions](#technology-stack-and-versions). |
 
 ---
 
@@ -1590,6 +1623,7 @@ Runs 1 and 2 are the evidence that the gate genuinely blocks: every later stage 
 | `Jenkinsfile.model` | The on-demand model-retraining pipeline. |
 | `jenkins/Dockerfile` | The custom Jenkins image (python3, kubectl, minikube, sonar-scanner, trivy, docker CLI). |
 | `scripts/smoke_test.py` | Standard-library-only health/version/v3/v4/metrics/ops-UI check, used before and after deployment. |
+| `scripts/ci_config.py` | Exports the hand-made Jenkins jobs and SonarQube settings to `ci-config/` through their REST APIs, and replays them with `restore --yes`; tested against a fake server only. |
 
 ---
 
@@ -1730,6 +1764,7 @@ kubectl get pods -n ml-serving
 | `kubernetes/networkpolicy.yaml` | Opt-in: only the API pods may reach PostgreSQL. Not applied on the demo cluster (see Known limitations). |
 | `scripts/ensure_db_secret.sh` | Generates a random DB password idempotently (demo profile). |
 | `scripts/k8s_recover.sh` | Recovers Minikube and Jenkins's cluster access after a Docker daemon or VM restart. |
+| `scripts/systemd/minikube-start.service` | Starts Minikube after Docker at boot (`minikube start --driver=docker --force`); see `docs/MINIKUBE_RELIABILITY.md`. |
 
 ---
 
@@ -2319,6 +2354,9 @@ The rendered Deployment used the Ansible default tag (`devsecmlops-api:<VERSION>
 | `roles/kubernetes/` (+ `templates/deployment.yaml.j2`) | Minikube, the demo DB Secret, the rendered Deployment — now in sync with `kubernetes/deployment.yaml`. |
 | `roles/monitoring/` | The unified systemd monitoring stack. |
 | `roles/control_panel/` | The mission-control API on :8000, credentials in a root-only file. |
+| `ansible/requirements.yml` | The `community.docker` collection the playbook needs (`ansible-galaxy collection install -r ansible/requirements.yml`). |
+| `ansible/group_vars/production_secrets.yml.example` | Template for the Vault-encrypted production database password (not loaded; `scripts/make_production_secrets.sh` creates the real file). |
+| `ansible/.ansible-lint` | `ansible-lint` settings: profile `basic`, no correctness findings; two style rules skipped with the reason written in the file. |
 
 ---
 
@@ -3233,6 +3271,8 @@ this project.)
 pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
+
+`pytest.ini` sets `testpaths = tests`; `tests/conftest.py` builds tiny fleets (20 machines, 1 day) with the real generator, so the training pipeline and the console run end to end on the production schema.
 
 Wired into Jenkins as stage 1b (fail-fast) — a broken commit stops the
 pipeline before any downstream stage runs, described fully in
