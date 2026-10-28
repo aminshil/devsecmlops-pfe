@@ -137,7 +137,7 @@ pipeline {
                               "${feedbackArg} ${promoteArgs} --report build/model-report.json"
                     }
                     def rc = sh(returnStatus: true, script: cmd)
-                    if (rc == 1) {
+                    if (rc == 3) {        // train_production.py EXIT_REJECTED; a crash exits 1
                         env.MODEL_OUTCOME = 'rejected'
                         unstable('Guardrail rejected the candidate -- production model unchanged')
                     } else if (rc != 0) {

@@ -126,9 +126,9 @@ backup_feedback() {
 }
 restore_feedback() {
   [ -s "$FEEDBACK_BACKUP" ] || { echo "no feedback backup to restore"; return 0; }
-  local i n
+  local n
   echo "waiting for postgres + the predictions table before restoring feedback..."
-  for i in $(seq 1 60); do
+  for _ in $(seq 1 60); do
     if "$KC" -n "$NS" exec postgres-0 -- sh -c \
         'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -qAt -c "SELECT 1 FROM predictions LIMIT 1"' >/dev/null 2>&1; then
       break

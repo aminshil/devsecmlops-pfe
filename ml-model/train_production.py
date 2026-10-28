@@ -78,6 +78,7 @@ FEATURES = ["cpu", "ram", "network", "disk_io", "disk_usage", "load_avg"]
 ROLLING = rolling_feature_names()
 MODELS = ROOT / "models"
 MANIFEST_FILENAME = "manifest.json"
+EXIT_REJECTED = 3        # the guardrail rejected the candidate (Jenkinsfile.model reads it as UNSTABLE)
 MANIFEST = MODELS / MANIFEST_FILENAME
 
 # Serving artifact file names (what api/app.py loads for MODEL_NAME=telecom_v3)
@@ -621,6 +622,12 @@ def run_pipeline(args) -> int:
             log(f"FATAL: cannot promote -- {problem}")
             return 2
 
+    has_prod = all((args.models_dir / v).exists() for v in ARTIFACTS.values())
+    if not has_prod and (read_manifest(args.models_dir).get("production") or {}).get("artifacts"):
+        log(f"FATAL: the manifest lists production artifacts but some are missing from {args.models_dir}: "
+            "refusing to treat this run as initial training (it would skip the guardrail)")
+        return 2
+
     train = load_fleet(args.train)
     datasets["train"]["rows"] = int(len(train))
     contamination = float(train["label"].mean())
@@ -638,7 +645,6 @@ def run_pipeline(args) -> int:
         cand_threshold = float(selection["selected"]["threshold"])
     log(f"candidate evaluated at threshold {cand_threshold}, production at its own {args.threshold}")
 
-    has_prod = all((args.models_dir / v).exists() for v in ARTIFACTS.values())
     # With --promote the guardrail decides on the validation fleet (independent of the test
     # set that supplies the headline score). Without --promote there is no validated
     # validation fleet, so the verdict is a preview computed on the test set.
@@ -685,8 +691,9 @@ def run_pipeline(args) -> int:
     }
     run["mlflow_run_id"] = log_to_mlflow(run, args.work_dir)
     record_run(args, run)
-    # exit code drives CI: 0 = passed (and promoted if requested), 1 = rejected
-    return 0 if passed else 1
+    # exit code drives CI: 0 = passed (and promoted if requested), 3 = rejected by the guardrail,
+    # 2 = refused (missing input); a crash exits 1 (Python's own code), so it is never read as a rejection
+    return 0 if passed else EXIT_REJECTED
 
 
 def main(argv=None) -> int:

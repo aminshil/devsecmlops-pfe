@@ -29,6 +29,10 @@ Endpoints:
   GET  /machines     — list all known machines with type
   POST /predict      — anomaly score for one machine reading
   POST /root-cause   — rank a batch of anomalous machines by root-cause likelihood
+  POST /feedback/{id}, GET /feedback/stats, /predictions/recent, /predictions/by-machine
+                     — the feedback loop (behind FEEDBACK_TOKEN when it is set)
+  GET  /metrics      — Prometheus metrics
+  /ui/*              — the operations console, only with ENABLE_OPS_UI=1 and Basic auth
 """
 import json
 import os
@@ -42,6 +46,7 @@ from typing import Annotated, Literal
 import time
 
 import joblib
+import psycopg
 import pandas as pd
 import base64
 import hmac
@@ -82,14 +87,12 @@ FALLBACK_THRESHOLD = 0.6   # only when the manifest carries no decision_threshol
 _pct_raw = os.environ.get("PER_CLASS_THRESHOLDS", "")
 PER_CLASS_THRESHOLDS = json.loads(_pct_raw) if _pct_raw.strip() else None
 
-# Reported cause when only the IsolationForest safety net flags an anomaly
-# (the supervised classifier said normal). Defined once to avoid duplication.
-
 sys.path.insert(0, str(ROOT / "ml-model"))
 from root_cause import score_root_causes, load_graph
 import decision as _decision
 from preprocess import ROLLING_FEATURE_BASE_COLS, rolling_features_from_history
 
+# Reported cause when only the IsolationForest safety net flags an anomaly (the classifier said normal)
 SAFETY_NET_CAUSE = _decision.SAFETY_NET_CAUSE
 
 # Feedback loop: prediction logging + operator verdicts (v2.12.0).
@@ -110,8 +113,15 @@ ARTIFACTS = {
 }
 
 # v2: dual-model (RandomForest cause classifier + IsolationForest safety net),
-# trained on labeled anomaly_type data. See ml-model/train tonight's session.
+# trained on labeled anomaly_type data (README, "ML model v2").
 IS_V2 = MODEL_NAME == "telecom_v2"
+IS_V3 = MODEL_NAME == "telecom_v3"
+
+# Only telecom_v3's files are listed and hashed in models/manifest.json. The legacy selectors load pickles
+# nothing verifies, and unpickling runs code, so they must be asked for explicitly.
+if not IS_V3 and os.environ.get("ALLOW_LEGACY_MODELS") != "1":
+    raise RuntimeError(f"MODEL_NAME={MODEL_NAME!r} loads a legacy model whose files models/manifest.json does not "
+                       "verify; set ALLOW_LEGACY_MODELS=1 to load it on purpose (production is telecom_v3)")
 
 MANIFEST_PATH = MODELS_DIR / "manifest.json"
 MODEL_LINEAGE: dict = {}
@@ -177,8 +187,6 @@ def _verify_artifact_integrity(loaded=()) -> None:
         "served_v4_f1": (ev.get("v4") or {}).get("f1"),
         "artifacts_sha256": {Path(k).name: v[:12] for k, v in (prod.get("artifacts") or {}).items()},
     })
-IS_V3 = MODEL_NAME == "telecom_v3"
-
 if IS_V2:
     RF_PATH  = MODELS_DIR / "telecom_rf_classifier_v2.pkl"
     ISO_PATH = MODELS_DIR / "telecom_iso_v2.pkl"
@@ -551,6 +559,14 @@ def _db_ready() -> bool:
     return True
 
 
+@app.exception_handler(psycopg.OperationalError)
+def _db_went_away(request: Request, exc: psycopg.OperationalError) -> JSONResponse:
+    """The DB answered the readiness check, then dropped during the query: a 503 like any other DB outage
+    (it was a 500), and the next requests wait for the reconnect instead of failing one by one."""
+    _mark_db_down(f"{type(exc).__name__} during {request.url.path}")
+    return JSONResponse(status_code=503, content={"detail": "feedback DB unavailable"})
+
+
 def _require_db() -> None:
     if not _db_ready():
         raise HTTPException(status_code=503, detail="feedback DB unavailable")
@@ -663,6 +679,17 @@ class Reading(BaseModel):
 class AnomalyBatch(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)   # NaN would break the JSON response (HTTP 500)
     anomalies: dict[str, float]   # {machine_name: anomaly_score, ...}
+
+    @field_validator("anomalies")
+    @classmethod
+    def _bounded(cls, v: dict) -> dict:
+        # the fleet has 200 machines: a few thousand names is a mistake or an attack, not a batch
+        if len(v) > 2000:
+            raise ValueError("at most 2000 machines per batch")
+        bad = [m for m in v if not _MACHINE_NAME.fullmatch(m)]
+        if bad:
+            raise ValueError(f"machine names must be 1-64 characters (letters, digits, '_', '.', '-'): {bad[0][:70]!r}")
+        return v
 
 
 @app.get("/health")
@@ -1031,8 +1058,8 @@ def root_cause(batch: AnomalyBatch):
 
 class FeedbackIn(BaseModel):
     """Operator verdict on a prior prediction, submitted by prediction_id."""
-    verdict: str
-    notes: str | None = None
+    verdict: str = Field(max_length=32)
+    notes: str | None = Field(default=None, max_length=2000)   # kept in the DB and in feedback exports
 
 
 _FEEDBACK_DB_DOWN = {"description": "Feedback DB unavailable"}

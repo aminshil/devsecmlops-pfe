@@ -75,7 +75,8 @@ def tick():
 
 
 if __name__ == "__main__":
-    start_http_server(9400)
+    # this host only: Prometheus (and the panel's Status tab) read it on localhost; pod names stay off the LAN
+    start_http_server(9400, addr="127.0.0.1")
     print("Kubernetes exporter running: http://localhost:9400/metrics")
     print(f"Checking pods/deployments/HPA every {TICK_SECONDS}s\n")
     while True:

@@ -113,7 +113,7 @@ print('machines found:', len(d['data']['result']))
 
 echo ""
 echo "════════════════════ GIT + VERSION ════════════════════"
-cd ~/devsecmlops-pfe
+cd ~/devsecmlops-pfe || exit 1
 echo "--- git status ---"
 git status --short 2>&1
 

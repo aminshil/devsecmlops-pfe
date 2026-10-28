@@ -226,7 +226,7 @@ These steps follow what the Jenkinsfiles require. They have not been replayed on
 
 ## 7. First builds and final check  (FROM CODE)
 
-1. Run **`devsecmlops-pipeline`** with Build Now. SonarQube must be running first. About 12 minutes; all 11 stages should pass, including the post-deploy smoke test, which fails unless the alert threshold is read from the manifest. If that smoke test fails, the pipeline rolls the deployment back to the previous revision on its own (`kubectl rollout undo`).
+1. Run **`devsecmlops-pipeline`** with Build Now. SonarQube must be running first. About 12 minutes; all 12 stages should pass, including the post-deploy smoke test, which fails unless the alert threshold is read from the manifest. If that smoke test fails, the pipeline rolls the deployment back to the previous revision on its own (`kubectl rollout undo`).
 2. Optional, to prove the retraining path: run **`devsecmlops-model`** with `SCOPE=smoke` (about 5 minutes, no memory risk, production untouched). Run `SCOPE=full` only with 12 GB free and SonarQube, Grafana and the exporters stopped.
 3. Checklist:
 
@@ -252,7 +252,7 @@ The README states the expected results.
 
 ### Optional hardening (written, apply by hand; not part of the default run)
 
-**Alerting (Telegram).** Create a bot with @BotFather, then on the VM: `sudo bash scripts/setup_alerting.sh`. It asks for the token once (not echoed, stored root-only), finds the chat id from a message you send to the bot, validates the rules (`scripts/check_alerting.sh`) before installing anything, starts Alertmanager (:9093) and the blackbox exporter (:9115), restarts Prometheus and sends a test alert. Re-send a test alert any time with `sudo bash scripts/setup_alerting.sh --test`. To pause the messages, use the Notifications card on the control panel's Infrastructure tab (mute the anomaly list or everything, for a set time or until unmuted).
+**Alerting (Telegram).** Create a bot with @BotFather, then on the VM: `sudo bash scripts/setup_alerting.sh`. It asks for the token once (not echoed, stored root-only), finds the chat id from a message you send to the bot, validates the rules (`scripts/check_alerting.sh`) before installing anything, starts Alertmanager (127.0.0.1:9093, this host only) and the blackbox exporter (:9115), restarts Prometheus, installs the `prometheus-watchdog` service (Prometheus or Alertmanager down → Telegram) and sends a test alert. Re-send a test alert any time with `sudo bash scripts/setup_alerting.sh --test`. To pause the messages, use the Notifications card on the control panel's Infrastructure tab (mute the anomaly list or everything, for a set time or until unmuted).
 
 **NetworkPolicy check.** `kubernetes/networkpolicy.yaml` lets only the API pods reach PostgreSQL. It takes effect only if the cluster's network plugin enforces policies, so prove it:
 

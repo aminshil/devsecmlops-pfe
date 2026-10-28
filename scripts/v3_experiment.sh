@@ -65,7 +65,7 @@ env -u MLFLOW_TRACKING_URI "$PY" ml-model/train_production.py \
     --models-dir "$OUT/models" --work-dir "$OUT/candidate" --report "$OUT/report.json"
 rc=$?
 set -e
-echo "training exit code $rc (0 guardrail passed, 1 guardrail rejected the candidate, 2 failed)"
+echo "training exit code $rc (0 guardrail passed, 3 guardrail rejected the candidate, 2 refused, 1 crashed)"
 fi
 
 if [ ! -s "$OUT/report.json" ]; then echo "no $OUT/report.json: run from step 3 first"; exit 1; fi

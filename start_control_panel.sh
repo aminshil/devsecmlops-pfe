@@ -5,7 +5,7 @@
 # by the Ansible control_panel role (control-panel.service, Restart=always),
 # which survives reboots. Do not run both at once -- they compete for :8000. — launches the DevSecMLOps control panel + dependencies
 set -u
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; YEL='\033[1;33m'; NC='\033[0m'
 ok(){ echo -e "  ${GREEN}✓${NC} $1"; }

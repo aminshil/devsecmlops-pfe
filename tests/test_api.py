@@ -470,3 +470,30 @@ def test_predict_hour_out_of_range_is_422(hour, monkeypatch):
         monkeypatch.setattr(app_module, "HAS_WINDOWS", windows)
         assert client.post("/predict", json={"machine": "web-01", "hour": hour,
                                              "metrics": NORMAL}).status_code == 422
+
+
+def test_a_db_that_drops_during_a_query_is_a_503_not_a_500(monkeypatch):
+    import psycopg
+    monkeypatch.setattr(app_module, "_db_ready", lambda: True)
+    def boom(**_):
+        raise psycopg.OperationalError("server closed the connection unexpectedly")
+    monkeypatch.setattr(app_module, "recent_predictions", lambda limit=100: boom())
+    marked = []
+    monkeypatch.setattr(app_module, "_mark_db_down", marked.append)
+    resp = TestClient(app_module.app, raise_server_exceptions=False).get("/predictions/recent")
+    assert resp.status_code == 503 and marked
+
+
+def test_feedback_notes_and_root_cause_batches_are_bounded():
+    assert client.post("/feedback/abc", json={"verdict": "true_positive", "notes": "x" * 2001}).status_code == 422
+    assert client.post("/root-cause", json={"anomalies": {f"m{i}": 1.0 for i in range(2001)}}).status_code == 422
+    assert client.post("/root-cause", json={"anomalies": {"web 01;drop": 1.0}}).status_code == 422
+
+
+def test_a_legacy_model_selector_needs_an_explicit_opt_in():
+    """Only telecom_v3's files are hashed in the manifest: a legacy selector refuses to start unless asked."""
+    import subprocess
+    env = {**os.environ, "MODEL_NAME": "telecom"}
+    env.pop("ALLOW_LEGACY_MODELS", None)
+    res = subprocess.run([sys.executable, "-c", "import api.app"], cwd=ROOT, env=env, capture_output=True, text=True)
+    assert res.returncode != 0 and "ALLOW_LEGACY_MODELS=1" in res.stderr

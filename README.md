@@ -46,7 +46,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Weakest cause | `cascade`, recall 0.268 (label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7731** · precision 0.7166 · recall 0.8391. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on 25 October against the served 21 October model (image `2.20.3-b116`); the 19 October model scored 0.7755 on the same sample | `scripts/live_k8s_validation.py`, run on 25 October; output in `models/results/live_validation_20261025_b116.json` |
 | Latest green pipeline | Build `2.20.3-b123` (commit `4108a285`, 28 October: the fixes from the external review of 27 October, the Telegram list without the safety net's alarms alone, the pins): all 12 stages green, `ruff` clean, 268 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS), then tagged `:latest`. Before it: b120 (`ee6399b4`, 27 October: the watchdog and the History tab's episode readings, 241 tests) | [L3 run history](#l3--cicd) |
-| Tests | 268 passing, in 24 files, all run by build b123 (b120 ran 241, b117 ran 225, b116 ran 223, b112 ran 188; the 27 added after b120 check the review fixes: the shared feature and decision functions against their former copies, the token on the read routes, the fail-closed integrity check, the `/predict` input rules, the training console's bounds, the pins, the MLflow read-back and the Telegram list without the safety net's alarms alone; the 37 added after b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute; the 16 added after b117 check the watchdog and the History tab's episode readings) | `pytest tests/` (stage 1b) |
+| Tests | 272 passing, in 24 files; stage 1b runs all of them on every build (b123 ran 268, b120 ran 241, b117 ran 225, b116 ran 223, b112 ran 188; the 31 added after b120 check the review fixes: the shared feature and decision functions against their former copies, the token on the read routes, the fail-closed integrity check, the `/predict` input rules, the training console's bounds, the pins, the MLflow read-back, the Telegram list without the safety net's alarms alone, the training pipeline's exit codes, bounded inputs, the legacy-model opt-in and a database drop mid-query; the 37 added after b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute; the 16 added after b117 check the watchdog and the History tab's episode readings) | `pytest tests/` (stage 1b) |
 | Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, cleared, persistent, fleet surge; the list names the classifier's anomalies, not the safety net's alone: [10b](#10b-safety-net-alarms-measured--why-telegram-lists-only-the-classifiers)), machines that miss their reports, no data, any layer down, pods, Kubernetes, traffic stopped, disk and memory. 28 rules (17 alerts, 11 recording rules) unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
 | Dashboard | 28 Grafana panels in 6 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-21: the model promoted by Jenkins `devsecmlops-model` build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, its six model files listed in MLflow (stored in MinIO) by the pipeline (stage 6 checked the names only; it downloads and hashes them since 27 October, `scripts/verify_mlflow_artifacts.py`), on 27 October the six files the image serves were downloaded back from MLflow (MinIO) and all six match the manifest's SHA-256 (`scripts/verify_mlflow_artifacts.py`, `models/results/mlflow_readback_20261027.json`); committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); every image since, up to the latest green build (row above), carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
@@ -60,7 +60,7 @@ A production-oriented anomaly detection platform for a simulated 200-machine tel
 
 The current numbers, build and deployment state are summarized in [At a glance](#at-a-glance).
 
-**Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — seven SonarQube Quality Gate blocks (runs 1, 2, 9, 15, 17, 21 and 25, proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, a SonarQube server-side failure caused by the VM's disk reaching 95%, a Quality Gate block on new code (a duplicated literal in the chunked evaluation), and an image-scan block on 6 HIGH OpenSSL CVEs that Debian had already fixed but a stale cached build layer never picked up, and a repository-scan block on an MLflow CVE published after the previous green build (CVE-2026-53995). Every green run since (the latest is in [At a glance](#at-a-glance), with the [run table](#l3--cicd)) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
+**Every failure the CI/CD pipeline surfaced was diagnosed, fixed, and re-run until it passed** — eight SonarQube Quality Gate blocks (runs 1, 2, 9, 15, 17, 21, 25 and 28, proving `abortPipeline: true` genuinely stops the build), a Trivy vulnerability-database download timeout, a DNS failure between Jenkins and SonarQube caused by a real gap in the Ansible container definitions, a SonarQube server-side failure caused by the VM's disk reaching 95% (twice: runs 6 and 27), a Quality Gate block on new code (a duplicated literal in the chunked evaluation), and an image-scan block on 6 HIGH OpenSSL CVEs that Debian had already fixed but a stale cached build layer never picked up, and a repository-scan block on an MLflow CVE published after the previous green build (CVE-2026-53995). Every green run since (the latest is in [At a glance](#at-a-glance), with the [run table](#l3--cicd)) passed every stage, with zero image vulnerabilities and a post-deploy smoke test through the live pod. See [L3](#l3--cicd) and [L6](#l6--ansible-infrastructure-as-code).
 
 **What makes this project genuinely defensible, beyond the final metrics:**
 
@@ -715,7 +715,8 @@ IsolationForest safety net is unsupervised and unaffected by feedback):
    0.823, precision 0.953)** — the highest F1 in this specific experiment,
    honestly measured on the held-out half. Per-class thresholding was not
    the direction the later, corrected threshold-selection work took (that
-   work selects one number by F2 on a genuinely separate validation fleet
+   work selects one number on a genuinely separate validation fleet: by F2 at
+   first, since 19 October the highest precision whose recall is at least 0.80
    — see [Engineering decision 20](#20-why-the-decision-threshold-is-selected-by-the-pipeline-not-fixed-revised-twice)),
    but the finding that per-class thresholds *can* beat a single threshold
    on this data is real and kept here as a documented, viable alternative
@@ -732,8 +733,10 @@ IsolationForest safety net is unsupervised and unaffected by feedback):
 This experiment predates, and is independent of, the current single-threshold
 selection methodology — both are real, and the honest relationship between
 them is: per-class thresholding was explored and found to work well but was
-not the direction shipped; a single, evidence-selected threshold (0.60, by
-F2) is what production actually runs today.
+not the direction shipped; a single, evidence-selected threshold is what
+production runs: 0.91, chosen by the rule in `config/model_policy.json` (the
+highest precision whose recall on the validation fleet is at least 0.80; it was
+0.60, by F2, until 19 October).
 
 ##### Live serving validation: offline metrics vs the real API (at the time)
 
@@ -1173,6 +1176,8 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 | `ml-model/load_smd.py` | Adapter for the real Server Machine Dataset (28 real machines, anonymized channels) — not part of the production training path. |
 | `ml-model/train_serving_telecom.py`, `train_serving_telecom_robust.py` | Earlier, standalone trainers predating `train_production.py`'s unification. |
 | `ml-model/train_serving_telecom_novelty.py` | The novelty-detection experiment (tested, rejected, kept as evidence). |
+| `ml-model/build_multi.py`, `train_serving_smd.py`, `train_serving_smd_windowed.py`, `train_serving_smd_top3.py` | The real-data check on SMD (with `load_smd.py`): the three variants of the table in L0 (per machine 0.248, per machine and window 0.269, top-3 features 0.159). Run by hand, outside the production path. |
+| `ml-model/generate_data.py`, `generate_data_v2.py`, `train.py`, `train_full.py`, `tune_threshold.py`, `test_time_baselines.py`; `monitoring/fleet_simulator.py` | Earlier experiments and the first proof of concept (the POC generator and trainer, a contamination sweep, an early baseline comparison, an early traffic design), superseded by `generate_telecom_fleet.py`, `train_production.py` and `production_agent.py`. Nothing runs them; kept as the project's history, linted in CI. |
 | `scripts/export_feedback_dataset.py` | Snapshots labeled operator feedback as a fingerprinted training dataset. |
 | `scripts/verify_model_manifest.py` | The CI model gate — artifact SHA-256 + recorded F1 + deployment-file threshold and `MODEL_NAME` agreement. |
 | `scripts/verify_mlflow_artifacts.py` | Downloads a run's model files back from MLflow (stored in MinIO) and compares each SHA-256 with the recorded one: the served model by default, a training run's report with `--report` (the model job's stage 6). |
@@ -1394,9 +1399,12 @@ watch happen.
 The flow has **three** stages today — a real change from the original
 four-stage design, explained below:
 
-**1. Train.** Pick any dataset from `data/` (the dropdown scans the folder
-live), pick a model, set the hyperparameters (`contamination`, `n_estimators`),
-and choose a sample size — from a quick subsample up to the full dataset.
+**1. Train.** Pick a dataset from `data/` (the dropdown scans the folder
+live and leaves out the validation and test fleets, which score the runs and
+select the threshold), pick a model, set the hyperparameters
+(`contamination`, 0 to 0.5; `n_estimators`, 10 to 1,000), and choose a sample
+size from 5,000 to 500,000 rows (a full read of a 17M-row file is the VM's
+known out-of-memory path, so the console no longer offers it).
 Training reuses the production `preprocess.py`, so the per-machine
 per-time-window z-scoring is identical to what the served model uses. It runs
 on a background thread with a single-job lock (two trainings cannot run at
@@ -1505,7 +1513,7 @@ Jenkins, `Jenkinsfile`, 12 stages, every one a real gate — a failure stops the
 Stage labels below match the Jenkins console exactly.
 
 - **1. Checkout**
-- **1b. Unit tests** — `ruff` on every Python file (errors, undefined names, unused imports and variables, likely bugs), then pytest, 268 tests (build b123), coverage report. Fail-fast: a broken commit stops here.
+- **1b. Unit tests** — `ruff` on every Python file (errors, undefined names, unused imports and variables, likely bugs), then pytest (272 tests), coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube, on `api`, `ml-model` and, since 27 October, every script that runs in production or in a pipeline: the production agent and the Kubernetes exporter, the Prometheus watchdog (it handles the Telegram token), the CI model gate, the model job's helpers (feedback export, report summary, MLflow read-back), the smoke test, the MinIO bucket setup, the pin script and the CI configuration tool (`SONAR_SOURCES` in the `Jenkinsfile`; coverage is measured on `api` and `ml-model`). The other files in `scripts/` and `monitoring/` are read-only measurement tools and earlier traffic designs: run by hand, deployed nowhere, and the README's numbers are their output, so refactoring them for the gate's complexity rules would put those numbers at risk. They are linted in stage 1b instead.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that no deployment file carries a copy of the threshold (it is read from the manifest) and that the manifest's threshold is the evaluated one, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
@@ -1829,7 +1837,7 @@ named in every check.
 #### Alerting: Prometheus rules → Alertmanager → Telegram
 
 Prometheus evaluates the rules in `monitoring/alerting/alert_rules.yml` every 5 seconds; Alertmanager
-(`:9093`) groups the alerts and sends them to a Telegram chat. The decision is never made by the
+(`127.0.0.1:9093`, this host only: its API takes silences without authentication) groups the alerts and sends them to a Telegram chat. The decision is never made by the
 application: the serving pods only expose their verdicts, and alerts keep firing whether or not
 anyone has the control panel open, including when the panel itself is down.
 
@@ -2320,13 +2328,13 @@ Every hardening measure across the platform, in one place:
 | Credentials | Nothing committed. PostgreSQL, Grafana, MinIO, and the ops-UI password are all generated randomly or supplied from the environment at deploy time. A real committed password (`feedback-dev-password`, in the now-deleted `kubernetes/postgres-secret.yaml`) was found, removed, and rotated live in this VM's actual running database — see [Storage](#storage) above for the full rotation story. MinIO's root password was once `minioadmin123` in the repository (added in `7ee14cb3`, 16 July; removed from the manifests in `ef6e9847`, 24 September, and as the entrypoint's fallback in `5166ea56`, 29 September; it stays in the git history); the live MinIO no longer uses it (checked on 27 October without printing it: `docker exec minio printenv MINIO_ROOT_PASSWORD \| python3 -c "import sys; print(sys.stdin.read().strip() == 'minioadmin123')"` → `False`). |
 | Containers | Both the API and PostgreSQL run as non-root, with `readOnlyRootFilesystem`, all Linux capabilities dropped, `seccompProfile: RuntimeDefault`, and `automountServiceAccountToken: false`. |
 | Operations console | `/ui/*` does not exist (404) unless `ENABLE_OPS_UI=1` is explicitly set — the Kubernetes serving pods never set it. When enabled, it requires HTTP Basic auth, compared in constant time, and fails closed (`503`) if enabled without a password configured. This console previously had no authentication of any kind. |
-| Supply chain | Every production model artifact's SHA-256 is verified against `models/manifest.json` before it is unpickled — both in the API and in CI; the API refuses a manifest that lists no artifact, and any file it loads that the manifest does not list. A CycloneDX SBOM is generated and archived on every image build. The CI toolchain is pinned (since 27 October, `jenkins/Dockerfile`): the Jenkins base image by digest, and kubectl, minikube, sonar-scanner and Trivy by version and SHA-256, checked before install (Trivy used to be installed by piping a script from its moving `main` branch into `sh`); the third-party images (Grafana, node-exporter, registry, MinIO, SonarQube, PostgreSQL) by digest, and numpy and scipy, inside every model pickle, by version. The values are the ones running on the VM, written by `scripts/pin_versions.py`; the pinned Jenkins image is used from its next build (`jenkins_image_tag` 2.2): built on the VM on 27 October (`docker build -t devsecmlops-jenkins:2.2 jenkins/`), every download matched its checksum. |
+| Supply chain | Every production model artifact's SHA-256 is verified against `models/manifest.json` before it is unpickled — both in the API and in CI; the API refuses a manifest that lists no artifact, and any file it loads that the manifest does not list. A CycloneDX SBOM is generated and archived on every image build. The CI toolchain is pinned (since 27 October, `jenkins/Dockerfile`): the Jenkins base image by digest, and kubectl, minikube, sonar-scanner and Trivy by version and SHA-256, checked before install (Trivy used to be installed by piping a script from its moving `main` branch into `sh`); the third-party images (Grafana, node-exporter, registry, MinIO, SonarQube, PostgreSQL) by digest, and numpy and scipy, inside every model pickle, by version. The values are the ones running on the VM, written by `scripts/pin_versions.py`; the pinned Jenkins image is used from its next build (`jenkins_image_tag` 2.2): built on the VM on 27 October (`docker build -t devsecmlops-jenkins:2.2 jenkins/`), every download matched its checksum. One base is deliberately not pinned: the serving image's `python:3.12-slim-trixie`, which stage 4 pulls on every build (`--pull`) to pick up Debian's security fixes, and stage 6 scans the result. |
 | Model governance | The CI model gate refuses a build unless the artifact hashes, the recorded F1, the deployed threshold (selected for exactly these artifacts on an independent validation fleet) and `MODEL_NAME` all agree with `models/manifest.json`; the API refuses to start if any production artifact is missing or modified. |
 | Image | Python 3.12 on Debian trixie (was 3.10-slim); `pip` and `ensurepip` are removed from the final image after dependencies are installed; Debian security updates are applied on every build (a cached upgrade layer once shipped an already-fixed OpenSSL, caught by the image scan). |
 | Input handling | Path traversal in the training console's dataset selector closed; the console no longer offers the validation and test fleets for training, and bounds its inputs (at most 500,000 sampled rows, the VM's out-of-memory path being a full 17M-row read; 10 to 1,000 trees). `NaN`/`infinity` rejected at the API boundary. `history` validated strictly (exact keys, exact length). `machine` follows the pattern the prediction log can be queried with (`[A-Za-z0-9_.-]{1,64}`), and `hour` is checked at parse time (0-23, 422). The panel escapes the values it inserts into a page with `ctEsc` (the four places the 27 October review found unescaped included). |
 | Scanning | Trivy scans both the repository (dependencies, committed secrets, Kubernetes/Dockerfile misconfigurations) and the built image, both blocking (`--exit-code 1`) in CI. |
 | Secrets in transit | Both cluster Secrets (the PostgreSQL credentials and the feedback token) reach `kubectl` on stdin, in the demo profile (`scripts/ensure_db_secret.sh`) as in the production one (Ansible): never as a command argument, which the process list shows (until 27 October the demo path and the feedback token used `--from-literal`). The model job pushes with a `GIT_ASKPASS` helper instead of a token in the URL, archives only the feedback export's fingerprint (not the export: raw metrics, operator notes), and the legacy entrypoint passes the MinIO keys to Python through the environment, not pasted into its source. |
-| Network exposure | Alertmanager answers on 127.0.0.1 only (its API accepts silences without authentication; Prometheus, the watchdog and the panel are on the same host). MLflow does not: see Known limitations. |
+| Network exposure | On this host only (127.0.0.1): Alertmanager (its API accepts silences without authentication; Prometheus, the watchdog and the panel are on the same host) and the Kubernetes exporter. On the LAN, behind a login: the control panel (Basic auth), Jenkins, SonarQube, Grafana, MinIO (its S3 API on `:9001` needs its keys; its console is on `:9002`). On the LAN without one: Prometheus (`:9090`, read-only queries; its admin API is off by default), node-exporter (`:9100`), MLflow (`:5001`, see Known limitations) and the local registry (`:5000`; deploys do not pull from it: stage 8 loads the image Jenkins just built into Minikube directly). The cluster API (NodePort `30080`) is on the Minikube bridge, inside the VM. |
 
 ---
 
@@ -3131,21 +3139,21 @@ this project.)
 
 ## Testing
 
-**268 tests** in 24 files (up from 15), all run by build b123, `pytest`, in `tests/`:
+**272 tests** in 24 files (up from 15), `pytest`, in `tests/`; stage 1b runs all of them on every build:
 
-- `test_api.py` (65 tests) — every endpoint, input validation (NaN/inf
+- `test_api.py` (68 tests) — every endpoint, input validation (NaN/inf
   rejection, including raw `NaN`/`Infinity` tokens answered with 422 rather than 500, reserved `__` machine names, physical-range rejection (cpu=150 is a 422), the opt-in feedback token on the write and on the three read routes, the machine-name pattern (`web-01|night` is a 422), `hour` out of range (422, with or without windowed baselines), metrics count, history shape), v3/v4
   auto-selection, Prometheus metrics, DB-unavailable behavior (503, not
   500), ops-UI auth (required, wrong password rejected, absent when
   disabled), artifact-integrity rejection of a tampered model file, of an empty manifest and of a loaded
   file the manifest does not list, and the shared functions: the API calls the training code's rolling
-  features and decision rule, which give the answers its former copies gave on 6,000 random inputs.
+  features and decision rule, which give the answers its former copies gave on 6,000 random inputs; a database that drops mid-query is a 503, feedback notes and root-cause batches are bounded, and a legacy model selector needs `ALLOW_LEGACY_MODELS=1`.
 - `test_decision.py` (5 tests) — the scalar and vectorized forms of the served
   decision rule produce identical results, at multiple thresholds, with and
   without per-class overrides.
 - `test_preprocess.py` (8 tests) — baseline construction, the fallback chain, z-score
   correctness, the standard-deviation floor that prevents division by zero.
-- `test_train_production.py` (23 tests) — the full training pipeline and the model gate: promotion with
+- `test_train_production.py` (24 tests) — the full training pipeline and the model gate: promotion with
   correct lineage, the CI gate accepting a genuinely promoted model and
   rejecting a tampered or low-F1 one, retraining determinism, a rejected
   candidate leaving production byte-for-byte untouched, and feedback rows
@@ -3153,7 +3161,8 @@ this project.)
   tests: the gate accepts a selection made for these artifacts and rejects a missing selection,
   a selection made for other artifacts, an evaluation at another threshold, and a validation
   fleet that is the test set; a file that sets `MODEL_NAME` in a form the gate cannot read fails
-  instead of being skipped; promotion refuses a missing, test, or train file as the validation
+  instead of being skipped; a guardrail rejection exits 3 (a crash exits 1), and a missing production
+  artifact stops the run instead of counting as initial training; promotion refuses a missing, test, or train file as the validation
   fleet; and a promoted threshold is selected for the candidate that carries it. The standalone selection tool refuses a non-independent validation fleet, and refuses `--record` for any directory other than `models/`.
 - `test_threshold_policy.py` (21 tests) — the policy file is validated; the threshold rules (F-beta, minimum recall, recall target unreachable); training uses every normal row when asked; command-line defaults come from the policy; the guardrail also checks recall; the API takes its threshold from the manifest, an environment override, or a fallback, in that order, and says which; no file in the repository hard-codes a threshold; and the model gate flags one that does.
 - `test_training_console.py` (9 tests) — the dataset whitelist (rejects path
@@ -3343,11 +3352,11 @@ python monitoring/k8s_exporter.py &
 - **Demo traffic is the test set, so Review can leak it into training.** In the demo profile `monitoring/production_agent.py` replays `data/telecom_fleet_v2_test.csv`; its flagged readings appear in the Review tab, and the feedback export takes every judged row without a source filter. Build 9 trained on 48 such readings (0.0003% of the test set; 267 older verdicts cannot be attributed). Rule until a filter exists: do not judge rows recorded by the production agent. The production profile turns the agent off (`run_production_agent: false`).
 - **The CI model gate proves consistency, not approval.** It checks that the six artifacts match the manifest, that the recorded evaluation and threshold belong to them, and the F1 floor. It does not check that a guardrail passed for those artifacts: `select_threshold.py --record` followed by `train_production.py --evaluate-production` re-records whatever files are in `models/`. Approval is enforced by process (only `Jenkinsfile.model` commits models). Requiring a passed guardrail record for the exact artifact hashes is the planned gate check.
 - **External reviews, 21 and 27 October: what was fixed, what is deferred.** Fixed on 27 October: the application pipeline runs one build at a time and moves `:latest` only after the smoke test; a stage-8 rollout that does not finish is rolled back; the three read routes (`/predictions/recent`, `/predictions/by-machine`, `/feedback/stats`) need the token when `FEEDBACK_TOKEN` is set; the API's private copies of the rolling features and the decision rule are gone; the integrity check refuses an empty manifest and any file it loads that the manifest does not list; Alertmanager answers on 127.0.0.1 only; the CI tools and third-party images are pinned with checksums; the model job's stage 6 hashes the files it reads back from MLflow. Deferred, each a known gap:
-  - the guardrail compares with the current model only, so declines within the margins can add up (Decision 24); a crash exits with the same code as a guardrail rejection; a missing production artifact makes a run count as initial training;
+  - the guardrail compares with the current model only, so declines within the margins can add up (Decision 24); (fixed on 28 October: a guardrail rejection now exits 3, distinct from a crash, and a missing production artifact stops the run instead of counting as initial training);
   - `k8s_recover.sh` re-applies the baseline image, and `/health` reports the same version for every build (`model_lineage.mlflow_run_id` tells models apart); the hash check proves consistency, not authenticity;
   - the v3 fallback shares the v4 threshold (recall 0.7545); recall is per reading, not per incident (below);
   - no test runs against a real PostgreSQL (`api/feedback_db.py` is tested through a stub connection; a CI service container is the fix); the unit tests run on the Jenkins image's Python, not the serving image's 3.12 (the Jenkins container reaches Docker through the host socket, so mounting its workspace into a `python:3.12` container needs host paths it does not have);
-  - the operations console's code (`subprocess`, `systemctl`, `docker`) ships in the serving image, switched off by `ENABLE_OPS_UI` rather than absent; the legacy v1 model and `boto3` are still in the image; superseded experiment scripts sit next to the canonical pipeline in `ml-model/`;
+  - the operations console's code (`subprocess`, `systemctl`, `docker`) ships in the serving image, switched off by `ENABLE_OPS_UI` rather than absent; the legacy v1 model and `boto3` are still in the image (a legacy selector now refuses to start without `ALLOW_LEGACY_MODELS=1`, since only telecom_v3's files are hashed in the manifest); superseded experiment scripts sit next to the canonical pipeline in `ml-model/`;
   - the control panel runs as root over plain HTTP (a sudoers rule for its few `systemctl` and `docker` commands would let it run unprivileged); MLflow listens on every interface without authentication (the Jenkins container reaches it through the Docker bridge, `172.17.0.1:5001`, so it cannot be bound to 127.0.0.1; a firewall rule limited to the bridge is the fix);
   - the feedback export has no source filter (below); transitive dependencies are not locked (above).
 - **Headline scores are on synthetic data.** The F1, precision and recall quoted for the deployed model (0.7292 / 0.671 / 0.798) are measured on a generated fleet whose anomalies and labels come from the same generator, and the operator verdicts in the feedback loop are simulated from those labels. The only real-data check is SMD (F1 0.269), so these numbers must not be read as real-world detection accuracy.

@@ -244,7 +244,7 @@ def retrain_job() -> None:
         _step("3/3 retrain WITH the feedback and compare with the stand-in production (no promotion)")
         run([py, mlm / "train_production.py", "--train", data / "train.csv", "--test", data / "test.csv",
              "--normal-sample", 5000, "--models-dir", models, "--work-dir", w2, "--feedback", fb,
-             "--max-f1-drop", 1.0, "--max-recall-drop", 1.0, "--report", r2], ok=(0, 1))
+             "--max-f1-drop", 1.0, "--max-recall-drop", 1.0, "--report", r2], ok=(0, 3))
         rep = json.loads(r2.read_text())
         after = prod_fingerprint()
         result = {

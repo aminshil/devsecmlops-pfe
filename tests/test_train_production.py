@@ -96,13 +96,25 @@ def test_retraining_same_data_is_deterministic_and_passes(tiny_fleet, promoted, 
     assert run["candidate_evaluation"]["v4"]["f1"] == run["production_evaluation"]["v4"]["f1"]
 
 
+def test_a_missing_production_artifact_is_refused_not_treated_as_initial_training(tiny_fleet, promoted, tmp_path):
+    """The manifest lists production artifacts but one file is gone: the run stops (exit 2) before training,
+    instead of counting as initial training, which would skip the guardrail."""
+    models = tmp_path / "models"
+    shutil.copytree(promoted["models"], models)
+    victim = next(models.glob("*.pkl"))
+    victim.unlink()
+    manifest_before = (models / "manifest.json").read_text()
+    assert tp.main(_args(tiny_fleet, models, tmp_path / "w", "--promote")) == 2
+    assert (models / "manifest.json").read_text() == manifest_before and not victim.exists()
+
+
 def test_rejected_candidate_leaves_production_untouched(tiny_fleet, promoted, tmp_path, monkeypatch):
     models = tmp_path / "models"
     shutil.copytree(promoted["models"], models)
     before = {p.name: p.read_bytes() for p in models.glob("*.pkl")}
     monkeypatch.setattr(tp, "guardrail", lambda *a, **k: (False, ["forced rejection"]))
     rc = tp.main(_args(tiny_fleet, models, tmp_path / "w", "--promote"))
-    assert rc == 1
+    assert rc == tp.EXIT_REJECTED == 3                     # not 1: a crash exits 1
     assert {p.name: p.read_bytes() for p in models.glob("*.pkl")} == before
     history = json.loads((models / "manifest.json").read_text())["history"]
     assert history[-1]["promoted_to_workspace"] is False

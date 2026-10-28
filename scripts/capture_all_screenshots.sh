@@ -7,7 +7,7 @@ ROOT="$HOME/devsecmlops-pfe"
 OUT="/home/pfe/pfe_screenshots"
 mkdir -p "$OUT"
 chmod 755 "$OUT"
-cd "$ROOT"
+cd "$ROOT" || exit 1
 source venv/bin/activate 2>/dev/null || true
 
 DESKTOP_USER="pfe"
@@ -25,10 +25,7 @@ echo "Detected screen: ${SCREEN_WH:-unknown}"
 #   top: ~28 px (activity bar) + terminal titlebar handled below
 #   left: ~72 px (dock)
 # We'll crop those off to leave just the terminal content area.
-CROP_LEFT=72     # Ubuntu dock width
-CROP_TOP=32      # top activities/notification bar
-CROP_RIGHT=0     # nothing on right
-CROP_BOTTOM=0    # taskbar is included with terminal usually
+# (not applied by this script: crop by hand if needed -- left 72 px dock, top 32 px bar)
 
 shot() {
   local path="$1"
@@ -59,8 +56,7 @@ sleep 10
 
 snap () {
   local name="$1"
-  local title="$2"
-  shift 2
+  shift 2       # $2 is a human-readable title, shown only in the call site
   clear
   # Print the real terminal prompt then the command, as if typed
   local prompt="(venv) root@pfe-virtual-machine:~/devsecmlops-pfe# "
