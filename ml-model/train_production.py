@@ -411,6 +411,16 @@ def fingerprint(paths: dict[str, Path]) -> dict:
     return out
 
 
+def production_files_missing(models_dir: Path, has_prod: bool) -> bool:
+    """True (and logged) when the manifest lists production artifacts but some file is gone: such a run
+    must not count as initial training, which would skip the guardrail."""
+    if has_prod or not (read_manifest(models_dir).get("production") or {}).get("artifacts"):
+        return False
+    log(f"FATAL: the manifest lists production artifacts but some are missing from {models_dir}: "
+        "refusing to treat this run as initial training (it would skip the guardrail)")
+    return True
+
+
 def read_manifest(models_dir: Path) -> dict:
     path = models_dir / MANIFEST_FILENAME
     return json.load(open(path)) if path.exists() else {}
@@ -623,9 +633,7 @@ def run_pipeline(args) -> int:
             return 2
 
     has_prod = all((args.models_dir / v).exists() for v in ARTIFACTS.values())
-    if not has_prod and (read_manifest(args.models_dir).get("production") or {}).get("artifacts"):
-        log(f"FATAL: the manifest lists production artifacts but some are missing from {args.models_dir}: "
-            "refusing to treat this run as initial training (it would skip the guardrail)")
+    if production_files_missing(args.models_dir, has_prod):
         return 2
 
     train = load_fleet(args.train)
