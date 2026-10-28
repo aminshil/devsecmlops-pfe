@@ -87,21 +87,26 @@ After this, the K8s pods self-heal (their RESTARTS counter increments once --
 that is normal, not a fault). The `--restart=always` Docker containers
 (minio/sonarqube/jenkins/registry) come back on the daemon restart on their
 own; **Minikube does not** and must be started manually with the command
-above.
+above. (After a reboot `minikube-start.service` starts it: `docs/MINIKUBE_RELIABILITY.md`.)
 
 **Nuclear option (only if `minikube start --force` itself stalls):**
 
 ```bash
 minikube delete
-minikube start --force
-# then re-apply manifests and reload the image:
+minikube start --driver=docker --force
+# then re-create what the cluster held (the same steps as apply_manifests in scripts/k8s_recover.sh):
 kubectl apply -f kubernetes/namespace.yaml
+scripts/ensure_db_secret.sh        # the database Secret (deleted with the cluster): a new random password
 kubectl apply -f kubernetes/postgres.yaml
 kubectl apply -f kubernetes/deployment.yaml
 kubectl apply -f kubernetes/service.yaml
 kubectl apply -f kubernetes/hpa.yaml
-minikube image load devsecmlops-api:2.13.0
+minikube image load "$(grep -oP '(?<=image: )devsecmlops-api:\S+' kubernetes/deployment.yaml | head -1)"
 ```
+
+This serves the base image tag written in `kubernetes/deployment.yaml`; the next pipeline build puts the
+latest build back. `scripts/k8s_recover.sh` does the same steps and also saves and restores the judged
+feedback and re-pins Jenkins at `192.168.49.10`.
 
 The feedback PostgreSQL data is lost on a `minikube delete` (the PVC is
 destroyed with the cluster) -- acceptable for a demo, but do not `delete` if
@@ -242,15 +247,6 @@ sh '''
 '''
 ```
 
-**If Jenkins' container ever gets recreated** (not just restarted --
-recreated via `docker rm`+`docker run`, or a full environment rebuild),
-this apt-get fix must be redone, since it wasn't baked into a custom
-image. A more permanent fix would be a custom `Dockerfile` extending
-`jenkins/jenkins:lts` with `python3-pip` pre-installed, built once and
-used going forward -- not done here since the base image already had
-the toolchain needed for SonarQube/Docker/Trivy stages, and this was
-a late-discovered gap.
-
 **Third layer (Debian 13/trixie PEP 668):** even with pip installed,
 `pip install` refuses to run outside a venv by default
 ("externally-managed-environment"). Since the Jenkins container is
@@ -261,6 +257,13 @@ due to missing ensurepip):
 ```groovy
 python3 -m pip install --quiet --break-system-packages -r requirements-api.txt
 ```
+
+**Resolved since then:** the permanent fix was built. `jenkins/Dockerfile` is the Jenkins image
+(`devsecmlops-jenkins`, built by Ansible) with python3, pip, venv and every CI tool installed; its base
+is pinned by digest and each downloaded tool by SHA-256 (`scripts/pin_versions.py`), so a recreated
+container keeps them. The `apt-get` commands above are only needed on a stock `jenkins/jenkins`
+container. The stage shown above is the one from that time: today's stage 1b runs `ruff` first, then
+`pytest` (see `Jenkinsfile`).
 
 <!-- minikube-reliability -->
 ## Minikube unreachable after reboot / stop / pause

@@ -287,3 +287,30 @@ measurements are the evidence that it works as configured; these pages define wh
      https://git-scm.com/docs/gitcredentials
 101. Python, *fcntl.flock*: the lock that serialises the two processes writing the demo label file.
      https://docs.python.org/3/library/fcntl.html#fcntl.flock
+
+**The 28 October checks** (`ruff` in stage 1b, SonarQube on the code that runs, the whole-repository review)
+
+102. SonarSource, rule `python:S3776` *Cognitive Complexity of functions should not be too high* (limit 15):
+     the watchdog's `step()` at 26 (run 28) and `run_pipeline` at 16 (run 30).
+     https://rules.sonarsource.com/python/RSPEC-3776/ ; the metric: G. A. Campbell, *Cognitive Complexity,
+     Because Testability != Understandability*, SonarSource.
+     https://www.sonarsource.com/de/blog/cognitive-complexity-because-testability-understandability/
+103. SonarSource, rule `javascript:S6535` *Unnecessary escape characters should be removed* (run 25).
+     https://rules.sonarsource.com/javascript/RSPEC-6535/
+104. SonarSource, *Tracking in-line suppression comments*: the `NOSONAR` comment, used with its reason for the
+     agent's NodePort address and MinIO's region (run 28).
+     https://docs.sonarsource.com/sonarqube-server/quality-standards-administration/managing-quality-gates/tracking-inline-comments/
+105. Astral, *Ruff rules*: the sets stage 1b runs, `E9` (syntax errors), `F` (Pyflakes) and `B` (flake8-bugbear),
+     and `B905` (`zip()` without `strict=`), left out. https://docs.astral.sh/ruff/rules/ ;
+     https://docs.astral.sh/ruff/rules/zip-without-explicit-strict/
+106. ShellCheck, the shell-script checker run over `scripts/*.sh` in the review.
+     https://github.com/koalaman/shellcheck
+107. Elastic, *Watermark errors*: at the flood-stage watermark (95% disk by default) every index on the node is
+     made read-only, and the block lifts by itself below the high watermark (90%) (runs 6 and 27).
+     https://www.elastic.co/docs/troubleshoot/elasticsearch/fix-watermark-errors
+108. FastAPI, *Handling errors*: `@app.exception_handler`, how a database that drops mid-query becomes a 503.
+     https://fastapi.tiangolo.com/tutorial/handling-errors/
+109. Psycopg 3, *errors – Package exceptions*: `OperationalError`, "an error related to the database's
+     operation" (an unexpected disconnect, for one). https://www.psycopg.org/psycopg3/docs/api/errors.html
+110. Pydantic, *Validators*: `field_validator`, behind the machine-name, metrics, history and root-cause batch
+     checks. https://docs.pydantic.dev/latest/concepts/validators/

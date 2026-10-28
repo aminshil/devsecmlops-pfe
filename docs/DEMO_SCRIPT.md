@@ -1,6 +1,6 @@
 # Defense demo script
 
-Prepared against build `2.20.3-b123` or later (all 12 CI stages green, `ruff` clean, every test passing, Quality Gate OK; serves the model promoted on 21 October by model build 9: all 17.28M rows plus 315 judged feedback rows, v4 F1 0.7292, threshold 0.91), commit `e7c2fb06` or later (`git log --oneline -5`). About 15 minutes.
+Prepared against build `2.20.3-b125` or later (all 12 CI stages green, `ruff` clean, every test passing, Quality Gate OK; serves the model promoted on 21 October by model build 9: all 17.28M rows plus 315 judged feedback rows, v4 F1 0.7292, threshold 0.91), commit `25fef58d` or later (`git log --oneline -5`). About 15 minutes.
 
 **How to read the "Proven" column.** *Log* means the exact command or output appeared in a real Jenkins or terminal log during this project. *Rehearse* means it is documented in the README but was not run today. Run every *Rehearse* step once before the defense, from a cold start.
 
@@ -58,7 +58,7 @@ Have `screenshots/` open as a last-resort fallback.
 
 ### The feedback loop and retraining (about 5 minutes, after step 7)
 
-**Precondition.** The cluster runs the latest image (history logging; `kubectl -n ml-serving get deploy -o jsonpath='{.items[*].spec.template.spec.containers[*].image}'` should show `2.20.3-b123`). The feedback table lives on a 2 Gi volume and survives reboots (verified across two reboots; the Continuous training tab shows the live counts). Only a deleted volume empties it.
+**Precondition.** The cluster runs the latest image (history logging; `kubectl -n ml-serving get deploy -o jsonpath='{.items[*].spec.template.spec.containers[*].image}'` should show `2.20.3-b125`). The feedback table lives on a 2 Gi volume and survives reboots (verified across two reboots; the Continuous training tab shows the live counts). Only a deleted volume empties it.
 
 1. **Control panel → Demo → Send 20 → Review alerts only.** Say: "the readings come from a labelled fleet that is not part of training, validation or test; the cluster pods answer and log them; the verdicts come from the generator's ground truth, standing in for an operator."
 1b. **Review tab (optional, 30 seconds):** the anomalies the pods flagged that nobody has judged. Press Real or False alarm on a row; it becomes training data for the next retraining run. Judge only rows recorded by the Demo tab, never rows recorded by the production agent: those are test-set readings. Say: "this is how an operator feeds the loop without opening Postgres."
@@ -178,5 +178,5 @@ git status --short                                                       # must 
 
 ## 6. After the defense
 
-- Rotate every credential that appeared in chat or in terminal history (Grafana, ops UI, MinIO, the SonarQube token used on 27 October).
+- Rotate every credential that appeared in chat or in terminal history (Grafana, ops UI, MinIO, the SonarQube token used on 27 and 28 October).
 - Then take up the deferred items in the README's "Known limitations" (the list under "External reviews, 21 and 27 October"), starting with a PostgreSQL test in CI and the dependency lockfile.
