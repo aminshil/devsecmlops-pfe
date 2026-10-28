@@ -78,15 +78,16 @@ The current numbers, build and deployment state are summarized in [At a glance](
  L0  ML Model                 generator, baselines, v3/v4 classifiers, IsolationForest, guardrail
  L1  Serving API               FastAPI, hybrid v3/v4 routing, feedback loop, control panel
  L2  Container Image           Docker, hardened, model artifacts baked in
- L3  CI/CD                     Jenkins, 11 gates, SonarQube, Trivy, SBOM
+ L3  CI/CD                     Jenkins, 12 stages, ruff + pytest, SonarQube, Trivy, SBOM
  L4  Orchestration             Kubernetes (Minikube), hardened pods, HPA
  L5  Observability             Prometheus, Grafana, MLflow, test-set traffic replay
  L6  Infrastructure as Code    Ansible, two profiles, systemd-supervised
 ```
 
 ```
-Git push -> Jenkins (SonarQube -> repo+model gate -> Docker build ->
-             hardened smoke test -> Trivy image scan + SBOM -> registry push)
+Git push -> Jenkins (ruff + pytest -> SonarQube + Quality Gate -> repo scan + model gate ->
+             Docker build -> hardened smoke test -> Trivy image scan + SBOM -> registry push ->
+             deploy -> smoke test in the live pod -> tag :latest)
                                                   |
                                                   v
                                   Docker image (model baked in)
@@ -624,7 +625,7 @@ Applied only to metrics where change-over-time is diagnostic. disk_usage (accumu
 
 +0.098 F1, +0.156 precision, +0.056 recall at the time -- a large, real improvement. Per-cause recall improved on every category except cascade (which stays limited by the 40%-consistent label noise documented above): cpu_spike 0.894 -> 0.982, memory_leak 0.736 -> 0.909 (the +17-point gradual-onset win), network_flood 0.915 -> 0.976, disk_saturation 0.977 -> 0.994, silent_failure 0.906 -> 0.978.
 
-> **This F1=0.816 figure is the classifier alone, at threshold 0.5 — not the served decision, and not at the threshold now deployed.** It is real and it is kept here because it is genuinely informative about the classifier's own strength. The number this project now reports as "production" is the *served* decision (classifier OR IsolationForest) at the threshold the pipeline selected (0.91): **F1 = 0.7291**. See [Executive summary](#executive-summary) and [Current production](#current-production-the-numbers-that-supersede-everything-above) for the full, current, corrected numbers and the reasoning behind every difference from this section.
+> **This F1=0.816 figure is the classifier alone, at threshold 0.5 — not the served decision, and not at the threshold now deployed.** It is real and it is kept here because it is genuinely informative about the classifier's own strength. The number this project now reports as "production" is the *served* decision (classifier OR IsolationForest) at the threshold the pipeline selected (0.91): **F1 = 0.7292**. See [Executive summary](#executive-summary) and [Current production](#current-production-the-numbers-that-supersede-everything-above) for the full, current, corrected numbers and the reasoning behind every difference from this section.
 
 ##### Live K8s results at the time (33,600-request two-week demo, threshold 0.85)
 
@@ -790,11 +791,10 @@ approved them; see Known limitations) — it superseded the separate, earlier
 fingerprints both (SHA-256), trains baselines + v3 + v4 + IsolationForest,
 evaluates the **candidate and the current production models with the
 identical served decision rule** (`ml-model/decision.py` — `classifier_vote
-OR isolation_forest_vote`, imported by every evaluation script; the API applies
-the same rule per request with its own copy, `_decide_v4_anomaly` and the OR in
-`_predict_v3_v4`, which mirrors `decision.classifier_vote` line for line, so a
-reported number matches what the deployment returns as long as the two copies
-stay identical), applies the guardrail described in
+OR isolation_forest_vote`, imported by every evaluation script; the API calls the
+same `decision.classifier_vote` on every request, since 27 October, when its own
+copy was removed, so a reported number is computed by the code the deployment
+runs), applies the guardrail described in
 [Engineering decision 24](#24-why-the-retrain-guardrail-is-strict-and-what-500-rows-proved-updated),
 and — only with `--promote` and only if the guardrail passes — writes
 artifacts and records full lineage in `models/manifest.json`.
@@ -1193,7 +1193,7 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 | `models/manifest.json` | Full lineage: artifact SHA-256 hashes, dataset fingerprints, the selected threshold and its evidence, the recorded evaluation. |
 | `data/telecom_fleet_v2_labeled.csv` (seed 42), `_val.csv` (seed 7), `_test.csv` (seed 123) | Training, threshold-selection, and evaluation data — three separate files, never mixed. |
 | `data/telecom_fleet_v2_operator.csv` (seed 2026, 200 machines, 3 days) | The operator-stream fleet the control panel samples from. Judged readings become feedback rows used for retraining, so it is deliberately not the training, validation or test file. |
-| smoke-scope fleets (generated in the Jenkins workspace: 30 machines, 3 days, seeds 42 and 123) | A plumbing check for `Jenkinsfile.model` with `SCOPE=smoke`: 5 minutes, no memory risk, production untouched. They are not subsets of the real files, and their scores must never be quoted as performance (production scores 0.7291 on the real test file; a smoke-scope fleet gives a different number that means nothing). `SCOPE=full` uses the real files above. |
+| smoke-scope fleets (generated in the Jenkins workspace: 30 machines, 3 days, seeds 42 and 123) | A plumbing check for `Jenkinsfile.model` with `SCOPE=smoke`: 5 minutes, no memory risk, production untouched. They are not subsets of the real files, and their scores must never be quoted as performance (production scores 0.7292 on the real test file; a smoke-scope fleet gives a different number that means nothing). `SCOPE=full` uses the real files above. |
 
 ---
 
@@ -1293,8 +1293,8 @@ Tabs:
 - **Root Cause** — inject a router cascade (a router plus its real
   `dependency_graph.json` dependents) and watch `/root-cause` rank the
   culprit vs the downstream victims.
-- **Demo** — readings are answered by the cluster API, which logs them, so each result has operator-verdict buttons (or one button that judges them all with the real labels) that feed the retraining; if the cluster is unreachable it falls back to the local API and marks the rows "not logged".  send batches of **real, held-out test readings** and score the
-  model live: a table of real-vs-predicted with a TP/TN/FP/FN verdict per
+- **Demo** — readings are answered by the cluster API, which logs them, so each result has operator-verdict buttons (or one button that judges them all with the real labels) that feed the retraining; if the cluster is unreachable it falls back to the local API and marks the rows "not logged". It sends batches of **real, held-out readings** (the operator fleet, never the
+  test set: see below) and scores the model live: a table of real-vs-predicted with a TP/TN/FP/FN verdict per
   row, a running precision/recall/accuracy scorebar, and an expandable
   per-prediction detail.
 - **Infrastructure** — a Notifications card that mutes or unmutes the Telegram messages (the anomaly
@@ -1455,7 +1455,8 @@ found and fixed in the most recent security pass; see
 - **One database failure disabled feedback logging until the next restart.** It now retries every 30 s, and the feedback endpoints return `503` instead of an uncaught `500`.
 - **Three bugs found only by running the tests:** a metrics function that was called but never defined (`NameError` on every request), a missing `p_anomaly` field in both prediction paths, and five IsolationForest call sites passing a DataFrame to a model fitted on arrays (caught by re-running the suite with warnings as errors).
 - **The API never logged the rolling history, so operator feedback could not reach v4.** `feedback_db.insert_prediction` accepts and stores `history`, but the two calls in `api/app.py` never passed it: `history_json` stayed NULL on every row, and the model-job smoke run reported `rows_used_v4: 0` although 132 judged rows were used by v3. Fixed by passing the request's history to the logger; covered by two tests (a v4 request logs its history, a request without one logs none).
-- **The panel's Stop buttons did nothing for the host layers, and Fix started a second copy.** Prometheus, the Kubernetes exporter and the production agent are systemd units with `Restart=always`. Stop ran `pkill`, which systemd undid seconds later while the card kept saying it had succeeded; Fix spawned the program itself outside systemd (Prometheus even with a different storage path, a second agent would have doubled the traffic into the database). Both now go through `systemctl`, and 10 tests pin it, including that the panel never calls `pkill` or `Popen` for these layers.\n- **A missing production model file failed with an unclear error.** Removing the v4 model already stopped startup, but only as a bare `FileNotFoundError`; it now raises `RuntimeError: production artifact missing: <file>`. Proven by removing the v4 file and importing the app: v4 cannot silently degrade to v3-only.
+- **The panel's Stop buttons did nothing for the host layers, and Fix started a second copy.** Prometheus, the Kubernetes exporter and the production agent are systemd units with `Restart=always`. Stop ran `pkill`, which systemd undid seconds later while the card kept saying it had succeeded; Fix spawned the program itself outside systemd (Prometheus even with a different storage path, a second agent would have doubled the traffic into the database). Both now go through `systemctl`, and 10 tests pin it, including that the panel never calls `pkill` or `Popen` for these layers.
+- **A missing production model file failed with an unclear error.** Removing the v4 model already stopped startup, but only as a bare `FileNotFoundError`; it now raises `RuntimeError: production artifact missing: <file>`. Proven by removing the v4 file and importing the app: v4 cannot silently degrade to v3-only.
 
 ### Files
 
@@ -1467,7 +1468,7 @@ found and fixed in the most recent security pass; see
 | `api/demo_labels.py` | Keeps the true label of replayed readings beside the cluster's prediction id, for the Review tab's real-label column, with the machine and the time it was logged, for the History tab's episode details. |
 | `api/training.py` | Backend for the training console — dataset selection (with the path-traversal fix), representative sampling, comparing a candidate against production. |
 | `api/static/control_panel.html` | The mission-control UI, served at `/ui`. |
-| `tests/test_api.py` (48 tests), `test_decision.py`, `test_training_console.py`, `test_ui_cluster.py`, `test_ui_fleet.py`, `test_review_details.py` | Covered in full in [Testing](#testing) below. |
+| `tests/test_api.py` (68 tests), `test_decision.py`, `test_training_console.py`, `test_ui_cluster.py`, `test_ui_fleet.py`, `test_review_details.py` | Covered in full in [Testing](#testing) below. |
 
 ---
 
