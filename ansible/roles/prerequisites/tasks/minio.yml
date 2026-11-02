@@ -1,0 +1,155 @@
+---
+# ===========================================================================
+# prerequisites/minio.yml: MinIO, the MLflow artifact store (demo profile).
+#   1. the image: built from MinIO's release binary, its SHA-256 checked (minio/Dockerfile)
+#   2. the data volume: given once to the image's unprivileged user (the old image ran as root)
+#   3. the container, on devsecmlops-net, and the mlflow-artifacts bucket
+# Included by prerequisites/main.yml.
+# ===========================================================================
+
+- name: Require MinIO root credentials from the environment
+  ansible.builtin.assert:
+    that:
+      - minio_root_user | length > 0
+      - minio_root_password | length >= 12
+    fail_msg: "Set MINIO_ROOT_USER and MINIO_ROOT_PASSWORD (12+ chars) before running the playbook."
+  no_log: true
+
+# --- MinIO image: built from the checksummed release binary (minio/Dockerfile) -------------------------
+# Only when img_minio is the image built here (the default); another img_minio is used as given.
+- name: MinIO image from the release binary
+  when: img_minio == minio_image_local
+  block:
+    - name: Create the MinIO build directory and the image's empty directories (outside the repository)
+      ansible.builtin.file:
+        path: "{{ minio_build_dir }}/{{ item.path }}"
+        state: directory
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: "", mode: "0755"}
+        - {path: rootfs/etc, mode: "0755"}
+        - {path: rootfs/tmp, mode: "1777"}
+        - {path: data, mode: "0755"}
+        - {path: home, mode: "0755"}
+      loop_control:
+        label: "{{ item.path or '.' }}"
+      become: true
+
+    - name: Copy the Dockerfile and the user files into the build directory
+      ansible.builtin.copy:
+        src: "{{ repo_dir }}/minio/{{ item.src }}"
+        dest: "{{ minio_build_dir }}/{{ item.dest }}"
+        mode: "0644"
+      loop:
+        - {src: Dockerfile, dest: Dockerfile}
+        - {src: passwd, dest: rootfs/etc/passwd}
+        - {src: group, dest: rootfs/etc/group}
+      become: true
+
+    - name: Download the MinIO {{ minio_release }} binary (refused unless its SHA-256 is minio_sha256)
+      ansible.builtin.get_url:
+        url: "https://github.com/minio/minio/releases/download/{{ minio_release }}/minio.linux-amd64.{{ minio_release }}"
+        dest: "{{ minio_build_dir }}/minio"
+        checksum: "sha256:{{ minio_sha256 }}"
+        mode: "0755"
+      become: true
+
+    - name: Build the MinIO image {{ minio_image_local }}
+      community.docker.docker_image:
+        name: devsecmlops-minio
+        tag: "{{ minio_release }}"
+        build:
+          path: "{{ minio_build_dir }}"
+          pull: false
+          args:
+            MINIO_RELEASE: "{{ minio_release }}"
+            MINIO_SHA256: "{{ minio_sha256 }}"
+        source: build
+        force_source: false
+
+    - name: Check that the image runs the pinned release
+      ansible.builtin.command: docker run --rm {{ minio_image_local }} --version
+      register: minio_version
+      changed_when: false
+      failed_when: minio_release not in minio_version.stdout
+      when: not ansible_check_mode   # in a dry run the image is not built
+
+# The image runs as uid minio_uid. MinIO's data volume was written as root by the image this project used
+# before (minio/minio), and MinIO refuses to start on it ("Unable to write to the backend"; reproduced
+# before this change), so the volume is given to that uid once: nothing else changes in it.
+- name: Ensure MinIO's data volume exists
+  community.docker.docker_volume:
+    name: minio_data
+    state: present
+  when: img_minio == minio_image_local
+
+- name: Read where the MinIO data volume lives on the host
+  community.docker.docker_volume_info:
+    name: minio_data
+  register: minio_volume
+  when: img_minio == minio_image_local
+
+- name: Look for MinIO data not owned by the MinIO user (left by the root image)
+  ansible.builtin.command: >-
+    find {{ minio_volume.volume.Mountpoint }} ! -uid {{ minio_uid }} -print -quit
+  register: minio_foreign
+  changed_when: false
+  check_mode: false   # read-only probe
+  become: true
+  when:
+    - img_minio == minio_image_local
+    - minio_volume.exists | default(false)
+
+- name: Look for an existing MinIO container (absent on a new machine)
+  community.docker.docker_container_info:
+    name: minio
+  register: minio_container
+  when:
+    - img_minio == minio_image_local
+    - (minio_foreign.stdout | default('')) | length > 0
+
+- name: Stop MinIO while its data changes owner (the root process must not write in between)
+  community.docker.docker_container:
+    name: minio
+    state: stopped
+  when:
+    - img_minio == minio_image_local
+    - (minio_foreign.stdout | default('')) | length > 0
+    - minio_container.exists | default(false)
+
+- name: Give the MinIO data to the MinIO user (once, after the switch from the root image)
+  ansible.builtin.file:
+    path: "{{ minio_volume.volume.Mountpoint }}"
+    owner: "{{ minio_uid }}"
+    group: "{{ minio_uid }}"
+    recurse: true
+  become: true
+  when:
+    - img_minio == minio_image_local
+    - (minio_foreign.stdout | default('')) | length > 0
+
+- name: Ensure MinIO (MLflow artifact store) is running
+  community.docker.docker_container:
+    name: minio
+    image: "{{ img_minio }}"
+    state: started
+    restart_policy: always
+    command: 'server /data --console-address ":9001"'
+    ports: ["9001:9000", "9002:9001"]
+    volumes: ["minio_data:/data"]
+    networks:
+      - name: "{{ docker_net_name | default('devsecmlops-net') }}"
+    env:
+      MINIO_ROOT_USER: "{{ minio_root_user }}"
+      MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
+  no_log: true
+
+- name: Ensure the MLflow artifact bucket exists on MinIO (created if missing, never touched if present)
+  ansible.builtin.command: "{{ repo_dir }}/venv/bin/python {{ repo_dir }}/scripts/ensure_minio_bucket.py --endpoint http://localhost:9001 --bucket mlflow-artifacts"
+  environment:
+    MINIO_ROOT_USER: "{{ minio_root_user }}"
+    MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
+  register: minio_bucket
+  changed_when: "'created' in minio_bucket.stdout"
+  when: not ansible_check_mode   # it can create the bucket, so a dry run skips it
+  no_log: true

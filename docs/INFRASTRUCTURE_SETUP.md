@@ -88,10 +88,10 @@ The repository path is free: the playbook derives it from its own location. `/ho
 cd /root/devsecmlops-pfe
 python3.12 -m venv venv && source venv/bin/activate      # on 24.04: python3 -m venv venv
 pip install -r requirements.txt -r requirements-dev.txt
-python3 -m pytest -q tests          # expect: 275 passed
+python3 -m pytest -q tests          # expect: 276 passed
 ```
 
-The VPS ran **272 passed** at commit `a280267a`; the commit that added this guide (`1b591925`) adds 3 tests, and the VPS's Jenkins build #2 ran all **275** on it. If the count does not match, stop here.
+The VPS ran **272 passed** at commit `a280267a`; the commit that added this guide (`1b591925`) adds 3 tests, and the VPS's Jenkins build #2 ran all **275** on it; the commit that builds MinIO adds one more (276). If the count does not match, stop here.
 
 The playbook reuses this virtualenv. It now checks the venv's Python before installing anything and stops with the deadsnakes instruction if it is older than 3.12 (`app_setup` role; FIXED, re-test). To let the playbook create the venv itself, run it with `-e venv_python=python3.12`.
 
@@ -197,24 +197,17 @@ Optional dry run (changes nothing; the bucket task and all installs are skipped)
 MINIO_ROOT_USER=x MINIO_ROOT_PASSWORD=placeholder-12345 GRAFANA_ADMIN_PASSWORD=placeholder-12345 OPS_UI_USER=x OPS_UI_PASSWORD=placeholder-12345 ansible-playbook -i inventory.ini site.yml --check
 ```
 
-### 5a. The MinIO image  (VERIFIED (VPS), manual, demo profile only)
+### 5a. The MinIO image  (FIXED, re-test; demo profile only)
 
-`ansible/group_vars/all.yml` pins MinIO by digest (`img_minio`), as it was running on the original VM. That image can no longer be pulled: on 23 October 2025 MinIO stopped publishing its free community images, removed the existing ones from Docker Hub and Quay, and moved the community edition to source-only distribution [115] (the VPS got `pull access denied` from Docker Hub and `401 UNAUTHORIZED` from Quay). The digest was pinned on 27 October 2026 from the original VM's local cache, so it has never been pullable from a registry since it was written. The original VM still runs it from its local cache, which is why nothing broke there.
+The playbook used to pull MinIO by digest (`img_minio`), the digest running on the original VM. That image can no longer be pulled: on 23 October 2025 MinIO stopped publishing its free community images, removed the existing ones from Docker Hub and Quay, and moved the community edition to source-only distribution [115] (the VPS got `pull access denied` from Docker Hub and `401 UNAUTHORIZED` from Quay). The digest was pinned on 27 October 2026 from the original VM's local cache, so it was never pullable from a registry. On the VPS the image was built by hand from the release binary.
 
-On a new machine, build a local image from the **same release**, `RELEASE.2025-09-07T16-13-09Z`, using MinIO's own binary from its GitHub release [116], checked against the release's own `.sha256sum` file and against the SHA-256 the VPS got:
+The `prerequisites` role now does it (`roles/prerequisites/tasks/minio.yml`):
 
-```bash
-mkdir -p /root/minio-img && cd /root/minio-img
-R=RELEASE.2025-09-07T16-13-09Z
-curl -fsSL -o minio          "https://github.com/minio/minio/releases/download/$R/minio.linux-amd64.$R"
-curl -fsSL -o minio.sha256sum "https://github.com/minio/minio/releases/download/$R/minio.linux-amd64.$R.sha256sum"
-echo "$(cut -d' ' -f1 minio.sha256sum)  minio" | sha256sum -c -                       # minio: OK
-echo "7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f  minio" | sha256sum -c -   # the VPS's value
-printf 'FROM debian:12-slim\nCOPY minio /usr/bin/minio\nRUN chmod +x /usr/bin/minio\nEXPOSE 9000 9001\nENTRYPOINT ["minio"]\n' > Dockerfile
-docker build -t minio-pinned:local . && docker run --rm minio-pinned:local --version | head -1
-```
+1. It downloads MinIO's own binary for `minio_release` (`RELEASE.2025-09-07T16-13-09Z`) from the GitHub release [116], and `get_url` refuses the file unless its SHA-256 is `minio_sha256` in `ansible/group_vars/all.yml` (`7c5bd851…fb855f`, the value in the release's `.sha256sum` file and the one the VPS got).
+2. It builds `devsecmlops-minio:<release>` from `minio/Dockerfile`: `FROM scratch` [119] (the binary is statically linked, so the image holds nothing else: no shell, no package manager, no base image to pin or patch), run by the unprivileged uid 10002. It checks that the image reports that release.
+3. On a machine where MinIO ran before as root (the old image), it stops MinIO and gives the `minio_data` volume to uid 10002 once; MinIO refuses to start on root-owned data otherwise. The data itself is not touched.
 
-Expected: `minio version RELEASE.2025-09-07T16-13-09Z` with `commit-id=07c3a429bfed433e49018cb0f78a52145d4bedeb`, the same commit as the image on the original VM. Then add `-e img_minio=minio-pinned:local` to every demo-profile run below. The production profile does not run MinIO.
+Tested before the commit, with the playbook's own tasks against a local Docker: from root-written data (the objects read back identical, new writes work), on a clean machine (bucket created), a second run (`changed=0`) and a dry run. The image reports `minio version RELEASE.2025-09-07T16-13-09Z (commit-id=07c3a429bfed433e49018cb0f78a52145d4bedeb)`, the same commit as the original VM's image. To move to another release: change `minio_release`, run `scripts/pin_versions.py` (it writes `minio_sha256` from the release's checksum file), re-run the playbook. To use another MinIO image, set `img_minio`; nothing is built then. The production profile does not run MinIO.
 
 ### 5b. Production profile  (VERIFIED (VPS))
 
@@ -231,7 +224,7 @@ On the VPS, Minikube had to be started by hand before this run (`minikube start 
 
 ```bash
 cd /root/devsecmlops-pfe/ansible && source /root/.devsecmlops.env
-ansible-playbook -i inventory.ini site.yml -e img_minio=minio-pinned:local 2>&1 | tail -40      # demo is the default profile
+ansible-playbook -i inventory.ini site.yml 2>&1 | tail -40      # demo is the default profile
 ```
 
 This adds the registry, MinIO (and its `mlflow-artifacts` bucket, via `scripts/ensure_minio_bucket.py`), MLflow, SonarQube, the custom Jenkins image, Grafana, node-exporter, the systemd units (Prometheus, k8s-exporter, production agent, control panel) and the Jenkins network unit. On the VPS, on top of the production run: `failed=0, changed=20`.
@@ -247,6 +240,7 @@ What the VPS run needed by hand, now done by the playbook (all FIXED, re-test):
 | Jenkins given access to the cluster files with `setfacl` (stages 8–9 need them) | the `kubernetes` cluster tasks grant the ACL to the Jenkins uid only (demo profile) |
 | The Jenkins image's Docker group id: fixed at 999 | built with the host socket's group id; the play checks that Jenkins can reach Docker |
 | A ufw rule so the Jenkins model job can reach MLflow (section 7) | `prerequisites` adds it when ufw is active |
+| The MinIO image built by hand and passed with `-e img_minio=minio-pinned:local` | `prerequisites` builds it from the checksummed release binary (section 5a) |
 
 **Re-run after the fixes** (same VPS, 2 November, in a shell with no `KUBECONFIG`/`MINIKUBE_HOME` exported): `--tags kubernetes` alone, `failed=0` (no `'profile' is undefined`); the full demo run, `failed=0`, the network and ufw tasks `ok` (already in place), the sysctl file and the ACL applied once, the Jenkins→Docker check `ok`, and `11/11 layers up`. The Jenkins image built with `DOCKER_GID` from the host socket: `groups=1000(jenkins),999(dockerhost)`.
 
@@ -337,6 +331,7 @@ VPS: the live validation gave exactly the original VM's numbers, 16,600 requests
 | Disk | `df -h /` before a demo; prune old images (`docker image prune -a` after checking what you need). SonarQube goes read-only at 95% |
 | Change training size or the recall target | Edit **only** `config/model_policy.json` |
 | Rotate credentials | Change the values in `/root/.devsecmlops.env`, re-run the playbook (this rewrites the root-only files and restarts the units), then change Grafana's and SonarQube's passwords in their UIs |
+| Load a change to `monitoring/prometheus.yml` | `systemctl restart prometheus` (the playbook does not restart a running Prometheus); Grafana reads a dashboard file change by itself |
 | Run `kubectl` or `minikube` as root by hand | `export KUBECONFIG=/home/pfe/.kube/config MINIKUBE_HOME=/home/pfe/.minikube` first |
 | Rebuild the venv on Python 3.12 (gap 15: a venv made with Python 3.10 before numpy 2.5.4 was pinned) | See below. A procedure, **not yet run** on the original VM |
 
@@ -348,7 +343,7 @@ cd /root/devsecmlops-pfe
 U=$(grep -l "$PWD/venv/bin" /etc/systemd/system/*.service | xargs -n1 basename); echo "units using the venv: $U"
 systemctl stop $U
 mv venv venv-py310 && python3.12 -m venv venv && venv/bin/pip install -r requirements.txt -r requirements-dev.txt
-venv/bin/python --version && venv/bin/python -m pytest -q tests 2>&1 | tail -1      # Python 3.12.x, 275 passed
+venv/bin/python --version && venv/bin/python -m pytest -q tests 2>&1 | tail -1      # Python 3.12.x, 276 passed
 systemctl start $U && systemctl is-active $U
 # to go back: systemctl stop $U && mv venv venv-py312 && mv venv-py310 venv && systemctl start $U
 ```
@@ -382,12 +377,12 @@ If the first command still answers "accepting connections", the plugin does not 
 | 5 | `devsecmlops-net` never created | the registry task stopped | Created by `prerequisites` (FIXED, re-test) |
 | 6 | Jenkins and the cluster files; Docker group id 999 hard-coded | ACL granted by hand | ACL for the Jenkins uid in `cluster.yml`; the image takes the socket's group id (`DOCKER_GID`), and the play checks Jenkins can reach Docker (FIXED, re-test) |
 | 7 | `vm.max_map_count` | 65530, too low for SonarQube | Set and persisted by `prerequisites` (FIXED, re-test) |
-| 8 | MinIO image deleted upstream | `pull access denied` (Docker Hub), `401` (Quay) | Guide: a local image from the official binary, same release (section 5a). Repository: **open**, a decision is needed (mirror the image into the local registry, or move to a maintained image) |
+| 8 | MinIO image deleted upstream | `pull access denied` (Docker Hub), `401` (Quay) | Built by the playbook from the release binary, SHA-256 checked, `FROM scratch`, non-root; the old root-owned data volume given to its user once (section 5a; FIXED, re-test) |
 | 9 | The control panel summary printed `?/?` | its status call had no credentials | Basic auth on that call (FIXED, re-test) |
 | 10 | The guide checked `:8000/` | `404` by design | Guide checks `/ui` (section 5d) |
 | 11 | ufw blocked the model job → MLflow | `[UFW BLOCK] … DPT=5001` | Rule added by `prerequisites` when ufw is active (FIXED, re-test) |
 | 12 | Model job stage 6 failed without `PROMOTE` | "no artifact hashes" | Hashes recorded on every run; 3 tests. **Confirmed**: the full run on `1b591925` (2 November) passed stage 6 by itself, `Finished: SUCCESS` |
-| 13 | node-exporter series labelled `machine="pfe-vm"` | cosmetic: the label is fixed in `monitoring/prometheus.yml` | Open, cosmetic |
+| 13 | node-exporter series labelled `machine="pfe-vm"`, `type="web"` | read by nothing, and wrong on any other host | Labels removed from `monitoring/prometheus.yml`; the two host panels that showed the raw label set have readable legends (FIXED, re-test) |
 | 14 | `full_verification.sh` outdated | it counted the retired fleet simulator (always 0) and needed the cluster paths exported | Updated (FIXED, re-test: run on the VPS with no paths exported, every check `200`/`active`, 200 machines reporting) |
 | 15 | The original VM's venv is Python 3.10 (numpy 2.2.6) | Found on the original VM after the VPS run (2 November), not on the VPS: `requirements-api.txt` pins numpy 2.5.4 since 27 October (commit `8dced809`), which cannot install on 3.10, so a playbook re-run on the VM stops at the venv check (before that check existed it stopped at the pip step). Nothing that runs is affected: Jenkins tests on Python 3.13 and the image serves on 3.12 | Open: rebuild the VM's venv on Python 3.12 when convenient (section 8; procedure not yet run there) |
 
@@ -400,4 +395,4 @@ Still true from before:
 | A new `docker` group membership does not apply to a running play | The play uses a local connection and cannot refresh it. On a non-root account, log out and in (or `newgrp docker`) after the first Docker install and re-run |
 | The served model's MLflow run lives on the original VM | `/health` names MLflow run `d81b7ea6…`, logged on the VM on 21 October; a new machine's MLflow does not have it, so `scripts/verify_mlflow_artifacts.py` (default mode) only works there. A new machine's own runs are verified with `--report` (section 7) |
 
-Sources [111]–[118] are listed in `docs/SOURCES.md`.
+Sources [111]–[119] are listed in `docs/SOURCES.md`.

@@ -38,6 +38,27 @@ def test_third_party_images_and_postgres_are_pinned_by_digest():
             assert DIGEST.search(ref), f"{p.name}: {ref}"
 
 
+def test_minio_is_built_from_its_checksummed_release_binary():
+    """MinIO no longer publishes free images (VPS test, 1 November): it is built here from the release binary,
+    which the playbook downloads only if its SHA-256 is the pinned one, into an image with nothing else in it,
+    run by an unprivileged user whose uid is the same in every file."""
+    gv = (ROOT / "ansible" / "group_vars" / "all.yml").read_text()
+    release = re.search(r'^minio_release: "(RELEASE\.\d{4}-\d\d-\d\dT\d\d-\d\d-\d\dZ)"$', gv, re.M).group(1)
+    assert re.search(r'^minio_sha256: "[0-9a-f]{64}"$', gv, re.M)
+    assert re.search(r'^img_minio: "\{\{ minio_image_local \}\}"$', gv, re.M) and "minio/minio" not in gv
+    uid = re.search(r"^minio_uid: (\d+)$", gv, re.M).group(1)
+    tasks = (ROOT / "ansible" / "roles" / "prerequisites" / "tasks" / "minio.yml").read_text()
+    assert 'checksum: "sha256:{{ minio_sha256 }}"' in tasks and "ansible.builtin.get_url" in tasks
+    assert "releases/download/{{ minio_release }}/minio.linux-amd64.{{ minio_release }}" in tasks
+    df = (ROOT / "minio" / "Dockerfile").read_text()
+    code = [line for line in df.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    assert code[0] == "FROM scratch" and not any(line.startswith("RUN ") for line in code)
+    assert f"USER {uid}:{uid}" in code and f"--chown={uid}:{uid} data/ /data/" in df
+    assert f"minio:x:{uid}:{uid}:" in (ROOT / "minio" / "passwd").read_text()
+    assert f"minio:x:{uid}:" in (ROOT / "minio" / "group").read_text()
+    assert release.startswith("RELEASE.") and "img_minio" not in pv.CONTAINERS
+
+
 def test_numpy_and_scipy_are_pinned_for_the_model_pickles():
     req = (ROOT / "requirements-api.txt").read_text()
     assert re.search(r"^numpy==\d+\.\d+\.\d+", req, re.M) and re.search(r"^scipy==\d+\.\d+\.\d+", req, re.M)
@@ -60,12 +81,14 @@ def test_pin_versions_rewrites_the_real_files(tmp_path, monkeypatch):
     pins = {"JENKINS_BASE": f"jenkins/jenkins:lts@sha256:{h}", "KUBECTL_SHA256": h, "MINIKUBE_SHA256": h,
             "SONAR_SCANNER_SHA256": h, "TRIVY_VERSION": "0.99.1", "TRIVY_SHA256": h}
     images = {var: f"example/{var}:1.2.3@sha256:{h}" for var in pv.CONTAINERS} | {"postgres": f"postgres:16-alpine@sha256:{h}"}
-    pv.write(pins, images, {"numpy": "9.9.9", "scipy": "8.8.8"})
-    pv.write(pins, images, {"numpy": "9.9.9", "scipy": "8.8.8"})          # idempotent: re-run replaces
+    minio = {"minio_sha256": "c" * 64}
+    pv.write(pins, images, {"numpy": "9.9.9", "scipy": "8.8.8"}, minio)
+    pv.write(pins, images, {"numpy": "9.9.9", "scipy": "8.8.8"}, minio)   # idempotent: re-run replaces
     df = pv.DOCKERFILE.read_text()
     assert "__PIN__" not in df and f"ARG TRIVY_SHA256={h}" in df and "ARG TRIVY_VERSION=0.99.1" in df
     gv = pv.GROUP_VARS.read_text()
     assert all(f'{var}: "example/{var}:1.2.3@sha256:{h}"' in gv for var in pv.CONTAINERS)
+    assert gv.count(f'minio_sha256: "{"c" * 64}"') == 1 and 'img_minio: "{{ minio_image_local }}"' in gv
     for p in pg:
         assert f"image: postgres:16-alpine@sha256:{h}" in p.read_text()
     req = pv.REQUIREMENTS.read_text()

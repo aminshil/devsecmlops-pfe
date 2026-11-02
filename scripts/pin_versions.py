@@ -8,8 +8,10 @@ the Jenkins base image only when it is no longer on the VM, by the version the r
                               if a cleanup removed it, the release of the running Jenkins, pulled by version);
                               kubectl, minikube, sonar-scanner: SHA-256 from the vendors' .sha256 files;
                               Trivy: the version the running Jenkins has, SHA-256 from Trivy's checksums.txt
-  ansible/group_vars/all.yml  grafana, node-exporter, registry, minio, sonarqube: the digest of the image
-                              each running container uses
+  ansible/group_vars/all.yml  grafana, node-exporter, registry, sonarqube: the digest of the image each
+                              running container uses; minio_sha256: the SHA-256 of the MinIO release binary
+                              (minio_release), from the release's own .sha256sum file. MinIO is built here
+                              (minio/Dockerfile), not pulled: it no longer publishes free images
   kubernetes/*.yaml,          postgres:16-alpine: the digest the cluster's PostgreSQL pod runs
   ansible/.../deployment.yaml.j2
   requirements-api.txt        numpy and scipy: the versions inside the serving image (every model pickle
@@ -37,7 +39,8 @@ POSTGRES_FILES = [ROOT / "kubernetes" / "deployment.yaml", ROOT / "kubernetes" /
                   ROOT / "ansible" / "roles" / "kubernetes" / "templates" / "deployment.yaml.j2"]
 REQUIREMENTS = ROOT / "requirements-api.txt"
 CONTAINERS = {"img_grafana": "grafana", "img_node_exporter": "node-exporter", "img_registry": "registry",
-              "img_minio": "minio", "img_sonarqube": "sonarqube"}
+              "img_sonarqube": "sonarqube"}
+MINIO_RELEASES = "https://github.com/minio/minio/releases/download"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -121,6 +124,15 @@ def jenkins_base():
     return f"jenkins/jenkins:{tag}@" + jd[0].split("@")[1], _jenkins_version(info) or "?"
 
 
+def minio_pin():
+    """{"minio_sha256": ...}: the SHA-256 MinIO publishes for the minio_release in all.yml."""
+    m = re.search(r'^minio_release: "(RELEASE\.[0-9TZ:-]+)"$', GROUP_VARS.read_text(), re.M)
+    if not m:
+        raise RuntimeError("ansible/group_vars/all.yml has no minio_release")
+    release = m.group(1)
+    return {"minio_sha256": first_hex(fetch(f"{MINIO_RELEASES}/{release}/minio.linux-amd64.{release}.sha256sum"))}
+
+
 def collect():
     df = DOCKERFILE.read_text()
     pins = {}
@@ -156,10 +168,10 @@ def collect():
     for k, v in pins.items():
         if k.endswith("SHA256") and not HEX64.match(v):
             raise RuntimeError(f"{k}: not a SHA-256: {v!r}")
-    return pins, images, {"numpy": np_sp[0], "scipy": np_sp[1]}, jver
+    return pins, images, {"numpy": np_sp[0], "scipy": np_sp[1]}, jver, minio_pin()
 
 
-def write(pins, images, pkgs):
+def write(pins, images, pkgs, minio=None):
     df = DOCKERFILE.read_text()
     for k, v in pins.items():
         df, n = re.subn(rf"^ARG {k}=\S+$", f"ARG {k}={v}", df, flags=re.M)
@@ -169,6 +181,9 @@ def write(pins, images, pkgs):
     for var in CONTAINERS:
         gv, n = re.subn(rf'^{var}: "[^"]*"$', f'{var}: "{images[var]}"', gv, flags=re.M)
         assert n == 1, var
+    for key, value in (minio or {}).items():
+        gv, n = re.subn(rf'^{key}: "[0-9a-f]*"$', f'{key}: "{value}"', gv, flags=re.M)
+        assert n == 1, key
     GROUP_VARS.write_text(gv)
     for p in POSTGRES_FILES:
         t, n = re.subn(r"image: postgres:16-alpine(@sha256:[0-9a-f]{64})?$", f"image: {images['postgres']}",
@@ -191,7 +206,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="collect and print, write nothing")
     args = ap.parse_args()
     try:
-        pins, images, pkgs, jver = collect()
+        pins, images, pkgs, jver, minio = collect()
     except (RuntimeError, OSError, ValueError, KeyError) as e:
         sys.exit(f"NOTHING WRITTEN: {e}")
     print(f"jenkins/Dockerfile (Jenkins {jver}):")
@@ -200,13 +215,15 @@ def main():
     print("images:")
     for k, v in images.items():
         print(f"  {k:<22} {v}")
+    for k, v in minio.items():
+        print(f"  {k:<22} {v}")
     print("requirements-api.txt:")
     for k, v in pkgs.items():
         print(f"  {k}=={v}")
     if args.dry_run:
         print("dry run: nothing written")
     else:
-        write(pins, images, pkgs)
+        write(pins, images, pkgs, minio)
         print("written: jenkins/Dockerfile, ansible/group_vars/all.yml, the three postgres manifests, requirements-api.txt")
 
 

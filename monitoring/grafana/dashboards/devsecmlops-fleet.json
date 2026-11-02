@@ -1160,7 +1160,7 @@
           },
           "refId": "A",
           "expr": "node_filesystem_avail_bytes{mountpoint=\"/\",job=\"node-exporter\"} / 1e9",
-          "legendFormat": ""
+          "legendFormat": "free on / (GB)"
         }
       ],
       "fieldConfig": {
@@ -1199,7 +1199,7 @@
           },
           "refId": "A",
           "expr": "node_load1{job=\"node-exporter\"}",
-          "legendFormat": ""
+          "legendFormat": "load average (1m)"
         }
       ],
       "options": {

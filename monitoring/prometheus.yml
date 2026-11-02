@@ -43,13 +43,12 @@ scrape_configs:
       - target_label: __address__
         replacement: localhost:9115
 
-  # Host VM hardware (node-exporter container, host network)
+  # The platform host's hardware (node-exporter container, host network). No extra labels: the panels and
+  # the disk and memory alerts select it by job. It used to carry machine="pfe-vm" and type="web", read by
+  # nothing, and wrong on any other host (VPS test, 1 November).
   - job_name: "node-exporter"
     static_configs:
       - targets: ["localhost:9100"]
-        labels:
-          machine: "pfe-vm"
-          type: "web"
 
   # Kubernetes object state (pods ready, restarts, replicas, HPA)
   - job_name: "k8s-exporter"

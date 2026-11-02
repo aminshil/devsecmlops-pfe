@@ -65,39 +65,8 @@
     networks:
       - name: "{{ docker_net_name | default('devsecmlops-net') }}"
 
-- name: Require MinIO root credentials from the environment
-  ansible.builtin.assert:
-    that:
-      - minio_root_user | length > 0
-      - minio_root_password | length >= 12
-    fail_msg: "Set MINIO_ROOT_USER and MINIO_ROOT_PASSWORD (12+ chars) before running the playbook."
-  no_log: true
-
-- name: Ensure MinIO (MLflow artifact store) is running
-  community.docker.docker_container:
-    name: minio
-    image: "{{ img_minio }}"
-    state: started
-    restart_policy: always
-    command: 'server /data --console-address ":9001"'
-    ports: ["9001:9000", "9002:9001"]
-    volumes: ["minio_data:/data"]
-    networks:
-      - name: "{{ docker_net_name | default('devsecmlops-net') }}"
-    env:
-      MINIO_ROOT_USER: "{{ minio_root_user }}"
-      MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
-  no_log: true
-
-- name: Ensure the MLflow artifact bucket exists on MinIO (created if missing, never touched if present)
-  ansible.builtin.command: "{{ repo_dir }}/venv/bin/python {{ repo_dir }}/scripts/ensure_minio_bucket.py --endpoint http://localhost:9001 --bucket mlflow-artifacts"
-  environment:
-    MINIO_ROOT_USER: "{{ minio_root_user }}"
-    MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
-  register: minio_bucket
-  changed_when: "'created' in minio_bucket.stdout"
-  when: not ansible_check_mode   # it can create the bucket, so a dry run skips it
-  no_log: true
+- name: MinIO (image, data volume, container, MLflow bucket)
+  ansible.builtin.include_tasks: minio.yml
 
 - name: Ensure /etc/devsecmlops exists (root-only)
   ansible.builtin.file:

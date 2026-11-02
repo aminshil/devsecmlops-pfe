@@ -332,11 +332,15 @@ measurements are the evidence that it works as configured; these pages define wh
      Hub and Quay) by Chainguard, *Secure and free MinIO Chainguard containers* (27 October 2025).
      https://github.com/minio/minio#source-only-distribution ; https://github.com/minio/minio/issues/21647 ;
      https://www.chainguard.dev/de-DE/unchained/secure-and-free-minio-chainguard-containers
-116. MinIO, GitHub release `RELEASE.2025-09-07T16-13-09Z`: the server binary the VPS's local image was built from
-     (SHA-256 `7c5bd851…fb855f`, commit `07c3a429…`, the same release as the original VM's image).
+116. MinIO, GitHub release `RELEASE.2025-09-07T16-13-09Z`: the server binary `minio/Dockerfile` is built from, and
+     its `.sha256sum` file (SHA-256 `7c5bd851…fb855f`, pinned as `minio_sha256`; commit `07c3a429…`, the same
+     release as the original VM's image).
      https://github.com/minio/minio/releases/tag/RELEASE.2025-09-07T16-13-09Z
 117. Docker, *Packet filtering and firewalls*: "Docker and ufw use firewall rules in ways that make them
      incompatible with each other"; the VPS's container-to-host block (`[UFW BLOCK] IN=docker0 … DPT=5001`).
      https://docs.docker.com/engine/network/packet-filtering-firewalls/
 118. Ansible, *Tags*: the special tag `always` "will always run a task, unless specifically skipped", now on
      `site.yml`'s pre-tasks. https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_tags.html
+119. Docker, *Base images*: the reserved `scratch` image, "a starting point for building containers", for a binary
+     without runtime dependencies (MinIO's release binary is statically linked).
+     https://docs.docker.com/build/building/base-images/
