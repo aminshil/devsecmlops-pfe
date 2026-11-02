@@ -344,3 +344,7 @@ measurements are the evidence that it works as configured; these pages define wh
 119. Docker, *Base images*: the reserved `scratch` image, "a starting point for building containers", for a binary
      without runtime dependencies (MinIO's release binary is statically linked).
      https://docs.docker.com/build/building/base-images/
+120. Ansible, *Interpreter Discovery*: in the default `auto` mode it "searches the configurable list of common Python
+     interpreter paths" and warns that "future installation of another Python interpreter could alter the one
+     chosen"; `ansible_python_interpreter` sets it per host (gap 16).
+     https://docs.ansible.com/ansible/11/reference_appendices/interpreter_discovery.html

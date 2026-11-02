@@ -11,7 +11,7 @@ This guide takes a blank Ubuntu machine to the running platform: the CI/CD tooli
 | **FIXED, re-test** | The VPS run needed a manual step here; the playbook or a script now does it (commit `1b591925`). Confirmed by a re-run on the VPS (2 November), not yet by a second clean install |
 | **MANUAL** | Not automated: done by hand in a web UI, the settings live in Docker volumes |
 
-Section 9 lists the 14 gaps the VPS run found, a 15th found afterwards on the original VM, and what became of each.
+Section 9 lists the 14 gaps the VPS run found, two more (15 and 16) found afterwards on the original VM, and what became of each.
 
 ---
 
@@ -58,6 +58,8 @@ pip3 install "ansible-core==2.17.14" docker==7.1.0
 ansible --version | head -1                                              # ansible [core 2.17.14]
 python3 -c "import docker; print('docker SDK', docker.__version__)"     # docker SDK 7.1.0
 ```
+
+Install them like this, for the system Python, not inside the app's venv (section 2): rebuilding the venv (section 8) would delete them. `ansible/inventory.ini` makes Ansible run its modules with `/usr/bin/python3`, the Python these packages belong to, whichever venv is active (gap 16).
 
 On a machine with a desktop (the VPS was used over RDP), **do not run `apt autoremove`** after removing the apt `ansible` package: it offers to remove packages the desktop session needs.
 
@@ -375,7 +377,7 @@ If the first command still answers "accepting connections", the plugin does not 
 
 ---
 
-## 9. Gaps found on the clean machine (VPS, 31 October – 1 November 2026; gap 15 on the original VM)
+## 9. Gaps found on the clean machine (VPS, 31 October – 1 November 2026; gaps 15 and 16 on the original VM)
 
 | # | Gap | What happened on the VPS | State |
 |---|---|---|---|
@@ -386,7 +388,7 @@ If the first command still answers "accepting connections", the plugin does not 
 | 5 | `devsecmlops-net` never created | the registry task stopped | Created by `prerequisites` (FIXED, re-test) |
 | 6 | Jenkins and the cluster files; Docker group id 999 hard-coded | ACL granted by hand | ACL for the Jenkins uid in `cluster.yml`; the image takes the socket's group id (`DOCKER_GID`), and the play checks Jenkins can reach Docker (FIXED, re-test) |
 | 7 | `vm.max_map_count` | 65530, too low for SonarQube | Set and persisted by `prerequisites` (FIXED, re-test) |
-| 8 | MinIO image deleted upstream | `pull access denied` (Docker Hub), `401` (Quay) | Built by the playbook from the release binary, SHA-256 checked, `FROM scratch`, non-root; the old root-owned data volume given to its user once (section 5a; FIXED, re-test) |
+| 8 | MinIO image deleted upstream | `pull access denied` (Docker Hub), `401` (Quay) | Built by the playbook from the release binary, SHA-256 checked, `FROM scratch`, non-root; the old root-owned data volume given to its user once (section 5a; FIXED, re-test). On the original VM (2 November) the playbook switched MinIO and its 259 MB of MLflow data to the built image: run as uid 10002, no error in its log, the served model's 6 files read back identical (`scripts/verify_mlflow_artifacts.py`) |
 | 9 | The control panel summary printed `?/?` | its status call had no credentials | Basic auth on that call (FIXED, re-test) |
 | 10 | The guide checked `:8000/` | `404` by design | Guide checks `/ui` (section 5d) |
 | 11 | ufw blocked the model job → MLflow | `[UFW BLOCK] … DPT=5001` | Rule added by `prerequisites` when ufw is active (FIXED, re-test) |
@@ -394,6 +396,7 @@ If the first command still answers "accepting connections", the plugin does not 
 | 13 | node-exporter series labelled `machine="pfe-vm"`, `type="web"` | read by nothing, and wrong on any other host | Labels removed from `monitoring/prometheus.yml`; the two host panels that showed the raw label set have readable legends (FIXED, re-test) |
 | 14 | `full_verification.sh` outdated | it counted the retired fleet simulator (always 0) and needed the cluster paths exported | Updated (FIXED, re-test: run on the VPS with no paths exported, every check `200`/`active`, 200 machines reporting) |
 | 15 | The original VM's venv was Python 3.10 (numpy 2.2.6) | Found on the original VM after the VPS run (2 November), not on the VPS: `requirements-api.txt` pins numpy 2.5.4 since 27 October (commit `8dced809`), which cannot install on 3.10, so a playbook re-run on the VM stopped at the venv check (before that check existed it stopped at the pip step). Nothing that ran was affected: Jenkins tests on Python 3.13 and the image serves on 3.12 | **FIXED** on the VM, 2 November: venv rebuilt on Python 3.12.16 (section 8), numpy 2.5.4, 276 tests passed |
+| 16 | Ansible ran its modules with whichever Python 3.12 it found first | Found on the original VM (2 November), re-running the playbook after gap 15: ansible-core 2.17 tries `python3.12` before `/usr/bin/python3` [120]. On the VPS the app venv was active, so it took the venv's Python and passed by chance; on the VM no venv was active, so it took deadsnakes' `/usr/bin/python3.12`, which loads Ubuntu's `pkg_resources` for Python 3.10, and the `pip` module stopped (`module 'pkgutil' has no attribute 'ImpImporter'`). The VM's Ansible had also been installed inside the old venv, so it went with the venv rebuild | **FIXED**: `inventory.ini` sets `ansible_python_interpreter=/usr/bin/python3`; Ansible reinstalled for the system Python (section 1). Re-run on the VM, 2 November: `failed=0`, 11/11 layers up, the API's 4 pods and Postgres `Running` |
 
 Still true from before:
 
@@ -404,4 +407,4 @@ Still true from before:
 | A new `docker` group membership does not apply to a running play | The play uses a local connection and cannot refresh it. On a non-root account, log out and in (or `newgrp docker`) after the first Docker install and re-run |
 | The served model's MLflow run lives on the original VM | `/health` names MLflow run `d81b7ea6…`, logged on the VM on 21 October; a new machine's MLflow does not have it, so `scripts/verify_mlflow_artifacts.py` (default mode) only works there. A new machine's own runs are verified with `--report` (section 7) |
 
-Sources [111]–[119] are listed in `docs/SOURCES.md`.
+Sources [111]–[120] are listed in `docs/SOURCES.md`.
