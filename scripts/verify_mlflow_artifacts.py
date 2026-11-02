@@ -6,7 +6,9 @@ compare each one, byte for byte through its SHA-256, with the hashes the pipelin
   default         the served model: models/manifest.json production.mlflow_run_id, compared with
                   production.artifacts (the six files the image bakes in and the API checks at start)
   --report FILE   a training run's report (Jenkinsfile.model stage 6): its mlflow_run_id, compared
-                  with threshold_selection.artifacts (the candidate's six files)
+                  with candidate_artifacts (the candidate's six files, recorded on every run; reports
+                  written before that field existed carry them in threshold_selection.artifacts,
+                  with --promote only)
 
 Exit 0 only if every expected file is in the run and matches. Output is printed and, with --out,
 written as JSON. Read-only: files are downloaded to memory, nothing is written under models/.
@@ -50,8 +52,11 @@ def expected_hashes(args):
     if args.report:
         rep = json.loads(args.report.read_text())
         run_id = rep.get("mlflow_run_id")
-        arts = (rep.get("threshold_selection") or {}).get("artifacts") or {}
-        source = f"{args.report} (threshold_selection.artifacts)"
+        if rep.get("candidate_artifacts"):
+            arts, field = rep["candidate_artifacts"], "candidate_artifacts"
+        else:
+            arts, field = (rep.get("threshold_selection") or {}).get("artifacts") or {}, "threshold_selection.artifacts"
+        source = f"{args.report} ({field})"
     else:
         prod = json.loads((ROOT / "models" / "manifest.json").read_text()).get("production") or {}
         run_id = prod.get("mlflow_run_id")

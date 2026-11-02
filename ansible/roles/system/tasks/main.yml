@@ -127,6 +127,7 @@
       - python3-pip
       - build-essential
       - python3-docker   # Docker SDK for Python, needed by the community.docker modules
+      - acl              # setfacl: the Jenkins user's access to the cluster files (kubernetes/cluster.yml)
     state: present
     update_cache: true
   become: true

@@ -1,0 +1,63 @@
+---
+# ===========================================================================
+# kubernetes/cluster.yml: start Minikube and its metrics-server, nothing else.
+# Included first by kubernetes/main.yml, and earlier by the roles that need a
+# running cluster before the kubernetes role's turn (VPS test, 1 November):
+#   - secrets (production): it applies the database Secret with kubectl
+#   - prerequisites (demo): it attaches Jenkins to the Docker network called
+#     "minikube", which only Minikube itself must create (192.168.49.0/24)
+# Idempotent: a running cluster is left alone, so including it twice is free.
+# The cluster files live under minikube_home and kubeconfig_path (site.yml
+# exports both for every task), the paths the Jenkins container mounts.
+# ===========================================================================
+
+- name: Check whether Minikube is already running
+  ansible.builtin.command: "{{ bin_minikube }} status --format '{{ '{{' }}.Host{{ '}}' }}'"
+  register: mk_status
+  changed_when: false
+  failed_when: false   # expected: non-zero whenever Minikube is stopped -- that is what this checks
+  check_mode: false   # read-only probe: runs for real in --check so later 'when:' tests are right
+
+- name: Start Minikube (Docker driver, forced)
+  ansible.builtin.command: "{{ bin_minikube }} start --driver=docker --force"
+  when: "'Running' not in mk_status.stdout"
+  register: mk_start
+  changed_when: "'Done' in mk_start.stdout or mk_start.rc == 0"
+
+- name: Enable the metrics-server addon (HPA CPU metrics)
+  ansible.builtin.command: "{{ bin_minikube }} addons enable metrics-server"
+  register: ms_enable
+  changed_when: "'enabled' in ms_enable.stdout and 'already' not in ms_enable.stdout"
+  # The HPA cannot scale without metrics-server, so a failure here must stop the play.
+  failed_when: ms_enable.rc != 0
+
+# Demo profile only: the Jenkins container (user jenkins, uid jenkins_uid) bind-mounts these two
+# directories for its deploy stages. Minikube writes them root-only, so without this grant stages 8-9
+# fail with "permission denied" (VPS test: it was granted by hand). A POSIX ACL for that one uid, never
+# world access: the directories hold the cluster CA key and the admin credentials. The default ACL (d:)
+# makes the files Minikube writes later inherit the grant; scripts/k8s_recover.sh re-applies it after a
+# cluster rebuild. Production runs no Jenkins, so it grants nothing.
+- name: Check whether the Jenkins user already has access to the cluster files (demo)
+  ansible.builtin.shell: >-
+    getfacl -pn {{ minikube_home }} {{ kubeconfig_path | dirname }} 2>/dev/null
+    | grep -c '^default:user:{{ jenkins_uid }}:rwx'
+  register: jenkins_acl
+  changed_when: false
+  failed_when: false   # expected: no match (count 0, exit 1) until the grant exists
+  # -n: numeric ids. Without it getfacl prints the host's NAME for uid 1000 (the VPS: pfe-amin), the
+  # pattern never matched and the grant re-ran on every play (VPS re-run, 2 November)
+  check_mode: false   # read-only probe
+  when: run_support_containers | default(false)
+
+- name: Grant the Jenkins user (uid {{ jenkins_uid }}) access to the cluster files, nobody else (demo)
+  ansible.builtin.shell: |
+    set -o pipefail
+    chmod -R o-rwx {{ minikube_home }} {{ kubeconfig_path | dirname }}
+    setfacl -R -m u:{{ jenkins_uid }}:rwX -m d:u:{{ jenkins_uid }}:rwX {{ minikube_home }} {{ kubeconfig_path | dirname }}
+  args:
+    executable: /bin/bash
+  changed_when: true
+  become: true
+  when:
+    - run_support_containers | default(false)
+    - (jenkins_acl.stdout | default('0') | trim) != '2'

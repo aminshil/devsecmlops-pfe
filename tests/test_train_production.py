@@ -306,6 +306,18 @@ def test_guardrail_without_promote_is_a_test_set_preview(tiny_fleet, promoted, t
     assert run["candidate_guardrail_evaluation"] is None
 
 
+def test_report_records_candidate_hashes_without_promote(tiny_fleet, promoted, tmp_path):
+    """Without --promote no threshold is selected (threshold_selection is null), but the report still carries
+    the SHA-256 of the six candidate files, which Jenkinsfile.model stage 6 compares with MLflow's copies."""
+    models = tmp_path / "models"
+    shutil.copytree(promoted["models"], models)
+    report, work = tmp_path / "r.json", tmp_path / "w"
+    tp.main(_args(tiny_fleet, models, work, "--report", str(report)))
+    run = json.loads(report.read_text())
+    assert run["threshold_selection"] is None
+    assert run["candidate_artifacts"] == {f"models/{n}": tp.sha256(work / n) for n in tp.ARTIFACTS.values()}
+
+
 def test_gate_model_name_check_cannot_be_skipped_by_formatting(tmp_path):
     """A file that sets MODEL_NAME in a form the gate's pattern cannot read is a failure, not a silent
     skip (external review, 27 October); an unquoted Ansible value is read, not skipped."""

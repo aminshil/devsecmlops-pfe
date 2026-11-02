@@ -65,3 +65,7 @@ models/baselines_*.json
 
 # patch files exchanged during development
 devsecmlops_*.patch
+
+# The production profile's Vault file (encrypted, but it holds the database password: never committed;
+# scripts/make_production_secrets.sh creates it, ansible/group_vars/production_secrets.yml.example shows the shape)
+ansible/group_vars/production_secrets.yml

@@ -694,6 +694,10 @@ def run_pipeline(args) -> int:
         "candidate_guardrail_evaluation": guard_cand,
         "production_guardrail_evaluation": guard_prod,
         "threshold_selection": selection,
+        # SHA-256 of the six candidate files this run evaluated and logs to MLflow, recorded on every run
+        # (not only with --promote): Jenkinsfile.model stage 6 reads them back from MLflow (MinIO) and
+        # compares (scripts/verify_mlflow_artifacts.py --report)
+        "candidate_artifacts": {f"models/{n}": sha256(args.work_dir / n) for n in ARTIFACTS.values()},
         "promoted": False,
         "mlflow_run_id": None,
     }

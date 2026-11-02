@@ -91,10 +91,18 @@ RUN curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY
     && rm /tmp/trivy.tar.gz
 
 # --- let the jenkins user (uid 1000) reach the mounted docker.sock; its GID
-#     must match the socket's actual host GID (999 on this VM) -- see the
-#     "why do we do that now" incident: usermod alone with a mismatched GID
-#     silently doesn't grant access -----------------------------------------
-RUN groupadd -f -g 999 dockerhost && usermod -aG dockerhost jenkins
+#     must match the socket's actual host GID -- see the "why do we do that
+#     now" incident: usermod alone with a mismatched GID silently doesn't
+#     grant access. The Ansible prerequisites role passes the host's value
+#     (stat of /var/run/docker.sock); 999 is the original VM's and the VPS's.
+#     If a group already has that id in the image, jenkins joins that group:
+#     `groupadd -f -g` would silently pick ANOTHER id instead -------------------
+ARG DOCKER_GID=999
+RUN if getent group "${DOCKER_GID}" >/dev/null; then \
+        usermod -aG "$(getent group "${DOCKER_GID}" | cut -d: -f1)" jenkins; \
+    else \
+        groupadd -g "${DOCKER_GID}" dockerhost && usermod -aG dockerhost jenkins; \
+    fi
 
 USER jenkins
 

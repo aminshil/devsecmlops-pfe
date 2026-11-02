@@ -35,10 +35,15 @@ def serve(files):
     return srv
 
 
-def run(tmp_path, served, recorded):
+def run(tmp_path, served, recorded, field="threshold_selection"):
     report = tmp_path / "report.json"
-    report.write_text(json.dumps({"mlflow_run_id": "r1", "threshold_selection": {
-        "artifacts": {f"models/{n}": hashlib.sha256(b).hexdigest() for n, b in recorded.items()}}}))
+    hashes = {f"models/{n}": hashlib.sha256(b).hexdigest() for n, b in recorded.items()}
+    rep = {"mlflow_run_id": "r1", "threshold_selection": None}
+    if field == "candidate_artifacts":
+        rep["candidate_artifacts"] = hashes             # every run since the VPS test (no --promote needed)
+    else:
+        rep["threshold_selection"] = {"artifacts": hashes}   # older reports: --promote runs only
+    report.write_text(json.dumps(rep))
     srv = serve(served)
     try:
         return subprocess.run([sys.executable, str(ROOT / "scripts" / "verify_mlflow_artifacts.py"),
@@ -64,3 +69,16 @@ def test_a_changed_file_fails(tmp_path):
 def test_a_missing_file_fails(tmp_path):
     r = run(tmp_path, {"telecom_xgb_classifier_v2.pkl": FILES["telecom_xgb_classifier_v2.pkl"]}, FILES)
     assert r.returncode == 1 and "missing from the run" in r.stdout
+
+
+def test_a_run_without_promote_is_verified_from_candidate_artifacts(tmp_path):
+    """SCOPE=full with PROMOTE off: no threshold is selected, so threshold_selection is null; the hashes
+    come from candidate_artifacts (stage 6 failed with "no artifact hashes" before, VPS test 1 November)."""
+    r = run(tmp_path, FILES, FILES, field="candidate_artifacts")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "(candidate_artifacts)" in r.stdout
+
+
+def test_a_changed_file_fails_from_candidate_artifacts(tmp_path):
+    r = run(tmp_path, {**FILES, "telecom_baselines_v2.json": b'{"a": 2}'}, FILES, field="candidate_artifacts")
+    assert r.returncode == 1 and "DIFFERENT" in r.stdout

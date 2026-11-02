@@ -87,11 +87,17 @@
     timeout: 30
 
 - name: Fetch platform layer status from the control panel
+  # /ui/* requires the operations-UI Basic auth: without it the call got a 401 and the summary below
+  # printed "?/? layers up" (VPS test, 1 November)
   ansible.builtin.uri:
     url: "http://localhost:{{ port_control_panel }}/ui/status"
+    url_username: "{{ ops_ui_user }}"
+    url_password: "{{ ops_ui_password }}"
+    force_basic_auth: true
     return_content: true
   register: status_resp
   failed_when: false
+  no_log: true
 
 - name: Report how many layers are up
   ansible.builtin.debug:

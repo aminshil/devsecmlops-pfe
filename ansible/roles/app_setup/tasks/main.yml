@@ -14,8 +14,31 @@
     path: "{{ repo_dir }}/venv/bin/activate"
   register: venv_stat
 
+# requirements-api.txt pins numpy 2.5.4; NumPy 2.5 supports Python 3.12 to 3.14 (its release notes).
+# Ubuntu 22.04's python3 is 3.10, so pip stopped half-way through the dependencies (VPS test, 31 October). Checked before anything
+# is installed, on the interpreter that will actually run: the existing venv's, else venv_python's.
+- name: Check the Python version the virtualenv uses (3.12 or newer)
+  ansible.builtin.command: >-
+    {{ (repo_dir ~ '/venv/bin/python') if venv_stat.stat.exists else venv_python }}
+    -c 'import sys; print(sys.version.split()[0]); sys.exit(sys.version_info < (3, 12))'
+  register: venv_python_check
+  changed_when: false
+  failed_when: false   # reported by the assert below, with what to do
+  check_mode: false   # read-only probe
+
+- name: Require Python 3.12 or newer for the virtualenv
+  ansible.builtin.assert:
+    that: venv_python_check.rc == 0
+    fail_msg: >-
+      {{ 'The existing venv' if venv_stat.stat.exists else venv_python }} runs Python
+      {{ venv_python_check.stdout | default('?') }}: numpy 2.5.4 needs 3.12 or newer. On Ubuntu 22.04:
+      add-apt-repository -y ppa:deadsnakes/ppa && apt-get install -y python3.12 python3.12-venv,
+      {{ 'delete the venv, ' if venv_stat.stat.exists else '' }}then re-run with -e venv_python=python3.12
+      (docs/INFRASTRUCTURE_SETUP.md, section 1).
+    quiet: true
+
 - name: Create the Python virtualenv (if missing)
-  ansible.builtin.command: "python3 -m venv {{ repo_dir }}/venv"
+  ansible.builtin.command: "{{ venv_python }} -m venv {{ repo_dir }}/venv"
   args:
     creates: "{{ repo_dir }}/venv/bin/activate"
   when: not venv_stat.stat.exists

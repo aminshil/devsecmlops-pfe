@@ -2,6 +2,11 @@
 # Complete end-to-end verification of every layer, output saved to a file.
 
 OUT="/tmp/full_verification_$(date +%Y%m%d_%H%M%S).txt"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+# The cluster files the playbook and Jenkins use (ansible/group_vars/all.yml). Without them kubectl and
+# minikube run as root looked in /root/.kube and /root/.minikube and every L4 check failed (VPS test).
+export KUBECONFIG="${KUBECONFIG:-/home/pfe/.kube/config}"
+export MINIKUBE_HOME="${MINIKUBE_HOME:-/home/pfe/.minikube}"
 
 {
 echo "════════════════════════════════════════════════════════════════"
@@ -11,6 +16,8 @@ echo "════════════════════════�
 
 echo ""
 echo "════════════════════ L0/L1: ML MODEL + API ════════════════════"
+echo "(host API on :8000, the control panel's process: it has no database, so prediction_id is null;"
+echo " the cluster API, which stores predictions, is checked in L4)"
 echo "--- /health ---"
 curl -s -m 5 http://localhost:8000/health | python3 -m json.tool 2>&1 || echo "API NOT REACHABLE"
 
@@ -79,12 +86,12 @@ echo ""
 echo "--- Live endpoint via NodePort ---"
 MINIKUBE_IP=$(minikube ip 2>/dev/null)
 echo "Minikube IP: $MINIKUBE_IP"
-curl -s -m 5 http://$MINIKUBE_IP:30080/health 2>&1 | python3 -m json.tool 2>&1
+curl -s -m 5 "http://$MINIKUBE_IP:30080/health" 2>&1 | python3 -m json.tool 2>&1
 
 echo ""
 echo "════════════════════ L5: MONITORING ════════════════════"
 echo "--- Background processes ---"
-ps aux | grep -E "node_exporter|prometheus --config|fleet_simulator|anomaly_bridge|grafana server" | grep -v grep 2>&1
+pgrep -af "node_exporter|prometheus --config|grafana server|production_agent.py|k8s_exporter.py|mlflow server" 2>&1
 
 echo ""
 echo "--- Prometheus health ---"
@@ -104,16 +111,35 @@ echo "--- Grafana health ---"
 curl -s -m 5 http://localhost:3000/api/health 2>&1
 
 echo ""
-echo "--- Fleet simulator: machine count ---"
-curl -s -m 5 'http://localhost:9090/api/v1/query?query=sim_cpu_percent' 2>&1 | python3 -c "
+echo "--- Host services (systemd) ---"
+for u in prometheus k8s-exporter production-agent control-panel mlflow prometheus-watchdog; do
+  echo "$u: $(systemctl is-active "$u" 2>&1)"
+done
+
+echo ""
+echo "--- Machines reporting (production agent -> serving pods -> Prometheus) ---"
+# the retired fleet simulator's sim_cpu_percent always read 0 here (VPS test); these are the recording
+# rules the Grafana dashboard and the Telegram list use (monitoring/alerting/alert_rules.yml)
+for q in 'count(fleet:machine_silent == 0)' 'count(fleet:machine_silent == 1)' 'count(fleet:machine_confirmed:now == 1)'; do
+  curl -s -m 5 -G 'http://localhost:9090/api/v1/query' --data-urlencode "query=$q" 2>&1 | python3 -c "
 import json,sys
-d = json.load(sys.stdin)
-print('machines found:', len(d['data']['result']))
-" 2>&1
+r = json.load(sys.stdin)['data']['result']
+print(f'{sys.argv[1]:42} ->', r[0]['value'][1] if r else '0')
+" "$q" 2>&1
+done
+
+echo ""
+echo "--- Alertmanager (Telegram) ---"
+curl -s -m 5 -o /dev/null -w "ready: HTTP %{http_code}\n" http://localhost:9093/-/ready 2>&1
+
+echo ""
+echo "--- MLflow and MinIO (demo profile) ---"
+curl -s -m 5 -o /dev/null -w "MLflow /health: HTTP %{http_code}\n" http://localhost:5001/health 2>&1
+curl -s -m 5 -o /dev/null -w "MinIO /minio/health/live: HTTP %{http_code}\n" http://localhost:9001/minio/health/live 2>&1
 
 echo ""
 echo "════════════════════ GIT + VERSION ════════════════════"
-cd ~/devsecmlops-pfe || exit 1
+cd "$REPO" || exit 1
 echo "--- git status ---"
 git status --short 2>&1
 

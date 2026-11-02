@@ -34,6 +34,13 @@ ops_ui_password: "{{ lookup('ansible.builtin.env', 'OPS_UI_PASSWORD') }}"
 feedback_token: "{{ lookup('ansible.builtin.env', 'FEEDBACK_TOKEN') }}"
 kubeconfig_path: /home/pfe/.kube/config
 minikube_home: /home/pfe/.minikube
+# uid of the jenkins user in the Jenkins image (the official image's): the only user granted the cluster files
+jenkins_uid: 1000
+# Docker network shared by Jenkins, SonarQube, the registry and MinIO (name resolution between them)
+docker_net_name: devsecmlops-net
+# interpreter for the virtualenv: Python 3.12 or newer (numpy 2.5.4 supports 3.12-3.14). Ubuntu 22.04 ships 3.10:
+# install python3.12 (deadsnakes PPA) and run with -e venv_python=python3.12 (docs/INFRASTRUCTURE_SETUP.md)
+venv_python: python3
 minio_root_user: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
 minio_root_password: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
 jenkins_image_tag: "2.2"   # 2.2: base image and tools pinned with checksums (jenkins/Dockerfile)

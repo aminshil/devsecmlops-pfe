@@ -22,6 +22,31 @@
     msg: "venv not found at {{ repo_dir }}/venv — create with: python3 -m venv venv && pip install -r requirements.txt"
   when: not venv_stat.stat.exists
 
+- name: Ensure the platform Docker network exists ({{ docker_net_name }})
+  # Every support container below joins it, and Jenkins reaches them by name over it. Nothing created it:
+  # a clean machine stopped at the registry with "network devsecmlops-net not found" (VPS test, 1 November).
+  community.docker.docker_network:
+    name: "{{ docker_net_name }}"
+    state: present
+
+- name: Raise vm.max_map_count for SonarQube's Elasticsearch (persistent, applied now)
+  # SonarQube's documentation requires at least 524288 (docs/SOURCES.md, 114); Ubuntu's default is
+  # 65530 (VPS test, 1 November: set by hand there).
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-sonarqube.conf
+    mode: "0644"
+    content: |
+      # SonarQube (Elasticsearch): written by the Ansible prerequisites role
+      vm.max_map_count=524288
+  register: sysctl_file
+  become: true
+
+- name: Apply the sysctl setting (when the file changed)
+  ansible.builtin.command: sysctl -p /etc/sysctl.d/99-sonarqube.conf
+  when: sysctl_file.changed
+  changed_when: true
+  become: true
+
 - name: Ensure local Docker registry is running
   community.docker.docker_container:
     name: registry
@@ -125,6 +150,37 @@
     state: started
   become: true
 
+# The Jenkins model job reaches MLflow on the host through Docker's default bridge (Jenkinsfile.model:
+# MLFLOW_TRACKING_URI=http://172.17.0.1:5001; Jenkins' address there is 172.17.0.x). On a host whose
+# firewall (ufw) is active with a default-deny policy, that traffic is dropped and the full scope stops
+# at "MLflow is not reachable" (VPS test, 1 November). One rule opens the port to that bridge only;
+# nothing changes on the public interface. Hosts without ufw, or with ufw inactive, are left alone.
+- name: Check whether ufw is installed and active
+  ansible.builtin.command: ufw status
+  register: ufw_status
+  changed_when: false
+  failed_when: false   # expected: ufw not installed (rc 127/2) -- then there is nothing to open
+  check_mode: false   # read-only probe
+  become: true
+
+- name: Read Docker's default bridge (subnet and gateway)
+  ansible.builtin.command: >-
+    docker network inspect bridge
+    -f '{{ '{{' }}(index .IPAM.Config 0).Subnet{{ '}}' }} {{ '{{' }}(index .IPAM.Config 0).Gateway{{ '}}' }}'
+  register: docker_bridge
+  changed_when: false
+  check_mode: false   # read-only probe
+  when: "'Status: active' in ufw_status.stdout"
+
+- name: Allow the Docker bridge to reach MLflow (:5001) through ufw
+  ansible.builtin.command: >-
+    ufw allow from {{ docker_bridge.stdout.split()[0] }} to {{ docker_bridge.stdout.split()[1] }}
+    port 5001 proto tcp comment 'Jenkins container -> MLflow'
+  register: ufw_rule
+  changed_when: "'Rule added' in ufw_rule.stdout"
+  become: true
+  when: "'Status: active' in ufw_status.stdout"
+
 - name: Ensure SonarQube (SAST) is running
   community.docker.docker_container:
     name: sonarqube
@@ -142,6 +198,11 @@
   # CI pipeline reaches it as http://sonarqube:9000 (Docker name resolution).
   # Both are correct in their respective network contexts.
 
+- name: Read the group that owns the Docker socket (the Jenkins user must be in it)
+  ansible.builtin.stat:
+    path: /var/run/docker.sock
+  register: docker_sock
+
 - name: Build the custom Jenkins image (python3, kubectl, minikube, sonar-scanner, docker CLI, trivy)
   community.docker.docker_image:
     name: devsecmlops-jenkins
@@ -149,6 +210,9 @@
     build:
       path: "{{ repo_dir }}/jenkins"
       pull: false
+      # the socket's group id on THIS host (999 on the original VM and the VPS; other installs differ)
+      args:
+        DOCKER_GID: "{{ docker_sock.stat.gid }}"
     source: build
     force_source: false
 
@@ -178,13 +242,31 @@
   # boot -- see that task for why a static `networks:` list here isn't
   # enough on its own.
 
+- name: Check that the jenkins user can use the Docker socket (its image was built for another group id otherwise)
+  ansible.builtin.command: docker exec jenkins docker version --format '{{ '{{' }}.Server.Version{{ '}}' }}'
+  register: jenkins_docker
+  changed_when: false
+  failed_when: jenkins_docker.rc != 0
+  when: not ansible_check_mode   # in a dry run the container may not exist yet
+  # On failure: the image predates this host's socket group. Rebuild it:
+  #   docker rm -f jenkins && docker rmi devsecmlops-jenkins:{{ jenkins_image_tag }}   then re-run the playbook
+  # (jobs and credentials live in the jenkins_home volume, which is kept)
+
+- name: Start the cluster before attaching Jenkins to its network (only Minikube may create "minikube")
+  # docker_network below would otherwise create a plain network of that name on a machine where
+  # Minikube never ran, with the wrong address range (formerly worked around by a first pass with
+  # --tags system,app_setup,kubernetes; docs/INFRASTRUCTURE_SETUP.md section 5)
+  ansible.builtin.include_role:
+    name: kubernetes
+    tasks_from: cluster
+
 - name: Attach Jenkins to its required networks (devsecmlops-net for SonarQube/registry DNS, minikube for the K8s API)
   community.docker.docker_network:
     name: "{{ item }}"
     connected: ["jenkins"]
     appends: true
   loop:
-    - devsecmlops-net
+    - "{{ docker_net_name }}"
     - minikube
 
 - name: Install the jenkins-networks systemd unit

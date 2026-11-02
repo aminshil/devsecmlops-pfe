@@ -314,3 +314,29 @@ measurements are the evidence that it works as configured; these pages define wh
      operation" (an unexpected disconnect, for one). https://www.psycopg.org/psycopg3/docs/api/errors.html
 110. Pydantic, *Validators*: `field_validator`, behind the machine-name, metrics, history and root-cause batch
      checks. https://docs.pydantic.dev/latest/concepts/validators/
+
+**The clean-machine test (VPS, 31 October – 1 November 2026; `docs/INFRASTRUCTURE_SETUP.md`)**
+
+111. NumPy, *NumPy 2.5.0 released* (numpy-discussion): "supports Python versions 3.12-3.14", behind the venv's
+     Python 3.12 floor (Ubuntu 22.04 ships 3.10).
+     https://mail.python.org/archives/list/numpy-discussion@python.org/thread/X7VS26GJPEVQC2A32WMIB2G4OACURDWM/
+112. deadsnakes, *New Python Versions* PPA: "more recent Python versions packaged for Ubuntu" (20.04, 22.04, 24.04);
+     where the VPS's python3.12 came from. https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa
+113. Ansible community, *community.docker* collection README: "Ansible/ansible-base versions before 2.17.0 are not
+     supported" (Ubuntu 22.04's apt Ansible is 2.10.8). https://github.com/ansible-collections/community.docker
+114. SonarSource, *Pre-installation steps on Linux*: `vm.max_map_count` greater than or equal to 524288, made
+     permanent in `/etc/sysctl.d/99-sonarqube.conf`.
+     https://docs.sonarsource.com/sonarqube-server/server-installation/pre-installation/linux
+115. MinIO, README, *Source-only distribution*, and issue #21647: the community edition is distributed as source;
+     summarised with its date (23 October 2025: free images no longer published, existing ones removed from Docker
+     Hub and Quay) by Chainguard, *Secure and free MinIO Chainguard containers* (27 October 2025).
+     https://github.com/minio/minio#source-only-distribution ; https://github.com/minio/minio/issues/21647 ;
+     https://www.chainguard.dev/de-DE/unchained/secure-and-free-minio-chainguard-containers
+116. MinIO, GitHub release `RELEASE.2025-09-07T16-13-09Z`: the server binary the VPS's local image was built from
+     (SHA-256 `7c5bd851…fb855f`, commit `07c3a429…`, the same release as the original VM's image).
+     https://github.com/minio/minio/releases/tag/RELEASE.2025-09-07T16-13-09Z
+117. Docker, *Packet filtering and firewalls*: "Docker and ufw use firewall rules in ways that make them
+     incompatible with each other"; the VPS's container-to-host block (`[UFW BLOCK] IN=docker0 … DPT=5001`).
+     https://docs.docker.com/engine/network/packet-filtering-firewalls/
+118. Ansible, *Tags*: the special tag `always` "will always run a task, unless specifically skipped", now on
+     `site.yml`'s pre-tasks. https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_tags.html

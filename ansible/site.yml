@@ -23,25 +23,46 @@
   vars:
     _profile_default: "demo"
 
+  # Every task (and the scripts it runs) uses the cluster files the Jenkins container mounts, whatever
+  # the shell that started the play exported. Without this, minikube and kubectl as root use
+  # /root/.minikube and /root/.kube, a second cluster Jenkins cannot see (VPS test, 1 November).
+  environment:
+    KUBECONFIG: "{{ kubeconfig_path }}"
+    MINIKUBE_HOME: "{{ minikube_home }}"
+
   pre_tasks:
-    - name: Resolve the profile (CLI -e profile=... takes priority)
-      ansible.builtin.set_fact:
-        profile: "{{ profile | default(_profile_default) }}"
-    - name: Load the selected profile's variables
-      ansible.builtin.include_vars: "group_vars/{{ profile }}.yml"
-    - name: Look for the Vault-encrypted production secrets file
-      ansible.builtin.stat:
-        path: "{{ playbook_dir }}/group_vars/production_secrets.yml"
-      register: _prod_secrets
-      when: profile == 'production'
-    - name: Load the production secrets (vault_db_password)
-      ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/group_vars/production_secrets.yml"
-      when: profile == 'production' and _prod_secrets.stat.exists
-      # Without that file db_password stays CHANGE_ME_VIA_VAULT and the secrets role stops with a clear message.
-    - name: Announce the profile
-      ansible.builtin.debug:
-        msg: "Bringing up the platform with the '{{ profile }}' profile."
+    # Tagged `always`: they define `profile` and load its variables, so a run limited with --tags
+    # (docs/INFRASTRUCTURE_SETUP.md section 5) still has them. Untagged, --tags skipped them and the
+    # first role stopped on "'profile' is undefined" (VPS test, 1 November).
+    - name: Profile and preconditions
+      tags: [always]
+      block:
+        - name: Require ansible-core 2.17 or newer (community.docker 5.x refuses older ones)
+          ansible.builtin.assert:
+            that: ansible_version.full is version('2.17.0', '>=')
+            fail_msg: >-
+              ansible-core {{ ansible_version.full }} is too old: the community.docker collection needs 2.17
+              or newer. Ubuntu 22.04's apt package is 2.10: apt-get remove -y ansible &&
+              pip3 install ansible-core==2.17.14 (docs/INFRASTRUCTURE_SETUP.md, section 1).
+            quiet: true
+        - name: Resolve the profile (CLI -e profile=... takes priority)
+          ansible.builtin.set_fact:
+            profile: "{{ profile | default(_profile_default) }}"
+        - name: Load the selected profile's variables
+          ansible.builtin.include_vars: "group_vars/{{ profile }}.yml"
+        - name: Look for the Vault-encrypted production secrets file
+          ansible.builtin.stat:
+            path: "{{ playbook_dir }}/group_vars/production_secrets.yml"
+          register: _prod_secrets
+          when: profile == 'production'
+        - name: Load the production secrets (vault_db_password)
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/group_vars/production_secrets.yml"
+          when: profile == 'production' and _prod_secrets.stat.exists
+          # Without that file db_password stays CHANGE_ME_VIA_VAULT and the secrets role stops with a clear message.
+        - name: Announce the profile
+          ansible.builtin.debug:
+            msg: "Bringing up the platform with the '{{ profile }}' profile."
 
   roles:
     # --- common to both profiles ---
