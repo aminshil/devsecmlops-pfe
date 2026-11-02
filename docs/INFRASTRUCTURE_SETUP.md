@@ -8,10 +8,10 @@ This guide takes a blank Ubuntu machine to the running platform: the CI/CD tooli
 |---|---|
 | **VERIFIED (VPS)** | Run on the clean VPS and seen to work, with the result shown |
 | **VERIFIED (VM)** | Run on the original VM only (README, "What we tested") |
-| **FIXED, re-test** | The VPS run needed a manual step here; the playbook or a script now does it (commit after `a280267a`). Confirmed by an idempotent re-run on the VPS, not yet by a second clean install |
+| **FIXED, re-test** | The VPS run needed a manual step here; the playbook or a script now does it (commit `1b591925`). Confirmed by a re-run on the VPS (2 November), not yet by a second clean install |
 | **MANUAL** | Not automated: done by hand in a web UI, the settings live in Docker volumes |
 
-Section 9 lists the 14 gaps the VPS run found and what became of each.
+Section 9 lists the 14 gaps the VPS run found, a 15th found afterwards on the original VM, and what became of each.
 
 ---
 
@@ -91,7 +91,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 python3 -m pytest -q tests          # expect: 275 passed
 ```
 
-The VPS ran **272 passed** at commit `a280267a`; the commit that added this guide adds 3 tests (275). If the count does not match, stop here.
+The VPS ran **272 passed** at commit `a280267a`; the commit that added this guide (`1b591925`) adds 3 tests, and the VPS's Jenkins build #2 ran all **275** on it. If the count does not match, stop here.
 
 The playbook reuses this virtualenv. It now checks the venv's Python before installing anything and stops with the deadsnakes instruction if it is older than 3.12 (`app_setup` role; FIXED, re-test). To let the playbook create the venv itself, run it with `-e venv_python=python3.12`.
 
@@ -304,7 +304,7 @@ VPS: Python 3.13.5, Trivy 0.74.0, kubectl v1.36.2; SonarQube `UP`; the API pods 
 
 ## 7. First builds and final check  (VERIFIED (VPS))
 
-1. **`devsecmlops-pipeline`**, Build Now. SonarQube must be running. On the VPS, build #1 took about 8 minutes, all 12 stages green: `ruff` clean, 272 tests, Quality Gate OK, repository scan clean, model gate F1 0.7292, image built, smoke-tested (7 PASS), 0 HIGH/CRITICAL vulnerabilities, pushed, deployed by a rolling update and smoke-tested again inside the new pod. The first Trivy run downloads its vulnerability database (about 131 MB). If the post-deploy smoke test fails, the pipeline rolls the deployment back (`kubectl rollout undo`).
+1. **`devsecmlops-pipeline`**, Build Now. SonarQube must be running. On the VPS, build #1 took about 8 minutes, all 12 stages green: `ruff` clean, 272 tests, Quality Gate OK, repository scan clean, model gate F1 0.7292, image built, smoke-tested (7 PASS), 0 HIGH/CRITICAL vulnerabilities, pushed, deployed by a rolling update and smoke-tested again inside the new pod. The first Trivy run downloads its vulnerability database (about 131 MB). If the post-deploy smoke test fails, the pipeline rolls the deployment back (`kubectl rollout undo`). Build #2, on the fixed commit `1b591925` (2 November): `ruff` clean, 275 tests, Quality Gate OK on the changed code, 0 HIGH/CRITICAL vulnerabilities, `2.20.3-b2` pushed, deployed and smoke-tested in the new pod.
 2. **`devsecmlops-model`**, `SCOPE=smoke` (`INCLUDE_FEEDBACK` on, `PROMOTE` off). A few minutes. On the VPS it ended **UNSTABLE, which is the correct result**: the candidate trained on the 3-day smoke fleet (v4 F1 0.5537) was rejected by the guardrail against production (0.7731 on the same data), and all 17 production files were hash-checked unchanged ("the real models/ directory is untouched").
 3. **`devsecmlops-model`**, `SCOPE=full`, **`PROMOTE` off**. About 26 minutes on the VPS: 17,280,000 training rows plus the operator verdicts exported from PostgreSQL (28 rows), candidate trained in 892 s, candidate v4 F1 0.7290 against production 0.7292, guardrail PASS, run logged to MLflow with its six files stored in MinIO. Keep `PROMOTE` off on a test machine: on, stage 7 commits the model and pushes it to `main`.
    - **The firewall.** The model job reaches MLflow on the host at `http://172.17.0.1:5001`, through Docker's default bridge. On the VPS ufw was active with a default-deny policy, so the job stopped at "MLflow is not reachable" (the log showed `[UFW BLOCK] IN=docker0 SRC=172.17.0.2 DST=172.17.0.1 DPT=5001`). Docker's own documentation notes that Docker and ufw filter traffic in ways that interact badly [117]. The rule that fixed it opens port 5001 to that bridge only, nothing on the public side (the `prerequisites` role now adds it when ufw is active; FIXED, re-test):
@@ -312,7 +312,7 @@ VPS: Python 3.13.5, Trivy 0.74.0, kubectl v1.36.2; SonarQube `UP`; the API pods 
      ufw allow from 172.17.0.0/16 to 172.17.0.1 port 5001 proto tcp comment 'Jenkins container -> MLflow'
      docker exec jenkins curl -s -o /dev/null -w "%{http_code}\n" http://172.17.0.1:5001/health      # 200
      ```
-   - **Stage 6 (MLflow and MinIO read-back).** On the VPS this stage failed with "no artifact hashes": the candidate's file hashes were recorded only with `PROMOTE` on, so a full run without promotion could never pass it. The same check, run by hand on that run, found all 6 files identical in MinIO. `train_production.py` now records them on every run (`candidate_artifacts`) and `scripts/verify_mlflow_artifacts.py` reads them (FIXED; re-test with the next full run).
+   - **Stage 6 (MLflow and MinIO read-back).** On the VPS this stage failed with "no artifact hashes": the candidate's file hashes were recorded only with `PROMOTE` on, so a full run without promotion could never pass it. The same check, run by hand on that run, found all 6 files identical in MinIO. `train_production.py` now records them on every run (`candidate_artifacts`) and `scripts/verify_mlflow_artifacts.py` reads them. **Confirmed** by the full run on `1b591925` (2 November): candidate trained in 808 s, the same F1 values (0.7290 against 0.7292), guardrail PASS, stage 6 read the 6 hashes from `candidate_artifacts`, downloaded the 6 files back from MLflow (MinIO), found all 6 identical, and the job ended `Finished: SUCCESS` (MLflow run `8c25418d…`).
 4. **Alerting (Telegram), optional.** Create a bot with @BotFather, then `bash scripts/setup_alerting.sh` (details in section 8). On the VPS the Telegram list and Grafana's "Anomalous machines now" table named the same 8 machines when compared, and all 200 machines were reporting on time.
 5. **Checklist:**
 
@@ -338,6 +338,20 @@ VPS: the live validation gave exactly the original VM's numbers, 16,600 requests
 | Change training size or the recall target | Edit **only** `config/model_policy.json` |
 | Rotate credentials | Change the values in `/root/.devsecmlops.env`, re-run the playbook (this rewrites the root-only files and restarts the units), then change Grafana's and SonarQube's passwords in their UIs |
 | Run `kubectl` or `minikube` as root by hand | `export KUBECONFIG=/home/pfe/.kube/config MINIKUBE_HOME=/home/pfe/.minikube` first |
+| Rebuild the venv on Python 3.12 (gap 15: a venv made with Python 3.10 before numpy 2.5.4 was pinned) | See below. A procedure, **not yet run** on the original VM |
+
+**Rebuilding the venv on Python 3.12** (gap 15). The services that run from the venv are stopped for a few minutes while it is rebuilt; the old venv is kept, so going back is one `mv`. Not yet run on the original VM: do it when no demo is due.
+
+```bash
+add-apt-repository -y ppa:deadsnakes/ppa && apt-get install -y python3.12 python3.12-venv python3.12-dev
+cd /root/devsecmlops-pfe
+U=$(grep -l "$PWD/venv/bin" /etc/systemd/system/*.service | xargs -n1 basename); echo "units using the venv: $U"
+systemctl stop $U
+mv venv venv-py310 && python3.12 -m venv venv && venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+venv/bin/python --version && venv/bin/python -m pytest -q tests 2>&1 | tail -1      # Python 3.12.x, 275 passed
+systemctl start $U && systemctl is-active $U
+# to go back: systemctl stop $U && mv venv venv-py312 && mv venv-py310 venv && systemctl start $U
+```
 
 ### Optional hardening (written, apply by hand; not part of the default run)
 
@@ -357,7 +371,7 @@ If the first command still answers "accepting connections", the plugin does not 
 
 ---
 
-## 9. Gaps found on the clean machine (VPS, 31 October – 1 November 2026)
+## 9. Gaps found on the clean machine (VPS, 31 October – 1 November 2026; gap 15 on the original VM)
 
 | # | Gap | What happened on the VPS | State |
 |---|---|---|---|
@@ -372,9 +386,10 @@ If the first command still answers "accepting connections", the plugin does not 
 | 9 | The control panel summary printed `?/?` | its status call had no credentials | Basic auth on that call (FIXED, re-test) |
 | 10 | The guide checked `:8000/` | `404` by design | Guide checks `/ui` (section 5d) |
 | 11 | ufw blocked the model job → MLflow | `[UFW BLOCK] … DPT=5001` | Rule added by `prerequisites` when ufw is active (FIXED, re-test) |
-| 12 | Model job stage 6 failed without `PROMOTE` | "no artifact hashes" | Hashes recorded on every run (FIXED; tests added; re-test with a full run) |
+| 12 | Model job stage 6 failed without `PROMOTE` | "no artifact hashes" | Hashes recorded on every run; 3 tests. **Confirmed**: the full run on `1b591925` (2 November) passed stage 6 by itself, `Finished: SUCCESS` |
 | 13 | node-exporter series labelled `machine="pfe-vm"` | cosmetic: the label is fixed in `monitoring/prometheus.yml` | Open, cosmetic |
-| 14 | `full_verification.sh` outdated | it counted the retired fleet simulator (always 0) and needed the cluster paths exported | Updated (FIXED, re-test) |
+| 14 | `full_verification.sh` outdated | it counted the retired fleet simulator (always 0) and needed the cluster paths exported | Updated (FIXED, re-test: run on the VPS with no paths exported, every check `200`/`active`, 200 machines reporting) |
+| 15 | The original VM's venv is Python 3.10 (numpy 2.2.6) | Found on the original VM after the VPS run (2 November), not on the VPS: `requirements-api.txt` pins numpy 2.5.4 since 27 October (commit `8dced809`), which cannot install on 3.10, so a playbook re-run on the VM stops at the venv check (before that check existed it stopped at the pip step). Nothing that runs is affected: Jenkins tests on Python 3.13 and the image serves on 3.12 | Open: rebuild the VM's venv on Python 3.12 when convenient (section 8; procedure not yet run there) |
 
 Still true from before:
 
