@@ -20,6 +20,10 @@ minio_sha256: "7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f"
 minio_uid: 10002
 minio_image_local: "devsecmlops-minio:{{ minio_release }}"
 minio_build_dir: /var/lib/devsecmlops/minio-build
+# where a browser reaches the MinIO console (host port 9002 = the container's console port 9001). MinIO sends
+# a browser that opens the S3 API port (9001) there; without it, it sent the browser to its own internal
+# console port, 9001, which on the host is the API port again: a redirect loop (VPS, 2 November)
+minio_console_url: "http://localhost:9002"
 img_minio: "{{ minio_image_local }}"
 img_sonarqube: "sonarqube:24.04@sha256:160bd2f6a3485bd09b655ef22dd63c02bd1fa7ba82aa5d9973fd010b8bcca0b3"
 port_control_panel: 8000
