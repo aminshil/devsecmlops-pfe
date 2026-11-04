@@ -898,52 +898,75 @@
       "panels": []
     },
     {
-      "type": "bargauge",
+      "type": "table",
       "fieldConfig": {
         "defaults": {
-          "decimals": 0,
-          "unit": "none",
-          "min": 0,
-          "max": 14,
-          "noValue": "No router named: no correlated failure",
-          "color": {
-            "mode": "thresholds"
+          "custom": {
+            "align": "left",
+            "cellOptions": {
+              "type": "auto"
+            }
           },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
+          "noValue": "No router named: no correlated failure"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Times named (max 14)"
+            },
+            "properties": [
               {
-                "color": "orange",
-                "value": null
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "basic",
+                  "valueDisplayMode": "text"
+                }
               },
               {
-                "color": "red",
-                "value": 7
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 14
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "orange",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 7
+                    }
+                  ]
+                }
               }
             ]
           }
-        },
-        "overrides": []
+        ]
       },
       "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "horizontal",
-        "displayMode": "basic",
-        "valueMode": "color",
-        "namePlacement": "left",
-        "showUnfilled": true,
-        "sizing": "manual",
-        "minVizHeight": 22,
-        "maxVizHeight": 28,
-        "minVizWidth": 8,
-        "legend": {
-          "showLegend": false
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
         }
       },
       "id": 17,
@@ -958,7 +981,7 @@
         "x": 0,
         "y": 76
       },
-      "description": "Routers the /root-cause analysis named as the LIKELY ORIGIN of a correlated failure (not just anomalous themselves) in the last 5 minutes, and how many times, one bar per router, longest first (the bar is full at 14). The production agent sends the currently anomalous machines to /root-cause every 20 seconds, so about 15 checks happen in 5 minutes and the most this can show is 14 (Prometheus counts the steps between checks): 14 means the router was named in every check, i.e. for the whole 5 minutes; 1 means one check. Calls from the control panel's Root Cause tab count too. Only machines with dependents in dependency_graph.json (the routers) can appear. Empty is the normal state. The value is for now (the last 5 minutes), not for the dashboard's time range; the chart below shows when.",
+      "description": "Routers the /root-cause analysis named as the LIKELY ORIGIN of a correlated failure (not just anomalous themselves) in the last 5 minutes, and how many times, one row per router, longest first (the bar is full at 14). The production agent sends the currently anomalous machines to /root-cause every 20 seconds, so about 15 checks happen in 5 minutes and the most this can show is 14 (Prometheus counts the steps between checks): 14 means the router was named in every check, i.e. for the whole 5 minutes; 1 means one check. Calls from the control panel's Root Cause tab count too. Only machines with dependents in dependency_graph.json (the routers) can appear. Empty is the normal state. The value is for now (the last 5 minutes), not for the dashboard's time range; the chart below shows when.",
       "targets": [
         {
           "datasource": {
@@ -966,9 +989,41 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
+          "instant": true,
+          "range": false,
+          "format": "table",
           "expr": "sort_desc(round(sum by (machine) (increase(api_root_cause_incidents_total{job=\"anomaly-api-pods\"}[5m])) > 0))",
-          "legendFormat": "{{machine}}",
-          "instant": true
+          "legendFormat": "__auto"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "machine": 0,
+              "Value": 1
+            },
+            "renameByName": {
+              "machine": "Router",
+              "Value": "Times named (max 14)"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Times named (max 14)",
+                "desc": true
+              }
+            ]
+          }
         }
       ]
     },
