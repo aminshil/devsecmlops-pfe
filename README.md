@@ -1867,7 +1867,9 @@ The two root-cause panels were also misleading. The production agent sends the a
 router. The spotlight ran as a range query with a `> 0` filter, so a router named earlier in the
 dashboard's time range kept its last value ("router-03: 1") after it stopped being named; it is now an
 instant query (routers named in the last 5 minutes, and how many times: at most 14, because
-`increase()` counts the 14 steps between 15 checks). The chart below it drew the raw counter, a total
+`increase()` counts the 14 steps between 15 checks). Since 4 November it is drawn as one bar per router,
+longest first, full at 14, instead of a row of tiles side by side (`sort_desc()`, tested in promtool
+like the rest). The chart below it drew the raw counter, a total
 since the pods started; it now draws checks per minute that named each router (at most 3), so it shows
 when a router was the root cause. Both queries run in promtool on a router named only early and one
 named in every check.

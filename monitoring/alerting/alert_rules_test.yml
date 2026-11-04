@@ -765,7 +765,7 @@ tests:
       - series: 'api_root_cause_incidents_total{job="anomaly-api-pods",pod="p1",machine="router-08"}'
         values: '0x15 0+1x15'
     promql_expr_test:
-      - expr: "round(sum by (machine) (increase(api_root_cause_incidents_total{job=\"anomaly-api-pods\"}[5m])) > 0)"
+      - expr: "sort_desc(round(sum by (machine) (increase(api_root_cause_incidents_total{job=\"anomaly-api-pods\"}[5m])) > 0))"
         eval_time: 10m
         exp_samples:
           - {labels: '{machine="router-08"}', value: 14}

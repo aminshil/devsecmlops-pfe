@@ -898,11 +898,30 @@
       "panels": []
     },
     {
-      "type": "stat",
+      "type": "bargauge",
       "fieldConfig": {
         "defaults": {
           "decimals": 0,
-          "unit": "none"
+          "unit": "none",
+          "min": 0,
+          "max": 14,
+          "noValue": "No router named: no correlated failure",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 7
+              }
+            ]
+          }
         },
         "overrides": []
       },
@@ -914,11 +933,18 @@
           "fields": "",
           "values": false
         },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value_and_name",
-        "justifyMode": "auto",
-        "orientation": "auto"
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "valueMode": "color",
+        "namePlacement": "left",
+        "showUnfilled": true,
+        "sizing": "manual",
+        "minVizHeight": 22,
+        "maxVizHeight": 28,
+        "minVizWidth": 8,
+        "legend": {
+          "showLegend": false
+        }
       },
       "id": 17,
       "title": "Root cause spotlight (last 5 minutes)",
@@ -927,12 +953,12 @@
         "uid": "devsecmlops-prom"
       },
       "gridPos": {
-        "h": 6,
+        "h": 8,
         "w": 24,
         "x": 0,
         "y": 76
       },
-      "description": "Routers the /root-cause analysis named as the LIKELY ORIGIN of a correlated failure (not just anomalous themselves) in the last 5 minutes, and how many times. The production agent sends the currently anomalous machines to /root-cause every 20 seconds, so about 15 checks happen in 5 minutes and the most this can show is 14 (Prometheus counts the steps between checks): 14 means the router was named in every check, i.e. for the whole 5 minutes; 1 means one check. Calls from the control panel's Root Cause tab count too. Only machines with dependents in dependency_graph.json (the routers) can appear. Empty is the normal state. The value is for now (the last 5 minutes), not for the dashboard's time range; the chart below shows when.",
+      "description": "Routers the /root-cause analysis named as the LIKELY ORIGIN of a correlated failure (not just anomalous themselves) in the last 5 minutes, and how many times, one bar per router, longest first (the bar is full at 14). The production agent sends the currently anomalous machines to /root-cause every 20 seconds, so about 15 checks happen in 5 minutes and the most this can show is 14 (Prometheus counts the steps between checks): 14 means the router was named in every check, i.e. for the whole 5 minutes; 1 means one check. Calls from the control panel's Root Cause tab count too. Only machines with dependents in dependency_graph.json (the routers) can appear. Empty is the normal state. The value is for now (the last 5 minutes), not for the dashboard's time range; the chart below shows when.",
       "targets": [
         {
           "datasource": {
@@ -940,7 +966,7 @@
             "uid": "devsecmlops-prom"
           },
           "refId": "A",
-          "expr": "round(sum by (machine) (increase(api_root_cause_incidents_total{job=\"anomaly-api-pods\"}[5m])) > 0)",
+          "expr": "sort_desc(round(sum by (machine) (increase(api_root_cause_incidents_total{job=\"anomaly-api-pods\"}[5m])) > 0))",
           "legendFormat": "{{machine}}",
           "instant": true
         }
@@ -973,7 +999,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 82
+        "y": 84
       },
       "description": "When each router was named the likely root cause: how many /root-cause checks named it in each minute. The production agent checks every 20 seconds, so the most is about 3 per minute: a line at 3 means the router was the root cause the whole minute, 0 means not at all. A router that keeps coming back stands out from a one-off. (A pod restart does not show as a drop: increase() handles counter resets.)",
       "targets": [
@@ -1005,7 +1031,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 90
+        "y": 92
       },
       "description": "How many DIFFERENT machines have been anomalous at least once since the current pods started (a Counter, so it only grows -- unlike the 'currently anomalous' panels above). Resets to 0 on every rollout. High relative to 200 over a long session is expected; a high value within minutes of startup would be unusual.",
       "targets": [
@@ -1037,7 +1063,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 90
+        "y": 92
       },
       "description": "Same idea as the panel to its left, but for root-cause incidents specifically: how many distinct machines have been identified as a likely root cause since the pods started.",
       "targets": [
@@ -1061,7 +1087,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 96
+        "y": 98
       },
       "panels": []
     },
@@ -1073,7 +1099,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 97
+        "y": 99
       },
       "datasource": {
         "type": "prometheus",
@@ -1110,7 +1136,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 97
+        "y": 99
       },
       "datasource": {
         "type": "prometheus",
@@ -1146,7 +1172,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 105
+        "y": 107
       },
       "datasource": {
         "type": "prometheus",
@@ -1185,7 +1211,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 105
+        "y": 107
       },
       "datasource": {
         "type": "prometheus",
@@ -1216,7 +1242,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 111
+        "y": 113
       },
       "panels": []
     },
@@ -1228,7 +1254,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 112
+        "y": 114
       },
       "datasource": {
         "type": "prometheus",
@@ -1275,7 +1301,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 112
+        "y": 114
       },
       "datasource": {
         "type": "prometheus",
@@ -1322,7 +1348,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 120
+        "y": 122
       },
       "datasource": {
         "type": "prometheus",
@@ -1366,7 +1392,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 120
+        "y": 122
       },
       "datasource": {
         "type": "prometheus",
