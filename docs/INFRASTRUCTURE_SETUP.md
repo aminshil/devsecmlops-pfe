@@ -373,7 +373,7 @@ kubectl -n ml-serving run np-test --rm -i --restart=Never --image=postgres:16-al
 kubectl -n ml-serving exec deploy/anomaly-api -c api -- python3 -c "import socket;socket.create_connection(('postgres',5432),3);print('api reaches postgres')"   # expect: api reaches postgres
 ```
 
-If the first command still answers "accepting connections", the plugin does not enforce policies: the file does nothing, so delete it (`kubectl delete -f kubernetes/networkpolicy.yaml`) and do not claim it in the defense.
+If the first command still answers "accepting connections", the plugin does not enforce policies: the policy stays applied (the playbook applies it; it is harmless and takes effect once a plugin that enforces policies, such as Calico, is installed) but does nothing, so do not claim it in the defense.
 
 **Feedback token:** `export FEEDBACK_TOKEN=...` before the playbook creates the `feedback-token` Secret and gives the control panel the same value; without it `/feedback` stays open. **CI settings as files:** `python scripts/ci_config.py export` (read-only) writes `ci-config/` from the running Jenkins and SonarQube; `restore --yes` replays the jobs. Both need `JENKINS_USER`, `JENKINS_TOKEN` and `SONAR_TOKEN`; the export script is tested against a fake server only.
 
