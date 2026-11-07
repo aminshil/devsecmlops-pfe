@@ -7,13 +7,16 @@ IsolationForest on a 400k-row sample of the v1 dataset; per-hour baselines and b
 anomalies were never measured with the current models. This script measures them the way production
 trains and scores a model, changing ONLY how the baselines are built:
 
-  allday       one baseline per machine, all hours together
-  windows4     4 windows of 6 hours (night, morning, afternoon, evening): what production serves
-  hourly24     24 windows, one per hour
-  trimmed      4 windows, top and bottom 5 % of each group dropped (preprocess_robust.py)
-  normal_only  4 windows, baselines from label-0 rows only. Uses the labels, which a real operator
-               does not have: an upper bound on what removing the anomalies could gain, not a
-               deployable option.
+  allday            one baseline per machine, all hours together
+  windows4          4 windows of 6 hours (night, morning, afternoon, evening): what production serves
+  windows8          8 windows of 3 hours (00-02, 03-05, ... 21-23)
+  windows12         12 windows of 2 hours (00-01, 02-03, ... 22-23)
+  hourly24          24 windows, one per hour
+  trimmed           4 windows, top and bottom 5 % of each group dropped (preprocess_robust.py)
+  hourly24_trimmed  24 windows, trimmed as above
+  normal_only       4 windows, baselines from label-0 rows only. Uses the labels, which a real
+                    operator does not have: an upper bound on what removing the anomalies could
+                    gain, not a deployable option.
 
 For every variant, identically: train_production's training matrices (all rows, no feedback rows),
 its XGB/IsolationForest parameters and seeds, its threshold rule on the validation fleet
@@ -23,6 +26,7 @@ the manifest and MLflow are not touched: artifacts go to --work-dir.
 Usage (needs about 30 GB of RAM for the full fleets; run it on the test machine, not the VM):
     python3 ml-model/test_baseline_variants.py
     python3 ml-model/test_baseline_variants.py --variants windows4 hourly24
+    python3 ml-model/test_baseline_variants.py --train T.csv --val V.csv --test X.csv   # other fleets
 Results: printed, and written after each variant to --out (models/results/ by default).
 """
 import argparse
@@ -43,7 +47,10 @@ import preprocess  # noqa: E402
 import preprocess_robust  # noqa: E402
 import train_production as tp  # noqa: E402
 
-VARIANTS = ["allday", "windows4", "hourly24", "trimmed", "normal_only"]
+VARIANTS = ["allday", "windows4", "windows8", "windows12", "hourly24", "trimmed",
+            "hourly24_trimmed", "normal_only"]
+# hours per window for the fixed-width variants (each window is named after its first hour)
+WIDTH = {"windows8": 3, "windows12": 2, "hourly24": 1, "hourly24_trimmed": 1}
 DATA = ROOT / "data"
 
 
@@ -52,19 +59,25 @@ def set_windows(df, kind: str, original):
     grouping and the z-score lookup alike, in training and in scoring)."""
     if kind == "allday":
         df["window"] = "all"
-    elif kind == "hourly24":
-        df["window"] = "h" + df["hour"].astype(int).map("{:02d}".format)
+    elif kind in WIDTH:
+        w = WIDTH[kind]
+        df["window"] = df["hour"].astype(int).map({h: f"h{h // w * w:02d}" for h in range(24)})
     else:
         df["window"] = original
     return df
 
 
 def build(kind: str, train):
-    if kind == "trimmed":
-        return preprocess_robust.build_baselines(train, tp.FEATURES)
-    if kind == "normal_only":
-        return preprocess.build_baselines(train[train["label"] == 0], tp.FEATURES)
-    return preprocess.build_baselines(train, tp.FEATURES)
+    if kind in ("trimmed", "hourly24_trimmed"):
+        b = preprocess_robust.build_baselines(train, tp.FEATURES)
+    elif kind == "normal_only":
+        b = preprocess.build_baselines(train[train["label"] == 0], tp.FEATURES)
+    else:
+        b = preprocess.build_baselines(train, tp.FEATURES)
+    # record the windows this variant really uses (build_baselines writes the fixed 4-window list;
+    # the z-scores read the 'window' column, so this only keeps the saved file truthful)
+    b["__windows__"] = sorted(train["window"].unique().tolist())
+    return b
 
 
 def run_variant(kind, train, val, test, val_fp, work_dir: Path, originals) -> dict:
@@ -141,16 +154,16 @@ def main(argv=None) -> int:
         out.write_text(json.dumps(record, indent=2) + "\n")
         tp.log(f"written {out}")
 
-    print("\nvariant        keys   threshold  test F1   precision  recall   v3 F1")
+    print("\nvariant            keys   threshold  test F1   precision  recall   v3 F1")
     for r in record["results"]:
         t = r["test_v4_served"]
-        print(f"{r['variant']:<13} {r['baseline_keys']:>6}   {r['threshold']:<9}  {t['f1']:<8}  "
+        print(f"{r['variant']:<17} {r['baseline_keys']:>6}   {r['threshold']:<9}  {t['f1']:<8}  "
               f"{t['precision']:<9}  {t['recall']:<7}  {r['test_v3_served']['f1']}")
     print("\nper-cause recall (v4 served, test):")
     causes = sorted({c for r in record["results"] for c in r["test_v4_per_cause_recall"]})
-    print("variant        " + "  ".join(f"{c[:14]:<14}" for c in causes))
+    print("variant            " + "  ".join(f"{c[:14]:<14}" for c in causes))
     for r in record["results"]:
-        print(f"{r['variant']:<13}  " + "  ".join(f"{r['test_v4_per_cause_recall'].get(c, float('nan')):<14}"
+        print(f"{r['variant']:<17}  " + "  ".join(f"{r['test_v4_per_cause_recall'].get(c, float('nan')):<14}"
                                                    for c in causes))
     return 0
 
