@@ -90,7 +90,7 @@ PER_CLASS_THRESHOLDS = json.loads(_pct_raw) if _pct_raw.strip() else None
 sys.path.insert(0, str(ROOT / "ml-model"))
 from root_cause import score_root_causes, load_graph
 import decision as _decision
-from preprocess import ROLLING_FEATURE_BASE_COLS, rolling_features_from_history
+from preprocess import ROLLING_FEATURE_BASE_COLS, rolling_features_from_history, window_function
 
 # Reported cause when only the IsolationForest safety net flags an anomaly (the classifier said normal)
 SAFETY_NET_CAUSE = _decision.SAFETY_NET_CAUSE
@@ -266,14 +266,16 @@ FEATURES = (baselines["__feature_order__"]
             else list(baselines[machines_known[0]].keys()))
 
 
-def hour_to_window(hour: int) -> str:
-    if hour < 6:
-        return "night"
-    if hour < 12:
-        return "morning"
-    if hour < 18:
-        return "afternoon"
-    return "evening"
+# The hour -> window mapping of the LOADED baselines file, read from its own __windows__ metadata
+# (ml-model/preprocess.window_function): per hour ("h00".."h23") since 7 November 2026, the 4
+# legacy windows (night/morning/afternoon/evening) for a file built before. One function shared
+# with the training pipeline, so the API and the trainer cannot disagree on a reading's window.
+# None (windowed file with an unknown grouping): readings use the machine's all-day baseline.
+_HOUR_TO_WINDOW = window_function(baselines)
+
+
+def hour_to_window(hour: int) -> str | None:
+    return _HOUR_TO_WINDOW(hour) if _HOUR_TO_WINDOW else None
 
 
 def _resolve_window(reading) -> str | None:

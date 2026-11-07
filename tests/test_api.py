@@ -497,3 +497,16 @@ def test_a_legacy_model_selector_needs_an_explicit_opt_in():
     env.pop("ALLOW_LEGACY_MODELS", None)
     res = subprocess.run([sys.executable, "-c", "import api.app"], cwd=ROOT, env=env, capture_output=True, text=True)
     assert res.returncode != 0 and "ALLOW_LEGACY_MODELS=1" in res.stderr
+
+
+def test_predict_uses_the_window_mapping_of_the_loaded_baselines():
+    """The API reads the hour -> window mapping from the served baselines file's own __windows__
+    (per hour since 7 November 2026, the 4 legacy windows before), so a known machine at a known
+    hour always gets its machine+window baseline, whichever file is served."""
+    windows = set(app_module.baselines.get("__windows__") or [])
+    r = client.post("/predict", json={"machine": "web-01", "hour": 14, "metrics": NORMAL})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["window"] in windows
+    assert body["window"] == app_module.hour_to_window(14)
+    assert body["baseline_used"] == "machine+window"

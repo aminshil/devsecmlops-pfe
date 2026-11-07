@@ -1,0 +1,136 @@
+{
+  "script": "ml-model/test_baseline_variants.py",
+  "git_commit": "a9e17e9aa418ad4d28d12d6f7f5bf90b8ef0b663",
+  "started_at": "2026-11-07T18:56:40.232584+00:00",
+  "datasets": {
+    "train": {
+      "file": "/root/devsecmlops-pfe/data/telecom_fleet_v2_labeled.csv",
+      "sha256": "b4a8080965f4f0bc12b2727916969c6fe728a4dcb78bb169616155bba16e43cf",
+      "rows": 17280000
+    },
+    "val": {
+      "file": "/root/helpers/telecom_fleet_v2_val.csv",
+      "sha256": "ea0a20c29f8d3e34a77c8db79abc43ccd0d051d5049003cda659e0194c1148a0",
+      "rows": 8064000
+    },
+    "test": {
+      "file": "/root/devsecmlops-pfe/data/telecom_fleet_v2_test.csv",
+      "sha256": "3b6b6e2144100d43522a79a9a685eecc49e2bcecc573b001584614f0a5a8894a",
+      "rows": 17280000
+    }
+  },
+  "note": "no feedback rows; same data, parameters, threshold rule and scoring for every variant",
+  "results": [
+    {
+      "variant": "windows8",
+      "baseline_keys": 1815,
+      "machine_window_keys": 1600,
+      "contamination": 0.06747,
+      "threshold": 0.93,
+      "validation_at_threshold": {
+        "threshold": 0.93,
+        "precision": 0.689,
+        "recall": 0.8,
+        "f1": 0.7404,
+        "f3": 0.7873
+      },
+      "test_v4_served": {
+        "f1": 0.7394,
+        "precision": 0.688,
+        "recall": 0.7993,
+        "classifier_only_f1": 0.8138,
+        "classifier_only_precision": 0.8958,
+        "classifier_only_recall": 0.7455,
+        "cause_accuracy": 0.9984
+      },
+      "test_v4_per_cause_recall": {
+        "cascade": 0.2535,
+        "cpu_spike": 0.992,
+        "disk_saturation": 0.998,
+        "memory_leak": 0.9566,
+        "network_flood": 0.9967,
+        "silent_failure": 0.9837
+      },
+      "test_v3_served": {
+        "f1": 0.6887,
+        "precision": 0.6186,
+        "recall": 0.7769
+      },
+      "seconds": 1198
+    },
+    {
+      "variant": "windows12",
+      "baseline_keys": 2615,
+      "machine_window_keys": 2400,
+      "contamination": 0.06747,
+      "threshold": 0.9,
+      "validation_at_threshold": {
+        "threshold": 0.9,
+        "precision": 0.7118,
+        "recall": 0.8002,
+        "f1": 0.7534,
+        "f3": 0.7904
+      },
+      "test_v4_served": {
+        "f1": 0.7528,
+        "precision": 0.7098,
+        "recall": 0.8013,
+        "classifier_only_f1": 0.827,
+        "classifier_only_precision": 0.9287,
+        "classifier_only_recall": 0.7453,
+        "cause_accuracy": 0.9985
+      },
+      "test_v4_per_cause_recall": {
+        "cascade": 0.2532,
+        "cpu_spike": 0.9928,
+        "disk_saturation": 0.9988,
+        "memory_leak": 0.968,
+        "network_flood": 0.9985,
+        "silent_failure": 0.9831
+      },
+      "test_v3_served": {
+        "f1": 0.7167,
+        "precision": 0.662,
+        "recall": 0.7811
+      },
+      "seconds": 1166
+    },
+    {
+      "variant": "hourly24_trimmed",
+      "baseline_keys": 5015,
+      "machine_window_keys": 4800,
+      "contamination": 0.06747,
+      "threshold": 0.37,
+      "validation_at_threshold": {
+        "threshold": 0.37,
+        "precision": 0.7271,
+        "recall": 0.8004,
+        "f1": 0.762,
+        "f3": 0.7924
+      },
+      "test_v4_served": {
+        "f1": 0.7614,
+        "precision": 0.7256,
+        "recall": 0.8008,
+        "classifier_only_f1": 0.8333,
+        "classifier_only_precision": 0.9891,
+        "classifier_only_recall": 0.7199,
+        "cause_accuracy": 0.9988
+      },
+      "test_v4_per_cause_recall": {
+        "cascade": 0.2983,
+        "cpu_spike": 0.9831,
+        "disk_saturation": 0.9967,
+        "memory_leak": 0.9297,
+        "network_flood": 0.9907,
+        "silent_failure": 0.9622
+      },
+      "test_v3_served": {
+        "f1": 0.7281,
+        "precision": 0.7098,
+        "recall": 0.7474
+      },
+      "seconds": 1227
+    }
+  ]
+}

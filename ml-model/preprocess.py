@@ -10,15 +10,18 @@ Fallback chain (best to worst):
 Why per-time-window z-score?
   A web server idles at 30% CPU at night and runs at 60% during the day.
   A single all-day baseline (mean=45%) would rate a 50% night reading as normal
-  even though it is anomalous for 3am. Splitting the baseline into
-  night/morning/afternoon/evening lets 0 mean "normal for this machine AT THIS
-  TIME OF DAY", so the Isolation Forest catches subtle time-dependent anomalies.
+  even though it is anomalous for 3am. Splitting the baseline by hour of day
+  lets 0 mean "normal for this machine AT THIS TIME OF DAY".
 
-Time windows:
-  night     = 00:00-05:59
-  morning   = 06:00-11:59
-  afternoon = 12:00-17:59
-  evening   = 18:00-23:59
+Time windows: one per hour, "h00" (00:00-00:59) ... "h23" (23:00-23:59).
+  Until 7 November 2026 the windows were 4 blocks of 6 hours (night 00-05,
+  morning 06-11, afternoon 12-17, evening 18-23). A 6-hour block mixes hours of
+  different load (morning goes from the night level to full load), which widens
+  its std; the per-hour windows were chosen after measuring 1, 4, 8, 12 and 24
+  windows with the served models on two independent sets of fleets
+  (ml-model/test_baseline_variants.py, results in models/results/baseline_variants_*.json).
+  Files built with the 4 blocks are still read correctly: window_function()
+  picks the mapping from each file's own __windows__ metadata.
 
 Used by trainers AND the FastAPI serving layer.
 """
@@ -29,11 +32,17 @@ import pandas as pd
 
 STD_FLOOR = 1e-8   # flat metric (std=0) -> avoid division by zero
 
-WINDOWS = ("night", "morning", "afternoon", "evening")
+WINDOWS = tuple(f"h{h:02d}" for h in range(24))                 # current: one window per hour
+LEGACY_WINDOWS = ("night", "morning", "afternoon", "evening")     # 4 x 6 hours, until 7 Nov 2026
 
 
 def hour_to_window(hour: int) -> str:
-    """Map an hour (0-23) to its time window."""
+    """Map an hour (0-23) to its time window: "h00" ... "h23"."""
+    return f"h{int(hour):02d}"
+
+
+def legacy_hour_to_window(hour: int) -> str:
+    """The 4-window mapping of baselines files built before 7 November 2026."""
     if hour < 6:
         return "night"
     if hour < 12:
@@ -43,12 +52,27 @@ def hour_to_window(hour: int) -> str:
     return "evening"
 
 
+def window_function(baselines):
+    """The hour -> window mapping a baselines file was built with, read from its
+    __windows__ metadata: per hour, or the legacy 4 windows. None when the file
+    has no windows or uses another grouping (then a frame's own 'window' column
+    is used as it is)."""
+    if not baselines.get("__has_windows__"):
+        return None
+    names = set(baselines.get("__windows__") or [])
+    if names and names <= set(WINDOWS):           # a file may miss an hour it never saw
+        return hour_to_window
+    if names and names <= set(LEGACY_WINDOWS):
+        return legacy_hour_to_window
+    return None
+
+
 def add_window_column(df, timestamp_col="timestamp"):
     """Add an integer 'hour' and string 'window' column derived from timestamp."""
     ts = pd.to_datetime(df[timestamp_col])
     df = df.copy()
     df["hour"] = ts.dt.hour
-    df["window"] = df["hour"].map(hour_to_window)
+    df["window"] = df["hour"].map({h: hour_to_window(h) for h in range(24)})
     return df
 
 
@@ -67,7 +91,7 @@ def build_baselines(df, feature_cols,
       baselines["__global__"][col]         = [mean, std]   # global fallback
       baselines["<machine>"]["__type__"]   = "<type>"      # machine's type
       baselines["__feature_order__"]       = [col, ...]
-      baselines["__windows__"]             = ["night", ...]
+      baselines["__windows__"]             = ["h00", ...]  # the windows present in df
       baselines["__has_windows__"]         = True
     """
     if window_col not in df.columns:
@@ -116,7 +140,8 @@ def build_baselines(df, feature_cols,
 
     # 5. Metadata
     baselines["__feature_order__"] = list(feature_cols)
-    baselines["__windows__"]       = list(WINDOWS)
+    present = set(df[window_col].dropna().astype(str))
+    baselines["__windows__"]       = [w for w in WINDOWS if w in present] or sorted(present)
     baselines["__has_windows__"]   = True
     return baselines
 
@@ -145,8 +170,14 @@ def apply_zscore(df, baselines, feature_cols,
     """
     Return a z-scored copy of feature_cols.
     Each row uses its machine+window baseline (fallback chain above).
-    Requires a 'window' column.
+    Requires a 'window' column. When df also has an 'hour' column, the window
+    is recomputed from it with the mapping THESE baselines were built with
+    (window_function), so a frame can be scored against an older file (e.g. the
+    production model during the switch to per-hour windows) without mismatch.
     """
+    fn = window_function(baselines) if "hour" in df.columns else None
+    if fn is not None and window_col in df.columns:
+        df = df.assign(**{window_col: df["hour"].astype(int).map({h: fn(h) for h in range(24)})})
     out  = df[feature_cols].copy().astype(float)
     glob = baselines["__global__"]
     has_type   = type_col in df.columns
@@ -199,9 +230,10 @@ def load_baselines(path):
 # disk_io (already noisy), or network (spikes are the norm).
 #
 # Rolling features are computed per-machine, ordered by timestamp. Because
-# they need history, the first WINDOW-1 rows of each machine are undefined
-# and get filled with 0.0 (which after z-scoring means "no change from
-# baseline" -- the safest default when we lack history).
+# they need history, the first WINDOW-1 rows of each machine have a partial
+# window: the rolling mean uses the rows available (min_periods=1), the rolling
+# std and the delta are filled with 0.0 ("no change" -- the safest default
+# when we lack history).
 
 ROLLING_WINDOW_SIZE = 10  # 10 readings @ 30s = 5 minutes of history
 ROLLING_FEATURE_BASE_COLS = ("cpu", "ram", "load_avg")

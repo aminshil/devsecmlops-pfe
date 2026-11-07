@@ -1,0 +1,173 @@
+{
+  "script": "ml-model/test_baseline_variants.py",
+  "git_commit": "a9e17e9aa418ad4d28d12d6f7f5bf90b8ef0b663",
+  "started_at": "2026-11-07T20:05:34.711531+00:00",
+  "datasets": {
+    "train": {
+      "file": "/root/helpers/fleetB_train.csv",
+      "sha256": "6aa32365dfc440bd067d1b605a96c4e619a767f12c1a0213587f719c179abedd",
+      "rows": 17280000
+    },
+    "val": {
+      "file": "/root/helpers/fleetB_val.csv",
+      "sha256": "28a9cd0c4fc9fe8fa75495b3647d75420b9b3e86a63beb7fcc055066cd6b926e",
+      "rows": 8064000
+    },
+    "test": {
+      "file": "/root/helpers/fleetB_test.csv",
+      "sha256": "265bcddc43d47f3d48b26e34b42fa9be6d994b01cb8ffb5958489f3a5f7baee0",
+      "rows": 17280000
+    }
+  },
+  "note": "no feedback rows; same data, parameters, threshold rule and scoring for every variant",
+  "results": [
+    {
+      "variant": "windows4",
+      "baseline_keys": 1015,
+      "machine_window_keys": 800,
+      "contamination": 0.0674,
+      "threshold": 0.93,
+      "validation_at_threshold": {
+        "threshold": 0.93,
+        "precision": 0.6548,
+        "recall": 0.8008,
+        "f1": 0.7205,
+        "f3": 0.7833
+      },
+      "test_v4_served": {
+        "f1": 0.7198,
+        "precision": 0.6534,
+        "recall": 0.8013,
+        "classifier_only_f1": 0.803,
+        "classifier_only_precision": 0.8747,
+        "classifier_only_recall": 0.7422,
+        "cause_accuracy": 0.9981
+      },
+      "test_v4_per_cause_recall": {
+        "cascade": 0.2768,
+        "cpu_spike": 0.989,
+        "disk_saturation": 0.9975,
+        "memory_leak": 0.9394,
+        "network_flood": 0.9962,
+        "silent_failure": 0.9825
+      },
+      "test_v3_served": {
+        "f1": 0.6498,
+        "precision": 0.5636,
+        "recall": 0.7672
+      },
+      "seconds": 1138
+    },
+    {
+      "variant": "windows8",
+      "baseline_keys": 1815,
+      "machine_window_keys": 1600,
+      "contamination": 0.0674,
+      "threshold": 0.83,
+      "validation_at_threshold": {
+        "threshold": 0.83,
+        "precision": 0.7057,
+        "recall": 0.8003,
+        "f1": 0.7501,
+        "f3": 0.7897
+      },
+      "test_v4_served": {
+        "f1": 0.7501,
+        "precision": 0.7052,
+        "recall": 0.8012,
+        "classifier_only_f1": 0.8268,
+        "classifier_only_precision": 0.9455,
+        "classifier_only_recall": 0.7346,
+        "cause_accuracy": 0.9987
+      },
+      "test_v4_per_cause_recall": {
+        "cascade": 0.279,
+        "cpu_spike": 0.988,
+        "disk_saturation": 0.9973,
+        "memory_leak": 0.9421,
+        "network_flood": 0.9954,
+        "silent_failure": 0.977
+      },
+      "test_v3_served": {
+        "f1": 0.7152,
+        "precision": 0.6712,
+        "recall": 0.7654
+      },
+      "seconds": 1172
+    },
+    {
+      "variant": "windows12",
+      "baseline_keys": 2615,
+      "machine_window_keys": 2400,
+      "contamination": 0.0674,
+      "threshold": 0.31,
+      "validation_at_threshold": {
+        "threshold": 0.31,
+        "precision": 0.7329,
+        "recall": 0.802,
+        "f1": 0.7658,
+        "f3": 0.7945
+      },
+      "test_v4_served": {
+        "f1": 0.7662,
+        "precision": 0.732,
+        "recall": 0.8039,
+        "classifier_only_f1": 0.8286,
+        "classifier_only_precision": 0.9884,
+        "classifier_only_recall": 0.7132,
+        "cause_accuracy": 0.9989
+      },
+      "test_v4_per_cause_recall": {
+        "cascade": 0.3174,
+        "cpu_spike": 0.9809,
+        "disk_saturation": 0.9977,
+        "memory_leak": 0.9172,
+        "network_flood": 0.9987,
+        "silent_failure": 0.9587
+      },
+      "test_v3_served": {
+        "f1": 0.7384,
+        "precision": 0.7187,
+        "recall": 0.7593
+      },
+      "seconds": 1169
+    },
+    {
+      "variant": "hourly24",
+      "baseline_keys": 5015,
+      "machine_window_keys": 4800,
+      "contamination": 0.0674,
+      "threshold": 0.49,
+      "validation_at_threshold": {
+        "threshold": 0.49,
+        "precision": 0.7255,
+        "recall": 0.8001,
+        "f1": 0.761,
+        "f3": 0.792
+      },
+      "test_v4_served": {
+        "f1": 0.7606,
+        "precision": 0.7248,
+        "recall": 0.8001,
+        "classifier_only_f1": 0.8329,
+        "classifier_only_precision": 0.9782,
+        "classifier_only_recall": 0.7252,
+        "cause_accuracy": 0.9987
+      },
+      "test_v4_per_cause_recall": {
+        "cascade": 0.2811,
+        "cpu_spike": 0.9861,
+        "disk_saturation": 0.9978,
+        "memory_leak": 0.944,
+        "network_flood": 0.9964,
+        "silent_failure": 0.9657
+      },
+      "test_v3_served": {
+        "f1": 0.7348,
+        "precision": 0.7096,
+        "recall": 0.7618
+      },
+      "seconds": 1219
+    }
+  ]
+}

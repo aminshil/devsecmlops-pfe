@@ -46,7 +46,7 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 | Weakest cause | `cascade`, recall 0.268 (label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7731** · precision 0.7166 · recall 0.8391. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on 25 October against the served 21 October model (image `2.20.3-b116`); the 19 October model scored 0.7755 on the same sample | `scripts/live_k8s_validation.py`, run on 25 October; output in `models/results/live_validation_20261025_b116.json` |
 | Latest green pipeline | Build `2.20.3-b125` (commit `d0b11d91`, 28 October: the whole-repository review: training exit codes, the missing-artifact refusal, the legacy-model opt-in, bounded inputs, the 503 on a database drop): all 12 stages green, `ruff` clean, 272 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS), then tagged `:latest`. Before it: b123 (`4108a285`, 28 October: the fixes from the external review of 27 October, 268 tests) | [L3 run history](#l3--cicd) |
-| Tests | 276 passing, in 24 files; stage 1b runs all of them on every build (the VPS's build #2, on `1b591925`, ran 275; b125 ran 272, b123 ran 268, b120 ran 241, b117 ran 225, b116 ran 223, b112 ran 188; the 31 added after b120 check the review fixes: the shared feature and decision functions against their former copies, the token on the read routes, the fail-closed integrity check, the `/predict` input rules, the training console's bounds, the pins, the MLflow read-back, the Telegram list without the safety net's alarms alone, the training pipeline's exit codes, bounded inputs, the legacy-model opt-in and a database drop mid-query; the 3 added after b125 check that a training run without promotion still records its candidate's file hashes and that the MLflow read-back uses them; the 37 added after b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute; the 16 added after b117 check the watchdog and the History tab's episode readings) | `pytest tests/` (stage 1b) |
+| Tests | 281 passing, in 24 files; stage 1b runs all of them on every build (the 5 added on 7 November check the per-hour windows and that a 4-window baselines file is still read with its own windows; the VPS's build #2, on `1b591925`, ran 275; b125 ran 272, b123 ran 268, b120 ran 241, b117 ran 225, b116 ran 223, b112 ran 188; the 31 added after b120 check the review fixes: the shared feature and decision functions against their former copies, the token on the read routes, the fail-closed integrity check, the `/predict` input rules, the training console's bounds, the pins, the MLflow read-back, the Telegram list without the safety net's alarms alone, the training pipeline's exit codes, bounded inputs, the legacy-model opt-in and a database drop mid-query; the 3 added after b125 check that a training run without promotion still records its candidate's file hashes and that the MLflow read-back uses them; the 37 added after b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute; the 16 added after b117 check the watchdog and the History tab's episode readings) | `pytest tests/` (stage 1b) |
 | Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, cleared, persistent, fleet surge; the list names the classifier's anomalies, not the safety net's alone: [10b](#10b-safety-net-alarms-measured--why-telegram-lists-only-the-classifiers)), machines that miss their reports, no data, any layer down, pods, Kubernetes, traffic stopped, disk and memory. 28 rules (17 alerts, 11 recording rules) unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
 | Dashboard | 28 Grafana panels in 6 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-21: the model promoted by Jenkins `devsecmlops-model` build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, its six model files listed in MLflow (stored in MinIO) by the pipeline (stage 6 checked the names only; it downloads and hashes them since 27 October, `scripts/verify_mlflow_artifacts.py`), on 27 October the six files the image serves were downloaded back from MLflow (MinIO) and all six match the manifest's SHA-256 (`scripts/verify_mlflow_artifacts.py`, `models/results/mlflow_readback_20261027.json`); committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); every image since, up to the latest green build (row above), carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
@@ -210,16 +210,117 @@ A web server idling at 30% CPU and a database server running hot at 75% CPU
 are both "normal" — a single global threshold can't capture that, but a
 per-machine baseline can.
 
-Baselines are split into four **time windows** — night (00–06), morning
-(06–12), afternoon (12–18), evening (18–24) — because a single all-day
-average smooths out day/night variation. This was tested rigorously
-(`ml-model/test_timewindow_full.py`, full 200-machine fleet, threshold-tuned
-comparison):
+Baselines are split by **hour of day**: one window per hour, `h00` (00:00-00:59) to
+`h23`, so 200 machines x 24 = 4,800 machine-hour baselines (plus the 200 machine,
+11 type and 1 global fallbacks and 3 metadata keys: 5,015 keys). Until 7 November
+2026 they were split into four 6-hour windows, night (00-06), morning (06-12),
+afternoon (12-18), evening (18-24); that choice rested on the July comparison at
+the end of this section. It was re-measured with the served models, and the
+per-hour windows won on two independent sets of fleets.
+
+**The window size, measured with the served decision (7 November 2026).**
+`ml-model/test_baseline_variants.py` changes ONLY how the baselines are built and
+keeps everything else exactly as the model job does it: `train_production.py`'s
+training matrices (all rows, no feedback rows), its XGBoost and IsolationForest
+parameters and seeds, its threshold rule on the validation fleet (highest
+precision with recall >= 0.80, `config/model_policy.json`) and its served-decision
+scoring (v4 XGBoost OR IsolationForest) on the test fleet. Each variant gets its
+own threshold from that rule, as a new production model would. Runs on the test
+VPS (16 CPUs, 62 GB), full fleets, no sampling:
+
+- set A, the standard fleets: training seed 42, 30 days, 17,280,000 rows
+  (`b4a80809...`); validation seed 7, 14 days, 8,064,000 rows (`ea0a20c2...`);
+  test seed 123, 30 days, 17,280,000 rows (`3b6b6e21...`) -- the hashes in
+  `models/manifest.json`. Script at `b48ecbb8` (5 variants) and `a9e17e9a` (3
+  more); results in `models/results/baseline_variants_20261107.json` and
+  `models/results/baseline_variants_20261107_A.json`.
+- set B, a second independent draw generated for this test: training seed 43
+  (`6aa32365...`), validation seed 8, 14 days (`28a9cd0c...`), test seed 124
+  (`265bcddc...`), same sizes; script at `a9e17e9a`; results in
+  `models/results/baseline_variants_20261107_B.json`.
+
+| Baselines (test fleet, served v4) | Set A threshold | Set A F1 | Set A precision | Set A recall | Set B threshold | Set B F1 | Set B precision | Set B recall |
+|---|---|---|---|---|---|---|---|---|
+| 1 window (all day) | 0.72 | 0.7273 | 0.6650 | 0.8023 | | | | |
+| 4 x 6 h (production until 7 Nov) | 0.91 | 0.7292 | 0.6714 | 0.7979 | 0.93 | 0.7198 | 0.6534 | 0.8013 |
+| 8 x 3 h | 0.93 | 0.7394 | 0.6880 | 0.7993 | 0.83 | 0.7501 | 0.7052 | 0.8012 |
+| 12 x 2 h | 0.90 | 0.7528 | 0.7098 | 0.8013 | 0.31 | 0.7662 | 0.7320 | 0.8039 |
+| **24 x 1 h (chosen)** | 0.66 | **0.7609** | **0.7249** | 0.8007 | 0.49 | **0.7606** | **0.7248** | 0.8001 |
+| 4 x 6 h, top and bottom 5 % trimmed (`preprocess_robust.py`) | 0.82 | 0.7340 | 0.6777 | 0.8004 | | | | |
+| 24 x 1 h, trimmed | 0.37 | 0.7614 | 0.7256 | 0.8008 | | | | |
+| 4 x 6 h, normal rows only (uses the labels: an upper bound, not deployable) | 0.80 | 0.7394 | 0.6876 | 0.7996 | | | | |
+
+| Recall per cause (test, set A / set B) | memory_leak | silent_failure | cpu_spike | network_flood | disk_saturation | cascade |
+|---|---|---|---|---|---|---|
+| 4 x 6 h | 0.9332 / 0.9394 | 0.9810 / 0.9825 | 0.9880 / 0.9890 | 0.9946 / 0.9962 | 0.9966 / 0.9975 | 0.2679 / 0.2768 |
+| 12 x 2 h | 0.9680 / 0.9172 | 0.9831 / 0.9587 | 0.9928 / 0.9809 | 0.9985 / 0.9987 | 0.9988 / 0.9977 | 0.2532 / 0.3174 |
+| 24 x 1 h | 0.9531 / 0.9440 | 0.9721 / 0.9657 | 0.9900 / 0.9861 | 0.9968 / 0.9964 | 0.9981 / 0.9978 | 0.2694 / 0.2811 |
+
+What the runs show:
+
+- **The control reproduces production.** The 4 x 6 h variant on set A lands on
+  the served model's manifest numbers: threshold 0.91, test F1 0.7292, precision
+  0.6714 (manifest 0.6713), recall 0.7979, v3 F1 0.6665 (0.6667), although the
+  served model was trained with 222 feedback rows for v4 and this run with none.
+  Every gap below therefore comes from the baselines, not from the script.
+- **One draw of the data moves F1 by about 0.01**: the same 4 x 6 h setup scores
+  0.7292 on set A and 0.7198 on set B. Gaps below that are not evidence.
+- **Smaller windows win on both sets**: per hour +0.032 and +0.041 F1 over the
+  4 windows, precision +0.054 and +0.071 at the same recall (about 0.80, fixed by
+  the threshold rule). The cause is in the generator: load changes with the hour
+  (`time_factor`, `ml-model/generate_telecom_fleet.py:57-65`; a web server's
+  factor goes 0.45, 0.45, 0.6, 0.8, 1.0, 1.0 from 06:00 to 11:00 and 0.83, 0.67,
+  0.45, 0.45, 0.45, 0.45 from 18:00 to 23:00, line 27), so the morning and evening
+  windows mixed different loads and their std was wide: web-01's CPU std is 10.09
+  in the served file's morning window against 7.59 in the afternoon one, with the
+  same noise (sd 6, line 81) at every hour. A wide std shrinks the z-score of a real problem.
+- **Per hour rather than 2 hours.** The two tie on F1 (1 h ahead by 0.008 on A,
+  2 h by 0.006 on B, both under the 0.01 noise); per hour is the stable one: F1
+  0.7609 / 0.7606 and precision 0.7249 / 0.7248 on the two sets, where 2 hours
+  moves from 0.7528 to 0.7662 and its threshold from 0.90 to 0.31, with the lower
+  worst-case recall per cause (memory_leak 0.9172, silent_failure 0.9587 on B).
+- **Removing the anomalies from the baselines is worth little**: trimming 5 %
+  each side gains 0.005 F1, and even a perfect removal with the labels only 0.010;
+  on top of per-hour windows trimming adds 0.0005. Not adopted. (The training
+  fleet's anomaly share, 6.75 %, is above the 5 % trimmed.)
+- **The cost**, stated with the choice: silent_failure recall goes down by 0.009
+  (set A) and 0.017 (set B) against the 4 windows.
+
+Limits of this measurement: the fleets are synthetic and their load steps exactly
+on the hour, which suits per-hour baselines; on a real network with smoother
+curves the gain is probably smaller (not measured). Each variant was trained once
+per set (XGBoost here samples nothing, `train_production.py:102-103`, so a second
+seed would change little; the repeat is the second data draw). Per hour leaves
+3,600 training readings per machine-hour here; a real deployment needs enough
+days of history for each hour. The "classifier alone" figures in the JSON files
+are not comparable between variants: each variant has its own threshold.
+
+**The switch.** `preprocess.hour_to_window` returns `h00`..`h23`, and
+`preprocess.window_function` reads the mapping a baselines file was built with
+from its own `__windows__` metadata (per hour, or the 4 legacy windows), used by
+`apply_zscore` and by the API (`api/app.py`, which now imports it instead of
+keeping a copy). So the production model of the 4-window era is still scored with
+its own windows by the model job's guardrail, the training console and the API
+while it is served: checked on a 40-machine fleet, its F1, precision, recall and
+v3 F1 are identical before and after the change. Operator verdicts stored before
+the switch keep their window name (`night`...): the stored `timestamp` is the
+scoring time, not the reading's hour, so they cannot be moved to an hour, and in
+training they use the machine's all-day baseline (the fallback below); new
+predictions store `h00`..`h23`. The served model changes at the model job's next
+promotion, which the guardrail decides; until then the figures elsewhere in this
+README are those of the 4-window model (build 9). The research scripts written
+before this switch (e.g. `benchmark.py`, `train_serving_telecom*.py`) now build
+per-hour windows too; their quoted results come from the 4 windows, reproducible
+at commit `a9e17e9a`.
+
+The earlier evidence for the 4 windows (`ml-model/test_timewindow_full.py`,
+6 July 2026: an IsolationForest on a 400,000-row sample of the first, v1 fleet,
+not the served decision):
 
 | Baseline strategy | F1 (tuned threshold) | ROC-AUC |
 |---|---|---|
 | Per-machine, all-day | 0.6434 | 0.9066 |
-| **Per-machine, per-time-window (shipped)** | **0.6475** | **0.9091** |
+| Per-machine, per-time-window (4 windows) | 0.6475 | 0.9091 |
 | Per-machine + explicit time features (hour_sin/cos) | 0.6064 | 0.8964 |
 
 Explicit time features were tested and **rejected**: the per-machine baseline
@@ -965,7 +1066,7 @@ committed password in this exact Secret's original file.
 | timestamp            | TEXT      | no       | ISO-8601, when the /predict call happened                    |
 | machine              | TEXT      | no       | e.g. web-01                                                  |
 | machine_type         | TEXT      | yes      | e.g. web, db, router                                         |
-| time_window          | TEXT      | yes      | night / morning / afternoon / evening (named `time_window`: `window` is a PostgreSQL reserved keyword) |
+| time_window          | TEXT      | yes      | h00 ... h23, one per hour (night / morning / afternoon / evening for rows stored before 7 November 2026; named `time_window`: `window` is a PostgreSQL reserved keyword) |
 | features_json        | TEXT      | no       | JSON dict of the 6 z-scored feature values                   |
 | raw_metrics_json     | TEXT      | no       | JSON dict of the original cpu/ram/network/etc values         |
 | history_json         | TEXT      | yes      | JSON dict of the v4 rolling-history window, when supplied (added in the most recent API pass, to make v4 predictions fully reproducible from logged data) |
@@ -1205,7 +1306,8 @@ If a promoted retrain later turns out to be a real regression the guardrail miss
 | `scripts/pod_kill_test.py` | Deletes one API pod under live traffic (gracefully, then a hard kill) and measures failed requests and the time to recover. |
 | `scripts/master_comparison.py` | The 12-configuration threshold/feedback experiment. |
 | `ml-model/build_dependency_graph.py` | Writes `models/dependency_graph.json` from the generator's own router assignment, so the graph is the ground truth of the synthetic fleet. |
-| `ml-model/test_timewindow_full.py` | The per-machine versus per-machine-and-window baseline comparison (F1 0.6434 against 0.6475). |
+| `ml-model/test_timewindow_full.py` | The per-machine versus per-machine-and-window baseline comparison (F1 0.6434 against 0.6475; 6 July 2026, IsolationForest on a 400,000-row v1 sample). |
+| `ml-model/test_baseline_variants.py` | The baseline window sizes (1, 4, 8, 12, 24), trimming and normal-only baselines re-measured with the served decision on the full fleets, on two independent sets (results in `models/results/baseline_variants_20261107*.json`; per hour chosen). |
 | `ml-model/generate_telecom_fleet_v3.py`, `scripts/failure_model_report.py`, `scripts/v3_experiment.sh` | The realistic failure-model generator, its realism report, and the full-size v3 experiment that trains on it without touching production ([Decision 9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)). |
 | `scripts/cascade_check.py` | Whether a router's own label follows its dependents' failures (v2: 1.02×, v3: 28.86×; Decisions 9b and 9c). |
 | `scripts/compare_v2_v3.py`, `scripts/compare_curves.py` | Production against the v3-trained candidate: the evaluation table and the precision-recall curves on the same fleet (Decision 9c). |
@@ -1500,7 +1602,7 @@ found and fixed in the most recent security pass; see
 | `api/training.py` | Backend for the training console — dataset selection (with the path-traversal fix), representative sampling, comparing a candidate against production. |
 | `api/static/control_panel.html` | The mission-control UI, served at `/ui`. |
 | `start_control_panel.sh` | Starts the control panel by hand (`nohup`) for a quick local bring-up; the supervised path is `control-panel.service`, installed by Ansible. Do not run both: they compete for :8000. |
-| `tests/test_api.py` (68 tests), `test_decision.py`, `test_training_console.py`, `test_ui_cluster.py`, `test_ui_fleet.py`, `test_review_details.py` | Covered in full in [Testing](#testing) below. |
+| `tests/test_api.py` (69 tests), `test_decision.py`, `test_training_console.py`, `test_ui_cluster.py`, `test_ui_fleet.py`, `test_review_details.py` | Covered in full in [Testing](#testing) below. |
 
 ---
 
@@ -1547,7 +1649,7 @@ Jenkins, `Jenkinsfile`, 12 stages, every one a real gate — a failure stops the
 Stage labels below match the Jenkins console exactly.
 
 - **1. Checkout**
-- **1b. Unit tests** — `ruff` on every Python file (errors, undefined names, unused imports and variables, likely bugs), then pytest (276 tests), coverage report. Fail-fast: a broken commit stops here.
+- **1b. Unit tests** — `ruff` on every Python file (errors, undefined names, unused imports and variables, likely bugs), then pytest (281 tests), coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube, on `api`, `ml-model` and, since 27 October, every script that runs in production or in a pipeline: the production agent and the Kubernetes exporter, the Prometheus watchdog (it handles the Telegram token), the CI model gate, the model job's helpers (feedback export, report summary, MLflow read-back), the smoke test, the MinIO bucket setup, the pin script and the CI configuration tool (`SONAR_SOURCES` in the `Jenkinsfile`; coverage is measured on `api` and `ml-model`). The other files in `scripts/` and `monitoring/` are read-only measurement tools and earlier traffic designs: run by hand, deployed nowhere, and the README's numbers are their output, so refactoring them for the gate's complexity rules would put those numbers at risk. They are linted in stage 1b instead.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that no deployment file carries a copy of the threshold (it is read from the manifest) and that the manifest's threshold is the evaluated one, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
@@ -2439,7 +2541,7 @@ Production infrastructure has no labeled anomalies. Nobody manually labels every
 
 ### 2. Why per-machine, per-time-window baselines
 
-A web server idling at 30% CPU and a database server running hot at 75% CPU are both "normal" for their role -- a global threshold cannot distinguish them. Time windows (night/morning/afternoon/evening) handle predictable daily cycles: a 3 AM CPU spike on a batch server is normal, the same spike at 3 PM might be an incident. Tested rigorously (`ml-model/test_timewindow_full.py`): per-machine+window F1 = 0.6475, per-machine all-day F1 = 0.6434, adding explicit time features (hour_sin/cos) actually hurt at F1 = 0.6064 because the per-machine baseline already encodes temporal patterns implicitly.
+A web server idling at 30% CPU and a database server running hot at 75% CPU are both "normal" for their role -- a global threshold cannot distinguish them. Time windows handle predictable daily cycles: a 3 AM CPU spike on a batch server is normal, the same spike at 3 PM might be an incident. The first evidence (`ml-model/test_timewindow_full.py`, July: per-machine+window F1 = 0.6475, per-machine all-day F1 = 0.6434, explicit time features hour_sin/cos F1 = 0.6064) chose 4 windows of 6 hours. Re-measured on 7 November with the served decision on the full fleets, and repeated on a second independent set of fleets (`ml-model/test_baseline_variants.py`), one window per hour gave the largest and most stable gain over the 4 windows: test F1 +0.032 and +0.041, precision +0.054 and +0.071 at recall 0.80, at the cost of silent_failure recall -0.009 and -0.017. The baselines are per hour since then; the full tables are in [L0 -- ML Model](#l0--ml-model). The gain comes from the generator's load changing with the hour, so on a real network it is probably smaller.
 
 ### 3. Why 6 features, not 3
 
@@ -3230,9 +3332,9 @@ this project.)
 
 ## Testing
 
-**276 tests** in 24 files (up from 15), `pytest`, in `tests/`; stage 1b runs all of them on every build:
+**281 tests** in 24 files (up from 15), `pytest`, in `tests/`; stage 1b runs all of them on every build:
 
-- `test_api.py` (68 tests) — every endpoint, input validation (NaN/inf
+- `test_api.py` (69 tests) — every endpoint, the window of a reading taken from the served baselines file's own mapping, input validation (NaN/inf
   rejection, including raw `NaN`/`Infinity` tokens answered with 422 rather than 500, reserved `__` machine names, physical-range rejection (cpu=150 is a 422), the opt-in feedback token on the write and on the three read routes, the machine-name pattern (`web-01|night` is a 422), `hour` out of range (422, with or without windowed baselines), metrics count, history shape), v3/v4
   auto-selection, Prometheus metrics, DB-unavailable behavior (503, not
   500), ops-UI auth (required, wrong password rejected, absent when
@@ -3242,8 +3344,9 @@ this project.)
 - `test_decision.py` (5 tests) — the scalar and vectorized forms of the served
   decision rule produce identical results, at multiple thresholds, with and
   without per-class overrides.
-- `test_preprocess.py` (8 tests) — baseline construction, the fallback chain, z-score
-  correctness, the standard-deviation floor that prevents division by zero.
+- `test_preprocess.py` (12 tests) — baseline construction, the fallback chain, z-score
+  correctness, the standard-deviation floor that prevents division by zero, the per-hour
+  windows, and a 4-window file still scored with its own windows (the switch of 7 November).
 - `test_train_production.py` (25 tests) — the full training pipeline and the model gate: promotion with
   correct lineage, the CI gate accepting a genuinely promoted model and
   rejecting a tampered or low-F1 one, retraining determinism, a rejected

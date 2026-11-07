@@ -8,10 +8,11 @@ anomalies were never measured with the current models. This script measures them
 trains and scores a model, changing ONLY how the baselines are built:
 
   allday            one baseline per machine, all hours together
-  windows4          4 windows of 6 hours (night, morning, afternoon, evening): what production serves
+  windows4          4 windows of 6 hours (night, morning, afternoon, evening): what production served
+                    until 7 November 2026 (preprocess.legacy_hour_to_window)
   windows8          8 windows of 3 hours (00-02, 03-05, ... 21-23)
   windows12         12 windows of 2 hours (00-01, 02-03, ... 22-23)
-  hourly24          24 windows, one per hour
+  hourly24          24 windows, one per hour: what production serves since 7 November 2026
   trimmed           4 windows, top and bottom 5 % of each group dropped (preprocess_robust.py)
   hourly24_trimmed  24 windows, trimmed as above
   normal_only       4 windows, baselines from label-0 rows only. Uses the labels, which a real
@@ -54,16 +55,17 @@ WIDTH = {"windows8": 3, "windows12": 2, "hourly24": 1, "hourly24_trimmed": 1}
 DATA = ROOT / "data"
 
 
-def set_windows(df, kind: str, original):
+def set_windows(df, kind: str):
     """Give every row the window label this variant uses (the 'window' column drives the baselines'
     grouping and the z-score lookup alike, in training and in scoring)."""
     if kind == "allday":
         df["window"] = "all"
     elif kind in WIDTH:
-        w = WIDTH[kind]
-        df["window"] = df["hour"].astype(int).map({h: f"h{h // w * w:02d}" for h in range(24)})
-    else:
-        df["window"] = original
+        w = WIDTH[kind]   # 1 hour: production's labels "h00".."h23"; wider blocks: "b00", "b03", ...
+        prefix = "h" if w == 1 else "b"
+        df["window"] = df["hour"].astype(int).map({h: f"{prefix}{h // w * w:02d}" for h in range(24)})
+    else:   # windows4, trimmed, normal_only: the 4 windows production served until 7 November 2026
+        df["window"] = df["hour"].astype(int).map({h: preprocess.legacy_hour_to_window(h) for h in range(24)})
     return df
 
 
@@ -80,10 +82,10 @@ def build(kind: str, train):
     return b
 
 
-def run_variant(kind, train, val, test, val_fp, work_dir: Path, originals) -> dict:
+def run_variant(kind, train, val, test, val_fp, work_dir: Path) -> dict:
     t0 = time.time()
-    for df, name in ((train, "train"), (val, "val"), (test, "test")):
-        set_windows(df, kind, originals[name])
+    for df in (train, val, test):
+        set_windows(df, kind)
     baselines = build(kind, train)
     keys = sum(1 for k in baselines if "|" in k)
     tp.log(f"[{kind}] baselines: {len(baselines):,} keys ({keys:,} machine|window)")
@@ -146,10 +148,9 @@ def main(argv=None) -> int:
     for n, df in (("train", train), ("val", val), ("test", test)):
         record["datasets"][n]["rows"] = len(df)
     val_fp = {"file": str(args.val), "sha256": record["datasets"]["val"]["sha256"], "rows": len(val)}
-    originals = {"train": train["window"].copy(), "val": val["window"].copy(), "test": test["window"].copy()}
 
     for kind in args.variants:
-        record["results"].append(run_variant(kind, train, val, test, val_fp, args.work_dir, originals))
+        record["results"].append(run_variant(kind, train, val, test, val_fp, args.work_dir))
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(record, indent=2) + "\n")
         tp.log(f"written {out}")
