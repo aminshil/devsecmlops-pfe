@@ -546,8 +546,7 @@ def log_to_mlflow(run: dict, work_dir: Path) -> str | None:
         mlflow.set_experiment("telecom-production-model")
         with mlflow.start_run() as r:
             p = run["params"]
-            mlflow.log_params({"normal_sample": p["normal_sample"], "threshold": p["threshold"],
-                               "threshold_v3": p["threshold_v3"],
+            mlflow.log_params({"normal_sample": p["normal_sample"], "threshold": p["threshold"], "threshold_v3": p["threshold_v3"],
                                "xgb_n_estimators": p["xgb"]["n_estimators"],
                                "xgb_max_depth": p["xgb"]["max_depth"],
                                "iso_contamination": round(p["iso"]["contamination"], 6)})
