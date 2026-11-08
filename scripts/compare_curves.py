@@ -54,7 +54,7 @@ def main() -> int:
         print("the two curves use different threshold grids", file=sys.stderr)
         return 1
 
-    marks = {round(rep["params"]["threshold"], 2), 0.91}
+    marks = {round(rep["params"]["threshold"], 2), 0.91}       # 0.91: production's threshold when README 9c was measured (build 9)
     print(f"\n{'thr':>5} | {'production  P':>13} {'R':>7} {'F1':>7} | {'v3 candidate  P':>15} {'R':>7} {'F1':>7}")
     for p, c in zip(prod, cand):
         if round(p["threshold"] * 100) % 5 == 0 or round(p["threshold"], 2) in marks:

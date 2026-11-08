@@ -8,7 +8,8 @@ SHA-256 in models/manifest.json, or the API refuses to start. Other values
 select legacy paths kept for A/B comparison and reproducibility.
 
 v2.2.0 introduced — per-time-window baselines:
-  Each machine has separate baselines for night/morning/afternoon/evening.
+  Each machine has separate baselines for night/morning/afternoon/evening
+  (one per hour, h00-h23, since 8 November 2026; the window set is read from the file).
   /predict accepts an optional 'hour' (0-23) or 'timestamp' to pick the window.
   If neither is given, falls back to the per-machine (all-day) baseline.
 
@@ -342,9 +343,11 @@ app = FastAPI(
     title=f"DevSecMLOps — Anomaly Detector [{MODEL_NAME}]",
     version=APP_VERSION,
     description=(
-        "Per-machine per-time-window z-score + Isolation Forest anomaly detection. "
+        "Per-machine per-hour z-scores, an XGBoost classifier (v4 with a 10-reading history, "
+        "v3 without) and an Isolation Forest safety net. "
         "Trained on a 200-machine synthetic Tunisie Telecom fleet "
-        "(11 types, 4 time windows: night/morning/afternoon/evening). "
+        "(11 types, 24 hourly windows h00-h23; files built before 8 November 2026 use the "
+        "4 legacy windows night/morning/afternoon/evening). "
         "Fallback chain: machine+window -> machine -> type -> global. "
         "Includes dependency-graph-based root cause ranking for cascading failures. "
         "v2.12.0 adds a feedback loop: every /predict call is logged to a "

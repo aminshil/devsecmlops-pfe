@@ -160,8 +160,10 @@ use the real functions in `ml-model/preprocess.py` (baseline construction,
 z-scoring, and for v4, the rolling-feature computation) rather than a
 simplified inline reimplementation -- skipping the per-machine per-window
 baseline mis-scores the test set and produces wrong absolute F1 numbers.
-The canonical, current served baseline is v4 F1=0.7292 (v3 fallback
-F1=0.6667) at threshold 0.91 (read from the manifest), on the independent seed-123 test set -- if a
+The canonical, current served baseline (model build 15, per-hour baselines,
+since 8 November 2026) is v4 F1=0.761 at threshold 0.66 (v3 fallback
+F1=0.6956 at its own threshold 0.95; both read from the manifest), on the
+independent seed-123 test set (build 9, 4 windows: 0.7292 / 0.6667 at 0.91) -- if a
 script reports something materially different for the current production
 model, the preprocessing path is probably wrong, not the model.
 

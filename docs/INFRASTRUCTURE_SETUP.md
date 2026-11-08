@@ -90,10 +90,10 @@ The repository path is free: the playbook derives it from its own location. `/ho
 cd /root/devsecmlops-pfe
 python3.12 -m venv venv && source venv/bin/activate      # on 24.04: python3 -m venv venv
 pip install -r requirements.txt -r requirements-dev.txt
-python3 -m pytest -q tests          # expect: 276 passed
+python3 -m pytest -q tests          # expect: 286 passed
 ```
 
-The VPS ran **272 passed** at commit `a280267a`; the commit that added this guide (`1b591925`) adds 3 tests, and the VPS's Jenkins build #2 ran all **275** on it; the commit that builds MinIO adds one more (276). If the count does not match, stop here.
+The VPS ran **272 passed** at commit `a280267a`; the commit that added this guide (`1b591925`) adds 3 tests, and the VPS's Jenkins build #2 ran all **275** on it; the commit that builds MinIO adds one more (276); the per-hour baselines and the per-path thresholds (7-8 November) bring it to 285, and the MLflow record of both thresholds to 286. If the count does not match, stop here.
 
 The playbook reuses this virtualenv. It now checks the venv's Python before installing anything and stops with the deadsnakes instruction if it is older than 3.12 (`app_setup` role; FIXED, re-test). To let the playbook create the venv itself, run it with `-e venv_python=python3.12`.
 
@@ -258,7 +258,7 @@ curl -s -o /dev/null -w "control panel /ui %{http_code}\n" http://localhost:8000
 curl -s http://192.168.49.2:30080/health | python3 -c "import sys,json; d=json.load(sys.stdin); l=d['model_lineage']; print(d['status'], d['version'], l.get('threshold'), '|', l.get('threshold_source'))"
 ```
 
-Expected (VPS): five `active`; containers `registry minio sonarqube jenkins grafana node-exporter` plus `minikube`; `/ui` answers `200` (the control panel lives at `/ui`; `/` is a `404` by design); `/health` prints `ok`, the version, `0.91` and `models/manifest.json production.decision_threshold`. Ports seen from the VPS itself: Jenkins `8080` (403, login), SonarQube `9000`, Grafana `3000`, MLflow `5001`, MinIO console `9002`, Prometheus `9090`.
+Expected (VPS): five `active`; containers `registry minio sonarqube jenkins grafana node-exporter` plus `minikube`; `/ui` answers `200` (the control panel lives at `/ui`; `/` is a `404` by design); `/health` prints `ok`, the version, the v4 threshold (`0.66` since 8 November 2026; `0.91` on the VPS run) and `models/manifest.json production.decision_threshold`. Ports seen from the VPS itself: Jenkins `8080` (403, login), SonarQube `9000`, Grafana `3000`, MLflow `5001`, MinIO console `9002`, Prometheus `9090`.
 
 The playbook's last line now reports the control panel's layer count (`N/N layers up`); it printed `?/?` before, because its status call had no credentials (FIXED, re-test).
 
@@ -407,6 +407,6 @@ Still true from before:
 | Jenkins jobs, credentials, plugins and the SonarQube project are not codified | MANUAL (section 6), replayed on the VPS. Jenkins Configuration as Code would remove this; not done |
 | `/home/pfe` is a fixed path | Create it, or change `kubeconfig_path`, `minikube_home` and the Jenkins volume mounts together |
 | A new `docker` group membership does not apply to a running play | The play uses a local connection and cannot refresh it. On a non-root account, log out and in (or `newgrp docker`) after the first Docker install and re-run |
-| The served model's MLflow run lives on the original VM | `/health` names MLflow run `d81b7ea6…`, logged on the VM on 21 October; a new machine's MLflow does not have it, so `scripts/verify_mlflow_artifacts.py` (default mode) only works there. A new machine's own runs are verified with `--report` (section 7) |
+| The served model's MLflow run lives on the original VM | `/health` names MLflow run `518d2f20…`, logged on the VM on 8 November (before it, `d81b7ea6…`, 21 October); a new machine's MLflow does not have it, so `scripts/verify_mlflow_artifacts.py` (default mode) only works there. A new machine's own runs are verified with `--report` (section 7) |
 
 Sources [111]–[120] are listed in `docs/SOURCES.md`.

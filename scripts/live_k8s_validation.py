@@ -5,7 +5,9 @@ Live validation of the Kubernetes deployment on the INDEPENDENT test set.
 Data: data/telecom_fleet_v2_test.csv (generator seed 123) -- never used for
 training (the models are trained on the seed-42 file). The first --days days
 are taken; every machine is checked every --every-hours hours, so all 200
-machines and all four time windows are covered.
+machines are covered, and 24 / --every-hours of the 24 hourly baseline windows
+(6 with the default 4; --every-hours 1 covers all 24; until 8 November 2026
+the default covered all 4 windows of the model served then).
 
 Each request carries the machine's last 10 readings as `history` (the 9 before it and the current one),
 exactly what a monitoring agent would hold, so the deployment answers with
@@ -86,6 +88,17 @@ def call(url: str, item: dict) -> dict:
         return {"error": str(e), "latency": time.time() - t0}
 
 
+def served_lineage(url: str) -> dict | None:
+    """Which model answered: the MLflow run and thresholds the deployment reports on /health,
+    so a result file names the model it measured (None if /health cannot be read)."""
+    try:
+        lin = requests.get(url + "/health", timeout=10).json().get("model_lineage") or {}
+    except (requests.RequestException, ValueError, AttributeError):
+        return None
+    keys = ("mlflow_run_id", "promoted_at", "threshold", "threshold_v3", "served_v4_f1")
+    return {k: lin[k] for k in keys if k in lin}
+
+
 def summarise(ok: list[dict]) -> dict:
     y_true = [r["true_label"] for r in ok]
     y_pred = [r["is_anomaly"] for r in ok]
@@ -146,6 +159,7 @@ def main():
                      "sha256": digest},
         "days": a.days, "every_hours": a.every_hours, "errors": len(errors),
         "url": a.url, "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "served_model": served_lineage(a.url),
     }
     print(json.dumps(summary, indent=2))
     a.out.parent.mkdir(parents=True, exist_ok=True)

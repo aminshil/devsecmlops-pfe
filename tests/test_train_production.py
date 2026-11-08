@@ -355,3 +355,34 @@ def test_gate_model_name_check_cannot_be_skipped_by_formatting(tmp_path):
     assert "ansible/group_vars/all.yml: MODEL_NAME=telecom_v2, expected telecom_v3" in problems
     _, checked, problems = gate.check_model_name(prod, ROOT)          # the repository itself passes
     assert problems == [] and "ansible/group_vars/all.yml" in checked and "ansible/group_vars/demo.yml" in checked
+
+
+def test_mlflow_run_records_both_thresholds(tmp_path, monkeypatch):
+    """The MLflow run logs the v3 threshold next to the v4 one, so the catalogue shows both
+    values the API serves (one threshold per serving path since 8 November)."""
+    import types
+    calls = {}
+
+    class _Run:
+        info = types.SimpleNamespace(run_id="r1")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    fake = types.SimpleNamespace(
+        set_experiment=lambda name: None, start_run=lambda: _Run(),
+        log_params=lambda d: calls.setdefault("params", d),
+        log_metric=lambda k, v: None, set_tags=lambda d: None,
+        log_artifacts=lambda *a, **k: None)
+    monkeypatch.setitem(sys.modules, "mlflow", fake)
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://unused")
+    ev = {"f1": 0.7, "precision": 0.7, "recall": 0.8}
+    run = {"params": {"normal_sample": 1, "threshold": 0.66, "threshold_v3": 0.95,
+                      "xgb": {"n_estimators": 150, "max_depth": 6}, "iso": {"contamination": 0.06747}},
+           "candidate_evaluation": {"v3": ev, "v4": ev}, "git_commit": "abc", "guardrail_passed": True,
+           "datasets": {"train": {"sha256": "t"}, "test": {"sha256": "s"}}}
+    assert tp.log_to_mlflow(run, tmp_path) == "r1"
+    assert calls["params"]["threshold"] == 0.66 and calls["params"]["threshold_v3"] == 0.95

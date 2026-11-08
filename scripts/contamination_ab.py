@@ -19,7 +19,8 @@ import sys
 from pathlib import Path
 
 BASE_RATE_FALLBACK = 0.0675      # manifest iso.contamination, if the CSV is not present
-PRECISION_DEFAULT = 0.6713       # served decision (classifier OR IsolationForest), test set @0.91
+PRECISION_DEFAULT = 0.6713       # served decision (classifier OR IsolationForest), test set @0.91, build 9 (the model when
+                                 # this was measured; build 15, served since 8 Nov 2026: 0.725 @0.66, pass --precision)
 
 
 def base_rate_from_csv(path: Path) -> float | None:

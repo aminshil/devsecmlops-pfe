@@ -569,7 +569,7 @@
         "x": 12,
         "y": 41
       },
-      "description": "The 25 machines with the highest classifier P(anomaly) on their latest reading (from the pod that served them last, among machines that reported in the last 5 minutes), with the likely cause when the latest verdict is an anomaly; 'normal' = not flagged. The classifier flags a reading when P(normal) is below the decision threshold, i.e. P(anomaly) above 1 - threshold (0.09 at the served threshold 0.91; the threshold is in the model manifest, see /health, model_lineage). The IsolationForest safety net can flag a machine with a low P(anomaly) too.",
+      "description": "The 25 machines with the highest classifier P(anomaly) on their latest reading (from the pod that served them last, among machines that reported in the last 5 minutes), with the likely cause when the latest verdict is an anomaly; 'normal' = not flagged. The classifier flags a reading when P(normal) is below the decision threshold, i.e. P(anomaly) above 1 - threshold (0.34 at the served v4 threshold 0.66, 0.05 at the v3 threshold 0.95 for requests without history; both are in the model manifest, see /health, model_lineage). The IsolationForest safety net can flag a machine with a low P(anomaly) too.",
       "targets": [
         {
           "datasource": {

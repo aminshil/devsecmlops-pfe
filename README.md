@@ -39,17 +39,17 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 |---|---|---|
 | Version | `2.20.3` | `VERSION`, reported by `/health` |
 | Serving | `MODEL_NAME=telecom_v3`: hybrid path, **v4 rolling-features XGBoost** when a request carries a 10-reading history, v3 XGBoost otherwise, IsolationForest safety net on both | Live pod metrics: every observed request served by v4 (444 of 444 across both replicas at check time) |
-| Decision threshold | `0.91`, **chosen by the pipeline** for each trained model on the separate seed-7 validation fleet: the highest precision whose recall is at least 0.80, measured on the v4 path. The v3 fallback (requests without history) uses the same value in the served (build 9) manifest and reaches recall 0.7545 there; since 8 November 2026 the pipeline also chooses v3's own threshold by the same rule on v3's own curve (`decision_threshold_v3`), used from the next promotion ([why](#l0--ml-model)). It is read from the manifest at start-up; no deployment file carries a copy | `models/manifest.json` (`threshold_selection`), enforced by the CI model gate; `/health` → `model_lineage.threshold_source` |
+| Decision thresholds | v4 **`0.66`**, v3 fallback **`0.95`**, both **chosen by the pipeline** for each trained model on the separate seed-7 validation fleet, by the same rule applied to each serving path's own curve: the highest precision whose recall is at least 0.80 (`decision_threshold`, `decision_threshold_v3`; one threshold per path since 8 November 2026, [why](#l0--ml-model)). Until then a single value (0.91 for build 9) served both paths. Read from the manifest at start-up; no deployment file carries a copy | `models/manifest.json` (`threshold_selection`), enforced by the CI model gate (both values); `/health` → `model_lineage.threshold_source` |
 | Where to change training and threshold behaviour | One file: `config/model_policy.json` (training size, recall target, threshold grid, guardrail limits) | [Current method](#current-method-one-policy-file-a-threshold-chosen-per-model) |
-| Served v4 (independent test set, 17.28M rows) | F1 **0.7292** · precision 0.6713 · recall 0.7979 | `models/manifest.json`, re-checked by CI on every build. Several L0 analysis tables below were measured on earlier models (July: v4 F1 0.7246; 13 October: 0.7278; 19 October: 0.7291) |
-| Served v3 fallback | F1 0.6667 · precision 0.5971 · recall 0.7545 | `models/manifest.json` |
-| Weakest cause | `cascade`, recall 0.268 (label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
-| Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7731** · precision 0.7166 · recall 0.8391. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on 25 October against the served 21 October model (image `2.20.3-b116`); the 19 October model scored 0.7755 on the same sample | `scripts/live_k8s_validation.py`, run on 25 October; output in `models/results/live_validation_20261025_b116.json` |
-| Latest green pipeline | Build `2.20.3-b125` (commit `d0b11d91`, 28 October: the whole-repository review: training exit codes, the missing-artifact refusal, the legacy-model opt-in, bounded inputs, the 503 on a database drop): all 12 stages green, `ruff` clean, 272 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS), then tagged `:latest`. Before it: b123 (`4108a285`, 28 October: the fixes from the external review of 27 October, 268 tests) | [L3 run history](#l3--cicd) |
-| Tests | 285 passing, in 24 files; stage 1b runs all of them on every build (the 4 added on 8 November check the v3 path's own threshold (selected, recorded, checked by the CI gate, read by the API) and that a baselines file is read by its keys; the 5 added on 7 November check the per-hour windows and that a 4-window baselines file is still read with its own windows; the VPS's build #2, on `1b591925`, ran 275; b125 ran 272, b123 ran 268, b120 ran 241, b117 ran 225, b116 ran 223, b112 ran 188; the 31 added after b120 check the review fixes: the shared feature and decision functions against their former copies, the token on the read routes, the fail-closed integrity check, the `/predict` input rules, the training console's bounds, the pins, the MLflow read-back, the Telegram list without the safety net's alarms alone, the training pipeline's exit codes, bounded inputs, the legacy-model opt-in and a database drop mid-query; the 3 added after b125 check that a training run without promotion still records its candidate's file hashes and that the MLflow read-back uses them; the 37 added after b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute; the 16 added after b117 check the watchdog and the History tab's episode readings) | `pytest tests/` (stage 1b) |
+| Served v4 (independent test set, 17.28M rows) | F1 **0.761** · precision 0.725 · recall 0.8009 (per-hour baselines, threshold 0.66; build 9 with 4 windows: 0.7292 · 0.6713 · 0.7979) | `models/manifest.json`, re-checked by CI on every build. Several L0 analysis tables below were measured on earlier models (July: v4 F1 0.7246; 13 October: 0.7278; 19 October: 0.7291; 21 October, build 9: 0.7292), and say so |
+| Served v3 fallback | F1 0.6956 · precision 0.6149 · recall 0.8007, at its own threshold 0.95 (build 9: 0.6667 · 0.5971 · 0.7545 at 0.91) | `models/manifest.json` |
+| Weakest cause | `cascade`, recall 0.270 (v4; label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
+| Live cluster validation | Last measured on the previous model (build 9, 4 windows): 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at its live threshold 0.91: F1 **0.7731** · precision 0.7166 · recall 0.8391. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on 25 October against the 21 October model (image `2.20.3-b116`); the 19 October model scored 0.7755 on the same sample. Not yet re-run on build 15 | `scripts/live_k8s_validation.py`, run on 25 October; output in `models/results/live_validation_20261025_b116.json` |
+| Latest green pipeline | Build `2.20.3-b127` (commit `b37ba41c`, 8 November: the per-hour model promoted by model build 15): all 12 stages green, 285 tests, Quality Gate OK, model gate F1 0.761 at threshold 0.66, deployed and smoke-tested in the live pod; the live `/health` reports threshold 0.66, v3 threshold 0.95 and the 24 windows `h00`..`h23`. Before it: b126 (`be5063ae`) stopped at the Quality Gate (SonarQube rule S3776, `build_baselines` cognitive complexity 16 > 15, fixed in `b37ba41c` with the baselines byte-identical); b125 (`d0b11d91`, 28 October, 272 tests, model gate F1 0.7292 at 0.91) | [L3 run history](#l3--cicd) |
+| Tests | 286 passing, in 24 files; stage 1b runs all of them on every build (the last one added on 8 November checks that the MLflow run records both thresholds; b127 ran 285; the 4 added before it on 8 November check the v3 path's own threshold (selected, recorded, checked by the CI gate, read by the API) and that a baselines file is read by its keys; the 5 added on 7 November check the per-hour windows and that a 4-window baselines file is still read with its own windows; the VPS's build #2, on `1b591925`, ran 275; b125 ran 272, b123 ran 268, b120 ran 241, b117 ran 225, b116 ran 223, b112 ran 188; the 31 added after b120 check the review fixes: the shared feature and decision functions against their former copies, the token on the read routes, the fail-closed integrity check, the `/predict` input rules, the training console's bounds, the pins, the MLflow read-back, the Telegram list without the safety net's alarms alone, the training pipeline's exit codes, bounded inputs, the legacy-model opt-in and a database drop mid-query; the 3 added after b125 check that a training run without promotion still records its candidate's file hashes and that the MLflow read-back uses them; the 37 added after b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute; the 16 added after b117 check the watchdog and the History tab's episode readings) | `pytest tests/` (stage 1b) |
 | Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, cleared, persistent, fleet surge; the list names the classifier's anomalies, not the safety net's alone: [10b](#10b-safety-net-alarms-measured--why-telegram-lists-only-the-classifiers)), machines that miss their reports, no data, any layer down, pods, Kubernetes, traffic stopped, disk and memory. 28 rules (17 alerts, 11 recording rules) unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
 | Dashboard | 28 Grafana panels in 6 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
-| Model provenance | Served since 2026-10-21: the model promoted by Jenkins `devsecmlops-model` build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, its six model files listed in MLflow (stored in MinIO) by the pipeline (stage 6 checked the names only; it downloads and hashes them since 27 October, `scripts/verify_mlflow_artifacts.py`), on 27 October the six files the image serves were downloaded back from MLflow (MinIO) and all six match the manifest's SHA-256 (`scripts/verify_mlflow_artifacts.py`, `models/results/mlflow_readback_20261027.json`); committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); every image since, up to the latest green build (row above), carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
+| Model provenance | Served since 2026-11-08: the per-hour model promoted by Jenkins `devsecmlops-model` build 15 (MLflow `518d2f20…`, trained at commit `32d570ed`), trained on all 17,280,000 rows of the labelled fleet plus the operator-judged feedback rows (415 used for v3, 333 for v4, 17 skipped: unknown cause), v4 F1 0.761 at threshold 0.66 and v3 F1 0.6956 at 0.95, both re-selected by the pipeline, guardrail PASS on v4 and v3; committed by the pipeline (`be5063ae`) and deployed by `2.20.3-b127`. Served from 2026-10-21 to 2026-11-08: the model promoted by build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, its six model files listed in MLflow (stored in MinIO) by the pipeline (stage 6 checked the names only; it downloads and hashes them since 27 October, `scripts/verify_mlflow_artifacts.py`), on 27 October the six files the image serves were downloaded back from MLflow (MinIO) and all six match the manifest's SHA-256 (`scripts/verify_mlflow_artifacts.py`, `models/results/mlflow_readback_20261027.json`); committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); every image after it, up to b125 (and the VPS's own builds), carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
 | Deployment | Single-node Minikube, 2–5 replicas (HPA), demo and production-oriented Ansible profiles | [L4](#l4--kubernetes), [L6](#l6--ansible-infrastructure-as-code) |
 
 ---
@@ -307,9 +307,10 @@ v3 F1 are identical before and after the change. Operator verdicts stored before
 the switch keep their window name (`night`...): the stored `timestamp` is the
 scoring time, not the reading's hour, so they cannot be moved to an hour, and in
 training they use the machine's all-day baseline (the fallback below); new
-predictions store `h00`..`h23`. The served model changes at the model job's next
-promotion, which the guardrail decides; until then the figures elsewhere in this
-README are those of the 4-window model (build 9). The research scripts written
+predictions store `h00`..`h23`. The served model changed at the model job's next
+promotion, which the guardrail decides: build 15, on 8 November (below). Figures
+elsewhere in this README that are dated before 8 November are those of the
+4-window model (build 9), and say so. The research scripts written
 before this switch (e.g. `benchmark.py`, `train_serving_telecom*.py`) now build
 per-hour windows too; their quoted results come from the 4 windows, reproducible
 at commit `a9e17e9a`.
@@ -347,6 +348,28 @@ per-hour file carried per-hour keys under the legacy `__windows__` list (written
 before `a9e17e9a`), so it was read with 4 windows and fell back to the all-day
 baselines; `window_function` now reads the windows from the keys, and the check was
 re-run on the corrected file.
+
+**The promotion (8 November 2026, model build 15).** The same job (`SCOPE=full`,
+feedback on, `PROMOTE` on) on commit `32d570ed`, MLflow run
+`518d2f207a434e678f3d6bd639d9885a`: 17,280,000 rows plus 415 / 333 feedback rows
+(v3 / v4, 17 skipped: unknown cause). Thresholds selected on validation by the
+policy rule, one per path: v4 **0.66** (precision 0.7266, recall 0.8001, F1 0.7616)
+and v3 **0.95** (precision 0.6167, recall 0.8003, F1 0.6966). Guardrail on
+validation, v4 and v3, every rule: **PASS**. Test set (seed 123, 17,280,000 rows):
+
+| Served decision, test | Threshold | F1 | Precision | Recall | silent_failure | cascade |
+|---|---|---|---|---|---|---|
+| v4, build 9 (4 windows) | 0.91 | 0.7292 | 0.6713 | 0.7979 | 0.9811 | 0.268 |
+| **v4, build 15 (per hour)** | **0.66** | **0.761** | 0.725 | 0.8009 | 0.9722 | 0.2695 |
+| v3, build 9 | 0.91 | 0.6667 | 0.5971 | 0.7545 | | |
+| **v3, build 15** | **0.95** | **0.6956** | 0.6149 | 0.8007 | 0.9468 | 0.3074 |
+
+The job committed the model (`be5063ae`) and started the application pipeline:
+build #126 stopped at the SonarQube Quality Gate (rule S3776, cognitive complexity
+of `preprocess.build_baselines` 16 > 15); commit `b37ba41c` moved the mean / std
+computation into one helper (`_mean_std`; the baselines file is byte-identical), and
+build #127 passed all 12 stages and deployed image `2.20.3-b127`. The live `/health`
+reports threshold 0.66, v3 threshold 0.95 and 24 windows.
 
 The earlier evidence for the 4 windows (`ml-model/test_timewindow_full.py`,
 6 July 2026: an IsolationForest on a 400,000-row sample of the first, v1 fleet,
@@ -580,8 +603,8 @@ cascade 0.029.
 > **These are the real numbers from this stage of the project.** They predate
 > the v3/v4 switch, the threshold correction, and the served-decision-rule
 > discipline this document now enforces throughout. Do not read `0.731` as a
-> current production number — the current one is 0.7292 served (v4,
-> threshold 0.91), stated in [Executive summary](#executive-summary) and
+> current production number — the current one is 0.761 served (v4,
+> threshold 0.66, build 15), stated in [Executive summary](#executive-summary) and
 > [Current production](#current-production-the-numbers-that-supersede-everything-above) below.
 
 **Why both models are kept, not just the better one:** `cascade` labels
@@ -754,7 +777,7 @@ real advantage over the already-deployed XGBoost.
 > **v3, today:** the numbers above are what justified the v2→v3 switch at
 > the time. v3 is still shipped, as the fallback path whenever a request
 > has no rolling history — its current, corrected served F1 (independent
-> seed-123 test set, threshold 0.91) is **0.6667**, stated in
+> seed-123 test set, its own threshold 0.95, build 15) is **0.6956**, stated in
 > [Executive summary](#executive-summary). See "v4" immediately below for what replaced it as
 > the primary path.
 
@@ -779,7 +802,7 @@ Applied only to metrics where change-over-time is diagnostic. disk_usage (accumu
 
 +0.098 F1, +0.156 precision, +0.056 recall at the time -- a large, real improvement. Per-cause recall improved on every category except cascade (which stays limited by the 40%-consistent label noise documented above): cpu_spike 0.894 -> 0.982, memory_leak 0.736 -> 0.909 (the +17-point gradual-onset win), network_flood 0.915 -> 0.976, disk_saturation 0.977 -> 0.994, silent_failure 0.906 -> 0.978.
 
-> **This F1=0.816 figure is the classifier alone, at threshold 0.5 — not the served decision, and not at the threshold now deployed.** It is real and it is kept here because it is genuinely informative about the classifier's own strength. The number this project now reports as "production" is the *served* decision (classifier OR IsolationForest) at the threshold the pipeline selected (0.91): **F1 = 0.7292**. See [Executive summary](#executive-summary) and [Current production](#current-production-the-numbers-that-supersede-everything-above) for the full, current, corrected numbers and the reasoning behind every difference from this section.
+> **This F1=0.816 figure is the classifier alone, at threshold 0.5 — not the served decision, and not at the threshold now deployed.** It is real and it is kept here because it is genuinely informative about the classifier's own strength. The number this project now reports as "production" is the *served* decision (classifier OR IsolationForest) at the threshold the pipeline selected: **F1 = 0.761** at 0.66 (build 15, per-hour baselines; build 9: 0.7292 at 0.91). See [Executive summary](#executive-summary) and [Current production](#current-production-the-numbers-that-supersede-everything-above) for the full, current, corrected numbers and the reasoning behind every difference from this section.
 
 ##### Live K8s results at the time (33,600-request two-week demo, threshold 0.85)
 
@@ -795,7 +818,7 @@ v4 beat v3 on every live metric at the time, zero errors on 33,600 requests. mem
 > A proper F2-maximizing sweep on an independent validation fleet selected
 > **0.60** instead. A fresh live validation at the corrected threshold, against
 > the real deployed cluster, is in [Current production](#current-production-the-numbers-that-supersede-everything-above):
-> on the served 21 October model (threshold 0.91, run on 25 October) F1 = 0.7731 on 16,600 live HTTP requests (carrying simulated readings), 0 errors, every one served by v4.
+> on the 21 October model, served until 8 November (threshold 0.91, run on 25 October), F1 = 0.7731 on 16,600 live HTTP requests (carrying simulated readings), 0 errors, every one served by v4.
 
 ##### Serving architecture: client supplies history (stateless API)
 
@@ -885,13 +908,14 @@ IsolationForest safety net is unsupervised and unaffected by feedback):
    in [Engineering decision 24](#24-why-the-retrain-guardrail-is-strict-and-what-500-rows-proved-updated)
    about the 500-row retrain test.
 
-This experiment predates, and is independent of, the current single-threshold
-selection methodology — both are real, and the honest relationship between
+This experiment predates, and is independent of, the current threshold
+selection methodology (one threshold per serving path, each chosen on the whole fleet) — both are real, and the honest relationship between
 them is: per-class thresholding was explored and found to work well but was
-not the direction shipped; a single, evidence-selected threshold is what
-production runs: 0.91, chosen by the rule in `config/model_policy.json` (the
-highest precision whose recall on the validation fleet is at least 0.80; it was
-0.60, by F2, until 19 October).
+not the direction shipped; an evidence-selected threshold per serving path is what
+production runs: 0.66 for v4 and 0.95 for v3 (build 15), chosen by the rule in
+`config/model_policy.json` (the highest precision whose recall on the validation
+fleet is at least 0.80; it was 0.60, by F2, until 19 October, and one value, 0.91,
+for both paths from 19 October to 8 November).
 
 ##### Live serving validation: offline metrics vs the real API (at the time)
 
@@ -1008,27 +1032,32 @@ Reading it honestly: training on all rows raised the share of normal rows from a
 
 **21 October (build 9).** The same policy, retrained with 315 judged feedback rows: threshold 0.91 again (validation recall 0.801, precision 0.6713, F1 0.7304), test v4 0.6713 / 0.7979 / 0.7292, v3 0.6667. A change of +0.0001: no improvement is claimed, and none was expected from 222 rows among 17.28M.
 
-#### Production numbers (independent test set, 17,280,000 rows, threshold 0.91)
+**8 November (build 15).** Per-hour baselines and one threshold per path, same policy: v4 0.66 (validation recall 0.8001, precision 0.7266, F1 0.7616), v3 0.95 (validation recall 0.8003, precision 0.6167, F1 0.6966); test v4 0.725 / 0.8009 / 0.761, v3 0.6149 / 0.8007 / 0.6956. The gain (+0.032 v4 F1 at the same recall) comes from the baselines, measured before the switch on two independent sets of fleets ([the per-hour measurement](#l0--ml-model)); the threshold moved from 0.91 to 0.66 because the per-hour z-scores change the classifier's probabilities.
+
+#### Production numbers (independent test set, 17,280,000 rows; build 15: v4 threshold 0.66, v3 0.95)
 
 | Served path | Precision | Recall | F1 | Classifier-only F1 |
 |---|---|---|---|---|
-| **v4 (production)** | 0.6713 | 0.7979 | **0.7292** | 0.8102 |
-| v3 (fallback, no history) | 0.5971 | 0.7545 | 0.6667 | 0.7124 |
-| v4 @ threshold 0.5, for reference (19 October model) | 0.6956 | 0.7743 | 0.7329 | 0.8192 |
+| **v4 (production)** | 0.725 | 0.8009 | **0.761** | 0.8347 |
+| v3 (fallback, no history, threshold 0.95) | 0.6149 | 0.8007 | 0.6956 | 0.734 |
+| v4 @ threshold 0.5, for reference | 0.7268 | 0.7977 | 0.7606 | 0.8332 |
+| *build 9 (21 October to 8 November), v4 at 0.91* | 0.6713 | 0.7979 | 0.7292 | 0.8102 |
+| *build 9, v3 at 0.91* | 0.5971 | 0.7545 | 0.6667 | 0.7124 |
 
-Per-cause recall (v4, served decision, threshold 0.91, read from `models/manifest.json`): `cpu_spike` 0.988, `disk_saturation` 0.9967, `memory_leak` 0.9333, `network_flood` 0.9945, `silent_failure` 0.9811, `cascade` 0.268. The v3 fallback catches cascades slightly better (0.2989). Both classifiers are trained with cascade labelled `normal`, so cascade detection comes almost entirely from the IsolationForest safety net (see
+Per-cause recall (v4, served decision, threshold 0.66, read from `models/manifest.json`): `cpu_spike` 0.9902, `disk_saturation` 0.9981, `memory_leak` 0.9536, `network_flood` 0.9968, `silent_failure` 0.9722, `cascade` 0.2695 (build 9 at 0.91: 0.988, 0.9967, 0.9333, 0.9945, 0.9811, 0.268). The v3 fallback catches cascades slightly better (0.3074). Both classifiers are trained with cascade labelled `normal`, so cascade detection comes almost entirely from the IsolationForest safety net (see
 [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training)
 for why cascade remains the one weak point — the generator's own cascade
 labeling is inconsistent between rows, unchanged since that decision was
-first made). Cause accuracy on detected, correctly-named anomalies: 0.9983.
+first made). Cause accuracy on detected, correctly-named anomalies: 0.9985 (build 9: 0.9983).
 
 **On the number `0.816`, and on `0.85`, which circulated in earlier versions
 of this document:** `0.816` is the classifier's own F1 at threshold 0.5, in
 isolation — real, but never the served decision at any threshold. `0.85` was
 never the product of the search above; it came from an earlier sweep of the
 classifier alone, before the served decision (classifier OR IsolationForest)
-was measured. `0.7292` at threshold `0.91` is what a request to this
-deployment actually returns today.
+was measured. `0.761` at threshold `0.66` (v4; `0.6956` at `0.95` for v3) is what a
+request to this deployment actually returns today (build 15; build 9 returned
+`0.7292` at `0.91`).
 
 #### Live validation against the real, running cluster
 
@@ -1046,13 +1075,13 @@ it and the current one, the window v4 was trained on) as history, reporting whic
 }
 ```
 
-This is the run of 25 October 2026 against the served model (promoted on 21 October, image `2.20.3-b116`, cluster threshold 0.91 read from the manifest; output in `models/results/live_validation_20261025_b116.json`, which records the test file's SHA-256): the first 14 days of the independent test file, every machine every 4 hours, 16,600 requests, all answered by v4, 0 errors. Per-cause recall: `cpu_spike` 0.9676, `disk_saturation` 0.9867, `memory_leak` 0.9439, `network_flood` 0.9944, `silent_failure` 0.9721, `cascade` 0.2598. Latency through the NodePort with 20 concurrent workers: p50 316 ms, p95 668 ms, maximum 3,405 ms (a load-test figure, not single-request latency). The same sample on the 19 October model gave F1 0.7755, precision 0.7202, recall 0.84 (`memory_leak` 0.949); a difference this small on 1,094 anomalous readings is within the noise of one sample, and the two models' offline F1 differ by 0.0001. **The F1 of 0.7731 is higher than the 0.7292 measured on the whole test file for this model because it is a different sample (14 days, one reading in 480 per machine (every 4 hours at 30-second resolution)), not because the served model is better; the offline figure on all 17.28M rows is the one to quote.** The earlier live run (13 October model, threshold 0.60, 2,200 requests: F1 0.7267, precision 0.6229, recall 0.872) used a smaller sample and is likewise not comparable. This supersedes the earlier 33,600-request live validation reported
+This is the run of 25 October 2026 against the model then served (build 9, 4 windows, promoted on 21 October, image `2.20.3-b116`, cluster threshold 0.91 read from the manifest; output in `models/results/live_validation_20261025_b116.json`, which records the test file's SHA-256): the first 14 days of the independent test file, every machine every 4 hours, 16,600 requests, all answered by v4, 0 errors. Per-cause recall: `cpu_spike` 0.9676, `disk_saturation` 0.9867, `memory_leak` 0.9439, `network_flood` 0.9944, `silent_failure` 0.9721, `cascade` 0.2598. Latency through the NodePort with 20 concurrent workers: p50 316 ms, p95 668 ms, maximum 3,405 ms (a load-test figure, not single-request latency). The same sample on the 19 October model gave F1 0.7755, precision 0.7202, recall 0.84 (`memory_leak` 0.949); a difference this small on 1,094 anomalous readings is within the noise of one sample, and the two models' offline F1 differ by 0.0001. **The F1 of 0.7731 is higher than the 0.7292 measured on the whole test file for this model because it is a different sample (14 days, one reading in 480 per machine (every 4 hours at 30-second resolution)), not because the served model is better; the offline figure on all 17.28M rows is the one to quote.** The earlier live run (13 October model, threshold 0.60, 2,200 requests: F1 0.7267, precision 0.6229, recall 0.872) used a smaller sample and is likewise not comparable. This supersedes the earlier 33,600-request live validation reported
 in the "Rolling features (v4)" section above, which used the unmeasured 0.85
 threshold and, in an even earlier iteration of this project, was measured
 against data that overlapped the training set — that overlap has since been
 corrected (this script now reads only the seed-123 independent file, with
 its SHA-256 recorded in the output specifically so the claim is checkable),
-and this run is the current, trustworthy record.
+and this run is the latest trustworthy record (of build 9; it has not yet been re-run on build 15).
 
 
 #### Model integrity
@@ -1106,7 +1135,7 @@ committed password in this exact Secret's original file.
 | raw_metrics_json     | TEXT      | no       | JSON dict of the original cpu/ram/network/etc values         |
 | history_json         | TEXT      | yes      | JSON dict of the v4 rolling-history window, when supplied (added in the most recent API pass, to make v4 predictions fully reproducible from logged data) |
 | model_version        | TEXT      | no       | e.g. telecom_v3 / telecom_v4_rolling                          |
-| predict_threshold    | DOUBLE PRECISION | no | the threshold that served the reading, e.g. 0.91 (the current value, read from `models/manifest.json`) |
+| predict_threshold    | DOUBLE PRECISION | no | the threshold that served the reading, read from `models/manifest.json`: 0.66 for v4 and 0.95 for v3 (build 15); 0.91 for rows served by build 9 |
 | xgb_p_normal         | DOUBLE PRECISION | yes | Raw probability the model gave for the 'normal' class     |
 | xgb_cause            | TEXT      | yes      | Predicted cause (normal / cpu_spike / memory_leak / etc)     |
 | iso_score            | DOUBLE PRECISION | yes | IsolationForest anomaly score                             |
@@ -1684,7 +1713,7 @@ Jenkins, `Jenkinsfile`, 12 stages, every one a real gate — a failure stops the
 Stage labels below match the Jenkins console exactly.
 
 - **1. Checkout**
-- **1b. Unit tests** — `ruff` on every Python file (errors, undefined names, unused imports and variables, likely bugs), then pytest (285 tests), coverage report. Fail-fast: a broken commit stops here.
+- **1b. Unit tests** — `ruff` on every Python file (errors, undefined names, unused imports and variables, likely bugs), then pytest (286 tests), coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube, on `api`, `ml-model` and, since 27 October, every script that runs in production or in a pipeline: the production agent and the Kubernetes exporter, the Prometheus watchdog (it handles the Telegram token), the CI model gate, the model job's helpers (feedback export, report summary, MLflow read-back), the smoke test, the MinIO bucket setup, the pin script and the CI configuration tool (`SONAR_SOURCES` in the `Jenkinsfile`; coverage is measured on `api` and `ml-model`). The other files in `scripts/` and `monitoring/` are read-only measurement tools and earlier traffic designs: run by hand, deployed nowhere, and the README's numbers are their output, so refactoring them for the gate's complexity rules would put those numbers at risk. They are linted in stage 1b instead.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that no deployment file carries a copy of the threshold (it is read from the manifest) and that the manifest's threshold is the evaluated one, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
@@ -1737,6 +1766,8 @@ Each failure below was a genuine problem, diagnosed from the log and fixed befor
 | 29 | **SUCCESS** | — | Build `2.20.3-b123` (commit `4108a285`): `ruff` clean, 268 tests, Sonar gate OK, repository scan clean, model gate F1 0.7292, 0 image vulnerabilities, deployed and smoke-tested in the live pod (7 PASS), `:latest` moved by the new stage 10; the first image with the review fixes (shared functions, token on the read routes, stricter `/predict` input) |
 | 30 | Stopped at 2b | Build `b124` (commit `4c098647`, the whole-repository review): 272 tests passed, Quality Gate `ERROR` on one new issue, `python:S3776`: the missing-artifact check pushed `run_pipeline` in `train_production.py` to cognitive complexity 16 (limit 15) | The check moved to its own function, `production_files_missing()`, same behaviour (`d0b11d91`) |
 | 31 | **SUCCESS** | — | Build `2.20.3-b125` (commit `d0b11d91`): `ruff` clean, 272 tests, Sonar gate OK, repository scan clean, model gate F1 0.7292, 0 image vulnerabilities, deployed and smoke-tested in the live pod (7 PASS), `:latest` moved; the first image with the whole-repository review's fixes |
+| 32 | Stopped at 2b | Build `b126` (commit `be5063ae`), started by model build 15 after it promoted the per-hour model: Quality Gate `ERROR` on one new issue, `python:S3776`: the windows record added in `32d570ed` pushed `preprocess.build_baselines` to cognitive complexity 16 (limit 15) | The mean / std computation moved into one helper, `_mean_std` (`b37ba41c`); the baselines file it writes is byte-identical |
+| 33 | **SUCCESS** | — | Build `2.20.3-b127` (commit `b37ba41c`): all 12 stages green, 285 tests, Sonar gate OK, model gate F1 0.761 at threshold 0.66, deployed and smoke-tested in the live pod; the first image serving the per-hour model (build 15) with a threshold per path (v4 0.66, v3 0.95) |
 
 Builds b98 to b107 and b110 are not listed one by one. Run 17 is the same gate stopping new code: the operations UI
 and the v3 generator, both covered by tests, still had to meet the zero-new-issues rule.
@@ -2269,7 +2300,7 @@ credentials directly, only the MLflow service does. **Verified with a real
 round trip**: a metric and a file artifact logged through the API, then
 read back through MLflow from MinIO, byte-for-byte correct.
 
-**The canonical pipeline logs to it (verified, and a gap found on the way).** `ml-model/train_production.py` logs every run (parameters, v3/v4 metrics, git commit, train/test dataset hashes, and the model artifacts) to experiment `telecom-production-model`, but only when `MLFLOW_TRACKING_URI` is set; otherwise it skips silently. For a time MLflow therefore held only experiment-phase runs and nothing from the pipeline that governs production. Closed with a real run (`1cc2b5a0fa75465494301dedeab075a6`): trained, evaluated against production on the independent test set, guardrail `PASS`, logged to MLflow with its artifacts stored in MinIO through MLflow's artifact proxy, and its run id recorded in `models/manifest.json`. `Jenkinsfile.model` sets the variable, so every retraining job it runs is tracked.
+**The canonical pipeline logs to it (verified, and a gap found on the way).** `ml-model/train_production.py` logs every run (parameters, among them both thresholds, `threshold` for v4 and `threshold_v3` since 8 November 2026 (runs before that, build 15 included, carry `threshold` only; build 15's v3 value is in the manifest); v3/v4 metrics, git commit, train/test dataset hashes, and the model artifacts) to experiment `telecom-production-model`, but only when `MLFLOW_TRACKING_URI` is set; otherwise it skips silently. For a time MLflow therefore held only experiment-phase runs and nothing from the pipeline that governs production. Closed with a real run (`1cc2b5a0fa75465494301dedeab075a6`): trained, evaluated against production on the independent test set, guardrail `PASS`, logged to MLflow with its artifacts stored in MinIO through MLflow's artifact proxy, and its run id recorded in `models/manifest.json`. `Jenkinsfile.model` sets the variable, so every retraining job it runs is tracked.
 
 **The same pipeline, run by Jenkins at full scale (verified).** `Jenkinsfile.model` with `SCOPE=full`, feedback on and `PROMOTE` off: the 3.17M-row training set and the 17.28M-row test set, 11.5 GiB of free memory at the start, 19 minutes end to end. Candidate v4 F1 0.7280 (precision 0.672, recall 0.794) against production 0.7246, and v3 0.6552 against 0.6496; guardrail `PASS`, deliberately not promoted. The run is MLflow `57e33ba05b444d52aa1bbc0173881d0e` (experiment `telecom-production-model`), and stage 6 read its six model files back through MLflow from MinIO. Feedback: 34 judged rows exported from PostgreSQL through `kubectl exec`, 29 used (by v3 and v4 alike, because every row carries its history) and 5 skipped (3 missed anomalies, which carry no cause, and 2 detections the classifier could not name). The verdicts are simulated: the ground truth of a generated fleet that is disjoint from the training, validation and test sets stands in for an operator. The +0.0002 F1 over the earlier host run (0.7278) is within noise and confounded by the Python version (3.13 here, 3.10 there) and the feedback rows, so no improvement is claimed: 29 rows are 0.001% of the training data.
 
@@ -2282,6 +2313,8 @@ read back through MLflow from MinIO, byte-for-byte correct.
 **Promotion with feedback, end to end (verified, 21 October 2026).** `devsecmlops-model` build 9, `SCOPE=full`, feedback on, `PROMOTE` on. Stage 2 exported 315 judged rows from PostgreSQL; stage 4 used 304 for v3 and 222 for v4 and skipped 11 whose cause is unknown; the classifier trained on all 17,280,000 rows in 1,134 s (IsolationForest contamination 0.06747). The threshold was re-selected on the 8,064,000-row validation fleet: 0.91 by the rule `min_recall` (recall 0.801, precision 0.6713, F1 0.7304). On the test fleet the candidate scored v4 F1 0.7292 (precision 0.6713, recall 0.7979) against production 0.7291, and v3 0.6667 against 0.6664. Guardrail `PASS`; MLflow run `d81b7ea68cb84ca68c6f485676d2ecf5`; stage 6 listed the six model files in MLflow (stored in MinIO); stage 7 ran the CI model gate (all OK) and pushed commit `bd0fdd67` (the two classifiers and the manifest changed; the IsolationForest file did not, since it is fit on the fleet alone); stage 8 started the application pipeline, whose build #111 went green and deployed `devsecmlops-api:2.20.3-b111`. The +0.0001 is not an improvement and is not claimed as one (222 rows are 0.001% of the training set). What the run proves is the whole loop: operator verdicts in the database become a retrained, gated, committed and deployed model, with no manual step.
 
 **First write to the rebuilt MinIO (verified, 3 November 2026).** `devsecmlops-model` build 11 on commit `718da235`, `SCOPE=full`, feedback on, `PROMOTE` off: the first run after the playbook moved the VM's MinIO to the image it builds from the release binary (non-root, uid 10002; setup guide, gap 8). Build 10 had stopped at the preflight before any work (8,948 MiB free; the full scope needs 9,000), so SonarQube was stopped for build 11 and started again after it. Stage 2 exported 384 judged rows; stage 4 used 368 for v3 and 286 for v4 and skipped 16 whose cause is unknown; the classifier trained on all 17,280,000 rows in 1,186 s. On the test fleet the candidate scored v4 F1 0.7290 (precision 0.6712, recall 0.7978) against production 0.7292, and v3 0.6666 against 0.6667; guardrail `PASS` (a preview on the test set, since without `PROMOTE` nothing is decided), not promoted, so the served model is still build 9's. Stage 6 downloaded the six files of MLflow run `ac12ad07c9be4dce895cdd8014dd6cdd` from MinIO and found each identical to the SHA-256 recorded at training; MinIO's log had no error. With the read-back of the served run's six files the day before (`scripts/verify_mlflow_artifacts.py`), this shows the rebuilt MinIO both returns the data it took over and stores new data.
+
+**A rejection, then the per-hour model promoted (verified, 8 November 2026).** Two runs of `devsecmlops-model`, `SCOPE=full`, feedback on, `PROMOTE` on, after the switch to per-hour baselines ([L0](#l0--ml-model)). The first (commit `b6d09daa`, MLflow `9e8e5ee9…`) was **refused by the guardrail** on two causes of the v3 path (silent_failure and cascade recall down more than 0.02 on validation), because v3 was judged at the threshold chosen on the v4 curve; production stayed unchanged and nothing was committed. After the change that gives each path its own threshold (`32d570ed`), build 15: 17,280,000 rows plus 415 / 333 feedback rows (v3 / v4, 17 skipped: unknown cause); thresholds selected on the validation fleet, v4 0.66 (recall 0.8001, precision 0.7266, F1 0.7616) and v3 0.95 (recall 0.8003, precision 0.6167, F1 0.6966); on the test fleet v4 F1 0.761 (precision 0.725, recall 0.8009) against production 0.7292, v3 0.6956 against 0.6667. Guardrail `PASS` on both paths; MLflow run `518d2f207a434e678f3d6bd639d9885a`; the job committed the model (`be5063ae`) and started the application pipeline, whose second run (b127, after a Sonar fix) deployed it.
 
 ```bash
 # Now provisioned by Ansible (roles/prerequisites, roles/monitoring) --
@@ -2810,7 +2843,7 @@ ratio 28.86x  (1.0x = the cascade tells you nothing about the router)
 The router is anomalous in 87%, not 100%, of cascade steps mostly because dependents recover a
 little after the router does (the recovery tail of section 4 above).
 
-**Accuracy: production versus a v3-trained candidate** (step 3 trains the candidate on the 30-day
+**Accuracy: production (build 9, 4 windows: the model served when this was measured) versus a v3-trained candidate** (step 3 trains the candidate on the 30-day
 v3 training fleet, 17,280,000 rows, IsolationForest contamination 0.06311; the policy selects its
 threshold on the v3 validation fleet: 0.32, recall 0.8569, precision 0.7268. Step 5 prints):
 
@@ -3102,13 +3135,15 @@ RandomForest is blind to cascades by construction (see previous). IsolationFores
 
 Both rejections are documented with real numbers, not hand-waved. This remains the shipped architecture today: the served decision is still `classifier OR IsolationForest` (`ml-model/decision.py`), unchanged in principle since this decision was made, though the classifier and the specific safety-net numbers have moved on since (see [L0 — ML Model](#l0--ml-model) and the [unsupervised-model comparison](#why-isolation-forest-updated--corrected-methodology) in L0).
 
-**Measured on 19 October, at the served threshold (0.91), on the full 17,280,000-row test set** (`scripts/decision_components.py`, same model outputs for all three rows; the OR row reproduced that model's 0.7291 / 0.6713 / 0.7979; the 21 October retrain scores 0.7292):
+**Measured on 19 October, at the threshold then served (0.91), on the full 17,280,000-row test set** (`scripts/decision_components.py`, same model outputs for all three rows; the OR row reproduced that model's 0.7291 / 0.6713 / 0.7979; the 21 October retrain scores 0.7292):
 
 | Decision | Precision | Recall | F1 | Cascade recall |
 |---|---|---|---|---|
 | XGBoost classifier alone | 0.8972 | 0.7382 | **0.8100** | 0.041 |
 | IsolationForest alone | 0.6666 | 0.6610 | 0.6638 | 0.251 |
 | **Served: classifier OR IsolationForest** | 0.6713 | **0.7979** | 0.7291 | 0.268 |
+
+The served model since 8 November (build 15, per-hour baselines, threshold 0.66; read from `models/manifest.json`) shows the same pattern: classifier alone precision 0.9677, recall 0.7338, F1 0.8347; served 0.725 / 0.8009 / 0.761, cascade 0.2695. The OR rule buys +6.7 points of recall for 24.3 points of precision.
 
 What this says, without softening it:
 
@@ -3213,8 +3248,9 @@ cpu/ram/load_avg) were first tested on a 5-day pilot (F1 0.708 -> 0.729) and
 initially left out of production because they seemed to require a stateful
 serving path. That concern was resolved and the features were fully
 integrated as the v4 model. At full scale the gain was substantial: served
-F1 (independent seed-123 test set, 17,280,000 rows, current threshold 0.91)
-went from 0.6667 (v3) to 0.7292 (v4) -- see [L0 — ML Model](#l0--ml-model) for
+F1 (independent seed-123 test set, 17,280,000 rows, build 9, threshold 0.91)
+went from 0.6667 (v3) to 0.7292 (v4); with per-hour baselines and a threshold
+per path (build 15) it is 0.6956 (v3, 0.95) and 0.761 (v4, 0.66) -- see [L0 — ML Model](#l0--ml-model) for
 the current, corrected numbers, which supersede the offline figures this
 subsection originally quoted.
 
@@ -3340,7 +3376,7 @@ margin.
 ratchet.** Each promotion is compared with the model it replaces, so three
 promotions in a row could each lose 0.03 F1 and together lose 0.09 without a
 single rejection. What bounds the slide today is the CI model gate's absolute
-floor (`F1_THRESHOLD` 0.60 in the `Jenkinsfile`; production is 0.7292), and
+floor (`F1_THRESHOLD` 0.60 in the `Jenkinsfile`; production is 0.761), and
 the process: every promotion is a commit with its numbers. Comparing each
 candidate with the best model ever promoted, not only the current one, is the
 fix (listed in Known limitations).
@@ -3367,7 +3403,7 @@ this project.)
 
 ## Testing
 
-**285 tests** in 24 files (up from 15), `pytest`, in `tests/`; stage 1b runs all of them on every build:
+**286 tests** in 24 files (up from 15), `pytest`, in `tests/`; stage 1b runs all of them on every build:
 
 - `test_api.py` (69 tests) — every endpoint, the window of a reading taken from the served baselines file's own mapping, input validation (NaN/inf
   rejection, including raw `NaN`/`Infinity` tokens answered with 422 rather than 500, reserved `__` machine names, physical-range rejection (cpu=150 is a 422), the opt-in feedback token on the write and on the three read routes, the machine-name pattern (`web-01|night` is a 422), `hour` out of range (422, with or without windowed baselines), metrics count, history shape), v3/v4
@@ -3382,7 +3418,7 @@ this project.)
 - `test_preprocess.py` (13 tests) — baseline construction, the fallback chain, z-score
   correctness, the standard-deviation floor that prevents division by zero, the per-hour
   windows, a 4-window file still scored with its own windows (the switch of 7 November), and a file read by its keys when its metadata disagrees.
-- `test_train_production.py` (27 tests) — the full training pipeline and the model gate: the v3 path's own threshold selected, recorded and checked; promotion with
+- `test_train_production.py` (28 tests) — the full training pipeline and the model gate: the v3 path's own threshold selected, recorded and checked, and logged to MLflow next to the v4 one; promotion with
   correct lineage, the CI gate accepting a genuinely promoted model and
   rejecting a tampered or low-F1 one, retraining determinism, a rejected
   candidate leaving production byte-for-byte untouched, and feedback rows
@@ -3557,7 +3593,7 @@ python monitoring/k8s_exporter.py &
 
 ## Known limitations and future work
 
-- **The served model changed on 13, 19 and 21 October; the live validation was re-run on the current model.** On 21 October build 9 retrained with 315 judged feedback rows (v4 F1 0.7292, threshold 0.91 again). On 19 October build 8 trained on all 17.28M rows and re-selected the threshold (0.91), v4 F1 0.7291. Until 13 October the served models were trained in July by earlier scripts and adopted with hashes (manifest `git_commit: null`); on 13 October the pipeline-trained candidate replaced them (MLflow run `f622a7a9…`, v4 F1 0.7278). `scripts/live_k8s_validation.py` ran on 19 October against that day's model and again on 25 October against the 21 October model (16,600 requests each, 0 errors; F1 0.7755, then 0.7731, see Current production). The live-versus-offline comparison made earlier in this project (precision 0.676, recall 0.788, F1 0.728 over 39,789 matched live predictions) was measured on the July model and was not repeated. No deployment file carries the threshold: the API reads it from the manifest, so a changed threshold needs no file sync.
+- **The served model changed on 13, 19 and 21 October and on 8 November; the live validation was last re-run on 25 October (build 9).** On 8 November build 15 replaced it: per-hour baselines and a threshold per path (v4 F1 0.761 at 0.66, v3 0.6956 at 0.95); `scripts/live_k8s_validation.py` has not yet been run against it. On 21 October build 9 retrained with 315 judged feedback rows (v4 F1 0.7292, threshold 0.91 again). On 19 October build 8 trained on all 17.28M rows and re-selected the threshold (0.91), v4 F1 0.7291. Until 13 October the served models were trained in July by earlier scripts and adopted with hashes (manifest `git_commit: null`); on 13 October the pipeline-trained candidate replaced them (MLflow run `f622a7a9…`, v4 F1 0.7278). `scripts/live_k8s_validation.py` ran on 19 October against that day's model and again on 25 October against the 21 October model (16,600 requests each, 0 errors; F1 0.7755, then 0.7731, see Current production). The live-versus-offline comparison made earlier in this project (precision 0.676, recall 0.788, F1 0.728 over 39,789 matched live predictions) was measured on the July model and was not repeated. No deployment file carries the threshold: the API reads it from the manifest, so a changed threshold needs no file sync.
 
 - **Disk headroom is a CI dependency.** Every Jenkins build leaves a ~2 GB image on the host (the registry keeps its own copy, so local images are safe to prune), and SonarQube's Elasticsearch switches every index to read-only when the disk passes 95% (observed live, and again at 97% before a cleanup). Unpruned, a day of builds is enough to reach it. Routine: `docker image prune -a -f --filter "until=24h"` after heavy CI days and a `df -h /` before a demo. The registry volume (about 6 GB, every tag since `2.3.0`) is the one store that only grows; trimming it needs registry garbage collection, which means recreating its container with deletes enabled and its network preserved.
 - **Dependencies are pinned at the top level, not locked.** `requirements-api.txt`, `boto3` and `msgpack` are pinned exactly, but their transitive dependencies are only bounded (`>=`), so two builds hours apart can install different versions (observed: `python-dotenv` 1.2.3 → 1.2.4 and `uvloop` 0.22.1 → 0.23.0 between builds `b93` and `b94`; the image scan reports 0 vulnerabilities in both). A lockfile generated from the image's Python environment would close it; it needs its own verification cycle, so it is deliberately left for after the defense.
@@ -3577,30 +3613,30 @@ python monitoring/k8s_exporter.py &
   signal a gray failure leaves (retransmissions, latency). A model trained on v3 data was rejected
   by the guardrail, so production keeps the v2-trained model.
 - **The safety net costs most of the precision.** On the v3 test fleet the classifier alone reaches
-  precision 0.91 (production) to 0.99 (v3 candidate); the served decision, classifier OR
+  precision 0.91 (production, build 9) to 0.99 (v3 candidate); the served decision, classifier OR
   IsolationForest, is about 0.73 for both. Tuning the safety net is the more promising lever.
 - **v4's rolling features cover 3 of 6 metrics** (`cpu`, `ram`, `load_avg`)
   — the ones where a *trend* carries more signal than a snapshot. Extending
   to all six is real, larger work (retraining v4 from scratch, re-selecting
   the threshold, re-evaluating), not attempted in this pass.
-- **`Jenkinsfile.model` has run in both scopes and has promoted three times.** `smoke` (tiny generated fleets and a scratch copy of the production artifacts, production proven untouched by hash) and `full` (the real datasets, logged to MLflow and MinIO; see L5). On 13 October build 7 ran `SCOPE=full` with `PROMOTE=true`: guardrail PASS, commit `18042f37` pushed to `main` (push access of the token is verified), and the application pipeline started; its build #100 failed and was re-run by hand as #101 (green, deployed). The automatic deploy-after-promote step was proven on 19 October: build 8 promoted, and the application pipeline it started (#103) went green and deployed `2.20.3-b103`. On 21 October build 9 ran the whole loop with operator feedback (315 judged rows), and the build it started (#111) went green and deployed `2.20.3-b111`. The promotion path is also covered by tests and the CI model gate.
+- **`Jenkinsfile.model` has run in both scopes and has promoted four times.** `smoke` (tiny generated fleets and a scratch copy of the production artifacts, production proven untouched by hash) and `full` (the real datasets, logged to MLflow and MinIO; see L5). On 13 October build 7 ran `SCOPE=full` with `PROMOTE=true`: guardrail PASS, commit `18042f37` pushed to `main` (push access of the token is verified), and the application pipeline started; its build #100 failed and was re-run by hand as #101 (green, deployed). The automatic deploy-after-promote step was proven on 19 October: build 8 promoted, and the application pipeline it started (#103) went green and deployed `2.20.3-b103`. On 21 October build 9 ran the whole loop with operator feedback (315 judged rows), and the build it started (#111) went green and deployed `2.20.3-b111`. On 8 November build 15 promoted the per-hour model; the build it started (#126) stopped at the Quality Gate and its fix (#127) deployed `2.20.3-b127`. The promotion path is also covered by tests and the CI model gate.
 - **Demo traffic is the test set, so Review can leak it into training.** In the demo profile `monitoring/production_agent.py` replays `data/telecom_fleet_v2_test.csv`; its flagged readings appear in the Review tab, and the feedback export takes every judged row without a source filter. Build 9 trained on 48 such readings (0.0003% of the test set; 267 older verdicts cannot be attributed). Rule until a filter exists: do not judge rows recorded by the production agent. The production profile turns the agent off (`run_production_agent: false`).
 - **The CI model gate proves consistency, not approval.** It checks that the six artifacts match the manifest, that the recorded evaluation and threshold belong to them, and the F1 floor. It does not check that a guardrail passed for those artifacts: `select_threshold.py --record` followed by `train_production.py --evaluate-production` re-records whatever files are in `models/`. Approval is enforced by process (only `Jenkinsfile.model` commits models). Requiring a passed guardrail record for the exact artifact hashes is the planned gate check.
 - **External reviews, 21 and 27 October: what was fixed, what is deferred.** Fixed on 27 October: the application pipeline runs one build at a time and moves `:latest` only after the smoke test; a stage-8 rollout that does not finish is rolled back; the three read routes (`/predictions/recent`, `/predictions/by-machine`, `/feedback/stats`) need the token when `FEEDBACK_TOKEN` is set; the API's private copies of the rolling features and the decision rule are gone; the integrity check refuses an empty manifest and any file it loads that the manifest does not list; Alertmanager answers on 127.0.0.1 only; the CI tools and third-party images are pinned with checksums; the model job's stage 6 hashes the files it reads back from MLflow. Deferred, each a known gap:
   - the guardrail compares with the current model only, so declines within the margins can add up (Decision 24); (fixed on 28 October: a guardrail rejection now exits 3, distinct from a crash, and a missing production artifact stops the run instead of counting as initial training);
   - `k8s_recover.sh` re-applies the baseline image, and `/health` reports the same version for every build (`model_lineage.mlflow_run_id` tells models apart); the hash check proves consistency, not authenticity;
-  - the v3 fallback shares the v4 threshold (recall 0.7545); recall is per reading, not per incident (below);
+  - the v3 fallback shared the v4 threshold (recall 0.7545) until 8 November, when it got its own (0.95, test recall 0.8007); recall is per reading, not per incident (below);
   - no test runs against a real PostgreSQL (`api/feedback_db.py` is tested through a stub connection; a CI service container is the fix); the unit tests run on the Jenkins image's Python, not the serving image's 3.12 (the Jenkins container reaches Docker through the host socket, so mounting its workspace into a `python:3.12` container needs host paths it does not have);
   - the operations console's code (`subprocess`, `systemctl`, `docker`) ships in the serving image, switched off by `ENABLE_OPS_UI` rather than absent; the legacy v1 model and `boto3` are still in the image (a legacy selector now refuses to start without `ALLOW_LEGACY_MODELS=1`, since only telecom_v3's files are hashed in the manifest); superseded experiment scripts sit next to the canonical pipeline in `ml-model/`;
   - the control panel runs as root over plain HTTP (a sudoers rule for its few `systemctl` and `docker` commands would let it run unprivileged); MLflow listens on every interface without authentication (the Jenkins container reaches it through the Docker bridge, `172.17.0.1:5001`, so it cannot be bound to 127.0.0.1; a firewall rule limited to the bridge is the fix);
   - the feedback export has no source filter (below); transitive dependencies are not locked (above).
-- **Headline scores are on synthetic data.** The F1, precision and recall quoted for the deployed model (0.7292 / 0.671 / 0.798) are measured on a generated fleet whose anomalies and labels come from the same generator, and the operator verdicts in the feedback loop are simulated from those labels. The only real-data check is SMD (F1 0.269), so these numbers must not be read as real-world detection accuracy.
-- **Unseen machines are the real weak spot (measured, `scripts/new_site_eval.py`).** On a fresh 7-day fleet (seed 777, 4,032,000 rows) at the served threshold 0.91: with the same machine names F1 is 0.730; with renamed machines whose type is known, 0.758 (the per-type baseline is enough); with renamed machines and **no type**, which is what `/predict` sees for a machine it has never heard of, **F1 drops to 0.386** (precision 0.289, recall 0.582) because the global baseline fits no machine type; with an added +-15% per-machine level shift, 0.352. The data are still simulated, but the mechanism is real: a new machine must be given a type, or have its own baseline, before its alerts can be trusted. The request accepts an optional `machine_type` (the production agent sends it); a client that omits it for a machine the API has never seen gets the global baseline.
-- **The "held-out" files are not a different site.** The training, validation and test fleets use different seeds, so they share no rows, but they describe the same simulated fleet (same 200 machine names, same calendar, same generator) with independent noise. Scores on a genuinely new infrastructure would be lower, as the SMD result suggests. The threshold is selected on the validation fleet, and since 21 October so is the promotion decision (`guardrail_set: validation` in the manifest); but the test set has been reused across the whole v1 → v4 history (model choices, the threshold rule, earlier guardrail decisions), so it is not a fully untouched holdout. A fresh fleet the models never shaped (seed 777, `scripts/new_site_eval.py`) scores F1 0.730 against 0.7292 on the test set.
-- **Recall is per reading, not per incident.** 0.7979 means 79.8% of anomalous 30-second readings are flagged. An incident lasts many readings, so an operator is told about most incidents sooner than this figure suggests, but the project does not yet measure time-to-detect or per-incident recall.
+- **Headline scores are on synthetic data.** The F1, precision and recall quoted for the deployed model (0.761 / 0.725 / 0.801) are measured on a generated fleet whose anomalies and labels come from the same generator, and the operator verdicts in the feedback loop are simulated from those labels. The only real-data check is SMD (F1 0.269), so these numbers must not be read as real-world detection accuracy.
+- **Unseen machines are the real weak spot (measured, `scripts/new_site_eval.py`).** On a fresh 7-day fleet (seed 777, 4,032,000 rows), measured on build 9 (4 windows) at its threshold 0.91: with the same machine names F1 is 0.730; with renamed machines whose type is known, 0.758 (the per-type baseline is enough); with renamed machines and **no type**, which is what `/predict` sees for a machine it has never heard of, **F1 drops to 0.386** (precision 0.289, recall 0.582) because the global baseline fits no machine type; with an added +-15% per-machine level shift, 0.352. The data are still simulated, but the mechanism is real: a new machine must be given a type, or have its own baseline, before its alerts can be trusted. The request accepts an optional `machine_type` (the production agent sends it); a client that omits it for a machine the API has never seen gets the global baseline.
+- **The "held-out" files are not a different site.** The training, validation and test fleets use different seeds, so they share no rows, but they describe the same simulated fleet (same 200 machine names, same calendar, same generator) with independent noise. Scores on a genuinely new infrastructure would be lower, as the SMD result suggests. The threshold is selected on the validation fleet, and since 21 October so is the promotion decision (`guardrail_set: validation` in the manifest); but the test set has been reused across the whole v1 → v4 history (model choices, the threshold rule, earlier guardrail decisions), so it is not a fully untouched holdout. A fresh fleet the models never shaped (seed 777, `scripts/new_site_eval.py`) scores F1 0.730 against 0.7292 on the test set (build 9; not yet re-run on build 15).
+- **Recall is per reading, not per incident.** 0.8009 means 80.1% of anomalous 30-second readings are flagged. An incident lasts many readings, so an operator is told about most incidents sooner than this figure suggests, but the project does not yet measure time-to-detect or per-incident recall.
 - **Access control is minimal outside the Operations UI.** `/predict` rejects out-of-range readings (percentages outside 0-100, negative network or load average) with a 422. `POST /feedback/{id}` and the three routes that read the prediction log (`/predictions/recent`, `/predictions/by-machine`, `/feedback/stats`: raw telemetry and operator notes) are open by default, because the demo needs them; setting `FEEDBACK_TOKEN` on the API (and the same value for the callers: the control panel and the scripts send it when it is in their environment) makes all four require an `X-Feedback-Token` header (until 27 October only the write did). Verdicts feed retraining, so on a shared network that token should be on.
 - **The Ansible setup has had one clean-machine run, and its fixes one re-run.** On 31 October – 1 November 2026 the platform was brought up from nothing on a VPS (both profiles, every Jenkins job, the live validation with the original numbers), after 14 gaps were worked around by hand (`docs/INFRASTRUCTURE_SETUP.md`, section 9). Most are now done by the playbook, confirmed by a re-run on that same machine (2 November, commit `1b591925`: the playbook `failed=0`, both Jenkins jobs `SUCCESS`), not by a second clean install. The original VM's own venv, still Python 3.10 after the VPS run (gap 15), was rebuilt on 3.12 on 2 November, and the playbook re-run there (`failed=0` after gap 16, the interpreter) moved its MinIO and MLflow data to the built image; a full model job then wrote a new run to it and read it back identical (build 11, 3 November). MinIO, whose images its publisher deleted, is built by the playbook from the checksummed release binary. The Jenkins and SonarQube settings live in Docker volumes and are configured by hand.
-- **Recall-first has a ceiling, and the full-data retrain gained little.** With a recall target of 0.80 the served recall went from 0.7941 to 0.7979 and F1 from 0.7278 to 0.7291 (single seed, within noise): about one anomalous reading in five is still missed, mostly `cascade` (0.268, label noise by design), and the IsolationForest carries most of the recall, so the threshold moves it little. Training on all rows gave no measurable v4 gain, nor did the 21 October retrain with feedback (+0.0001); the v3 gain (0.6550 to 0.6664) is confounded with the changed threshold. Recall is per reading, not per incident, and uses the generator's labels.
+- **Recall-first has a ceiling, and the full-data retrain gained little.** With a recall target of 0.80 the served recall went from 0.7941 to 0.7979 and F1 from 0.7278 to 0.7291 (single seed, within noise): about one anomalous reading in five is still missed, mostly `cascade` (0.268, label noise by design), and the IsolationForest carries most of the recall, so the threshold moves it little. Training on all rows gave no measurable v4 gain, nor did the 21 October retrain with feedback (+0.0001); the v3 gain (0.6550 to 0.6664) is confounded with the changed threshold. Recall is per reading, not per incident, and uses the generator's labels. The per-hour baselines (8 November) did move F1 (0.7292 to 0.761), at the same recall target, through precision (0.6713 to 0.725); measured on two independent sets of fleets before the switch.
 - **Sequence-aware detection remains future work.** The current models
   evaluate the current reading plus a short rolling window, not a full
   learned sequence model. State-of-the-art results on SMD (OmniAnomaly,
