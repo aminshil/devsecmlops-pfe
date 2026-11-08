@@ -53,13 +53,18 @@ def legacy_hour_to_window(hour: int) -> str:
 
 
 def window_function(baselines):
-    """The hour -> window mapping a baselines file was built with, read from its
-    __windows__ metadata: per hour, or the legacy 4 windows. None when the file
-    has no windows or uses another grouping (then a frame's own 'window' column
-    is used as it is)."""
+    """The hour -> window mapping a baselines file was built with: per hour, or the
+    legacy 4 windows. Read from the windows its machine|window KEYS actually use
+    (the __windows__ metadata only when the file has no such key): a file whose
+    metadata disagrees with its keys -- e.g. per-hour keys under the legacy list,
+    written by test_baseline_variants.py before a9e17e9a -- is still read by its
+    keys, not silently sent to the all-day fallback. None when the file has no
+    windows or uses another grouping (then a frame's own 'window' column is used
+    as it is)."""
     if not baselines.get("__has_windows__"):
         return None
-    names = set(baselines.get("__windows__") or [])
+    names = ({k.split("|", 1)[1] for k in baselines if "|" in k}
+             or set(baselines.get("__windows__") or []))
     if names and names <= set(WINDOWS):           # a file may miss an hour it never saw
         return hour_to_window
     if names and names <= set(LEGACY_WINDOWS):

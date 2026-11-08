@@ -39,14 +39,14 @@ This document is organized **layer by layer (L0–L6)**. Every layer section fol
 |---|---|---|
 | Version | `2.20.3` | `VERSION`, reported by `/health` |
 | Serving | `MODEL_NAME=telecom_v3`: hybrid path, **v4 rolling-features XGBoost** when a request carries a 10-reading history, v3 XGBoost otherwise, IsolationForest safety net on both | Live pod metrics: every observed request served by v4 (444 of 444 across both replicas at check time) |
-| Decision threshold | `0.91`, **chosen by the pipeline** for each trained model on the separate seed-7 validation fleet: the highest precision whose recall is at least 0.80, measured on the v4 path. The v3 fallback (requests without history) uses the same value and reaches recall 0.7545 there. It is read from the manifest at start-up; no deployment file carries a copy | `models/manifest.json` (`threshold_selection`), enforced by the CI model gate; `/health` → `model_lineage.threshold_source` |
+| Decision threshold | `0.91`, **chosen by the pipeline** for each trained model on the separate seed-7 validation fleet: the highest precision whose recall is at least 0.80, measured on the v4 path. The v3 fallback (requests without history) uses the same value in the served (build 9) manifest and reaches recall 0.7545 there; since 8 November 2026 the pipeline also chooses v3's own threshold by the same rule on v3's own curve (`decision_threshold_v3`), used from the next promotion ([why](#l0--ml-model)). It is read from the manifest at start-up; no deployment file carries a copy | `models/manifest.json` (`threshold_selection`), enforced by the CI model gate; `/health` → `model_lineage.threshold_source` |
 | Where to change training and threshold behaviour | One file: `config/model_policy.json` (training size, recall target, threshold grid, guardrail limits) | [Current method](#current-method-one-policy-file-a-threshold-chosen-per-model) |
 | Served v4 (independent test set, 17.28M rows) | F1 **0.7292** · precision 0.6713 · recall 0.7979 | `models/manifest.json`, re-checked by CI on every build. Several L0 analysis tables below were measured on earlier models (July: v4 F1 0.7246; 13 October: 0.7278; 19 October: 0.7291) |
 | Served v3 fallback | F1 0.6667 · precision 0.5971 · recall 0.7545 | `models/manifest.json` |
 | Weakest cause | `cascade`, recall 0.268 (label noise by design; a realistic model of router failures, built and tested at full size, is in [9c](#9c-failure-model-v3--router-incidents-modelled-the-way-networks-actually-fail)) | [Engineering decision 9](#9-why-cascade-is-folded-into-normal-during-training) |
 | Live cluster validation | 16,600 requests (first 14 days of the test fleet, every machine every 4 hours), 0 errors, 100% served by v4, at the live threshold 0.91: F1 **0.7731** · precision 0.7166 · recall 0.8391. A different sample from the full test file, so it is not comparable with the full-file F1. Measured on 25 October against the served 21 October model (image `2.20.3-b116`); the 19 October model scored 0.7755 on the same sample | `scripts/live_k8s_validation.py`, run on 25 October; output in `models/results/live_validation_20261025_b116.json` |
 | Latest green pipeline | Build `2.20.3-b125` (commit `d0b11d91`, 28 October: the whole-repository review: training exit codes, the missing-artifact refusal, the legacy-model opt-in, bounded inputs, the 503 on a database drop): all 12 stages green, `ruff` clean, 272 tests, Quality Gate OK, repository scan clean, 0 HIGH/CRITICAL image vulnerabilities, model gate F1 0.7292 at threshold 0.91, deployed and smoke-tested in the live pod (7 PASS), then tagged `:latest`. Before it: b123 (`4108a285`, 28 October: the fixes from the external review of 27 October, 268 tests) | [L3 run history](#l3--cicd) |
-| Tests | 281 passing, in 24 files; stage 1b runs all of them on every build (the 5 added on 7 November check the per-hour windows and that a 4-window baselines file is still read with its own windows; the VPS's build #2, on `1b591925`, ran 275; b125 ran 272, b123 ran 268, b120 ran 241, b117 ran 225, b116 ran 223, b112 ran 188; the 31 added after b120 check the review fixes: the shared feature and decision functions against their former copies, the token on the read routes, the fail-closed integrity check, the `/predict` input rules, the training console's bounds, the pins, the MLflow read-back, the Telegram list without the safety net's alarms alone, the training pipeline's exit codes, bounded inputs, the legacy-model opt-in and a database drop mid-query; the 3 added after b125 check that a training run without promotion still records its candidate's file hashes and that the MLflow read-back uses them; the 37 added after b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute; the 16 added after b117 check the watchdog and the History tab's episode readings) | `pytest tests/` (stage 1b) |
+| Tests | 285 passing, in 24 files; stage 1b runs all of them on every build (the 4 added on 8 November check the v3 path's own threshold (selected, recorded, checked by the CI gate, read by the API) and that a baselines file is read by its keys; the 5 added on 7 November check the per-hour windows and that a 4-window baselines file is still read with its own windows; the VPS's build #2, on `1b591925`, ran 275; b125 ran 272, b123 ran 268, b120 ran 241, b117 ran 225, b116 ran 223, b112 ran 188; the 31 added after b120 check the review fixes: the shared feature and decision functions against their former copies, the token on the read routes, the fail-closed integrity check, the `/predict` input rules, the training console's bounds, the pins, the MLflow read-back, the Telegram list without the safety net's alarms alone, the training pipeline's exit codes, bounded inputs, the legacy-model opt-in and a database drop mid-query; the 3 added after b125 check that a training run without promotion still records its candidate's file hashes and that the MLflow read-back uses them; the 37 added after b112 check the alerting configuration, the dashboard queries, the panel's Notifications card and History tab, and the anomaly mute; the 16 added after b117 check the watchdog and the History tab's episode readings) | `pytest tests/` (stage 1b) |
 | Alerting | Prometheus rules → Alertmanager → Telegram: machine anomalies (detected, cleared, persistent, fleet surge; the list names the classifier's anomalies, not the safety net's alone: [10b](#10b-safety-net-alarms-measured--why-telegram-lists-only-the-classifiers)), machines that miss their reports, no data, any layer down, pods, Kubernetes, traffic stopped, disk and memory. 28 rules (17 alerts, 11 recording rules) unit-tested by promtool | [Alerting](#alerting-prometheus-rules--alertmanager--telegram) |
 | Dashboard | 28 Grafana panels in 6 rows, provisioned from the repository | `monitoring/grafana/dashboards/devsecmlops-fleet.json` |
 | Model provenance | Served since 2026-10-21: the model promoted by Jenkins `devsecmlops-model` build 9 (MLflow `d81b7ea6…`), trained on all 17,280,000 rows of the labelled fleet plus 315 operator-judged feedback rows (304 used for v3, 222 for v4, 11 skipped: unknown cause), v4 F1 0.7292, threshold 0.91 re-selected by the pipeline, guardrail PASS, its six model files listed in MLflow (stored in MinIO) by the pipeline (stage 6 checked the names only; it downloads and hashes them since 27 October, `scripts/verify_mlflow_artifacts.py`), on 27 October the six files the image serves were downloaded back from MLflow (MinIO) and all six match the manifest's SHA-256 (`scripts/verify_mlflow_artifacts.py`, `models/results/mlflow_readback_20261027.json`); committed by the pipeline (`bd0fdd67`) and deployed by the build it started (`2.20.3-b111`); every image since, up to the latest green build (row above), carries the same model files. Before that: the 19 October model (build 8, MLflow `241447d0…`, v4 F1 0.7291, image b103), the 13 October model (build 7, MLflow `f622a7a9…`, trained on 3.17M rows, v4 F1 0.7278, threshold 0.60), and the July models adopted on 2026-09-25 with hashes and an independent evaluation (v4 F1 0.7246) | [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store), [Known limitations](#known-limitations-and-future-work) |
@@ -297,7 +297,8 @@ are not comparable between variants: each variant has its own threshold.
 
 **The switch.** `preprocess.hour_to_window` returns `h00`..`h23`, and
 `preprocess.window_function` reads the mapping a baselines file was built with
-from its own `__windows__` metadata (per hour, or the 4 legacy windows), used by
+from the windows its `machine|window` keys use (per hour, or the 4 legacy windows;
+the `__windows__` metadata only for a file without such keys), used by
 `apply_zscore` and by the API (`api/app.py`, which now imports it instead of
 keeping a copy). So the production model of the 4-window era is still scored with
 its own windows by the model job's guardrail, the training console and the API
@@ -312,6 +313,40 @@ README are those of the 4-window model (build 9). The research scripts written
 before this switch (e.g. `benchmark.py`, `train_serving_telecom*.py`) now build
 per-hour windows too; their quoted results come from the 4 windows, reproducible
 at commit `a9e17e9a`.
+
+**The first promotion attempt, and the second threshold (8 November 2026).** The
+model job (`devsecmlops-model`, `SCOPE=full`, feedback on, `PROMOTE` on, commit
+`b6d09daa`, MLflow run `9e8e5ee9915244e991190ae523390925`) trained the per-hour
+candidate: 17,280,000 rows plus 415 / 333 feedback rows (v3 / v4), threshold 0.66
+selected on validation (precision 0.7266, recall 0.8001, F1 0.7616), test v4 F1
+0.7610 against production's 0.7292 and v3 F1 0.7359 against 0.6667. The guardrail
+**rejected** it, on two causes of the v3 path only (validation, limit 0.02):
+silent_failure recall 0.9205 -> 0.8827 and cascade 0.3103 -> 0.2700. Production
+was left unchanged. The cause was the threshold, not the baselines: the pipeline
+chose ONE threshold, on the v4 curve, and judged v3 at it. `ml-model/test_v3_threshold.py`
+(commit `04bf10c1`) scored the per-hour model's v3 path at every threshold of the
+grid on the same validation fleet (`ea0a20c2...`), with the pipeline's scoring code
+and the guardrail's rules against production (v3 at 0.91: F1 0.6676, silent_failure
+0.9205, cascade 0.3103, identical to the Jenkins run). Candidate: the per-hour
+model of the experiment above (no feedback rows; at 0.66 its v3 gives silent_failure
+0.8833 and cascade 0.2700, the Jenkins candidate's 0.8827 and 0.2700):
+
+| v3 path, validation | Threshold | F1 | Precision | Recall | silent_failure | cascade | Guardrail (v3 rules) |
+|---|---|---|---|---|---|---|---|
+| production, 4 windows | 0.91 | 0.6676 | | 0.7562 | 0.9205 | 0.3103 | |
+| per hour, judged at v4's threshold | 0.66 | 0.7368 | 0.7082 | 0.7678 | 0.8833 | 0.2700 | rejected |
+| per hour, v3's own threshold by the policy rule | **0.95** | 0.6968 | 0.6170 | 0.8001 | 0.9471 | 0.3047 | **passes** |
+
+Every v3 threshold from 0.91 to 0.98 passes every v3 rule; the policy rule (highest
+precision with recall >= 0.80), applied to v3's own curve, picks 0.95. So the
+pipeline now chooses a threshold per serving path, by the same rule
+(`train_production.select_candidate_threshold`, `production.decision_threshold_v3`;
+see the threshold section below), and the guardrail is unchanged. Note: the first
+run of this check scored the candidate wrongly (v3 F1 0.5864): the experiment's
+per-hour file carried per-hour keys under the legacy `__windows__` list (written
+before `a9e17e9a`), so it was read with 4 windows and fell back to the all-day
+baselines; `window_function` now reads the windows from the keys, and the check was
+re-run on the corrected file.
 
 The earlier evidence for the 4 windows (`ml-model/test_timewindow_full.py`,
 6 July 2026: an IsolationForest on a 400,000-row sample of the first, v1 fleet,
@@ -960,7 +995,7 @@ Everything a person may want to change about training and thresholds lives in **
 | `threshold.grid` | 0.05 to 0.99, step 0.01 | Thresholds tried |
 | `guardrail` | max F1 drop 0.03, max recall drop 0.02 | A candidate that is worse than production by more than this is not promoted |
 
-How it flows: the training job reads the policy, trains, evaluates the served decision (classifier OR IsolationForest) on the validation fleet over the grid, picks the threshold by the rule, evaluates the candidate at that threshold and production at its own, and records the choice, the rule and the policy in `models/manifest.json`. The API reads `production.decision_threshold` from that manifest when it starts; the environment variable `PREDICT_THRESHOLD` remains only as an explicit override, and `/health` → `model_lineage` reports the value and its source. The CI model gate fails if any deployment file hard-codes a threshold. Deployment stage 8 removes a stale `PREDICT_THRESHOLD` from the live Deployment before each rollout, and the smoke test fails unless the live threshold comes from the manifest (both added after an old environment variable was found overriding the manifest on 19 October).
+How it flows: the training job reads the policy, trains, evaluates the served decision (classifier OR IsolationForest) on the validation fleet over the grid, picks the threshold by the rule, evaluates the candidate at that threshold and production at its own, and records the choice, the rule and the policy in `models/manifest.json`. Since 8 November 2026 the same is done a second time for the v3 path (6 features, requests without history), on its own curve from the same pass over the validation fleet: `production.decision_threshold_v3`, with its curve under `threshold_selection.v3`; the guardrail and the evaluations score each path at its own threshold, and the CI model gate checks that the recorded v3 threshold is the selected one. A manifest without it (build 9's) serves v3 at `decision_threshold`, as before. The API reads `production.decision_threshold` (and `decision_threshold_v3`) from that manifest when it starts; the environment variable `PREDICT_THRESHOLD` remains only as an explicit override, and `/health` → `model_lineage` reports the value and its source. The CI model gate fails if any deployment file hard-codes a threshold. Deployment stage 8 removes a stale `PREDICT_THRESHOLD` from the live Deployment before each rollout, and the smoke test fails unless the live threshold comes from the manifest (both added after an old environment variable was found overriding the manifest on 19 October).
 
 | | 13 October (3.17M rows, fixed rule F2) | 19 October (all 17.28M rows, recall target) |
 |---|---|---|
@@ -1649,7 +1684,7 @@ Jenkins, `Jenkinsfile`, 12 stages, every one a real gate — a failure stops the
 Stage labels below match the Jenkins console exactly.
 
 - **1. Checkout**
-- **1b. Unit tests** — `ruff` on every Python file (errors, undefined names, unused imports and variables, likely bugs), then pytest (281 tests), coverage report. Fail-fast: a broken commit stops here.
+- **1b. Unit tests** — `ruff` on every Python file (errors, undefined names, unused imports and variables, likely bugs), then pytest (285 tests), coverage report. Fail-fast: a broken commit stops here.
 - **2. SAST** — SonarQube, on `api`, `ml-model` and, since 27 October, every script that runs in production or in a pipeline: the production agent and the Kubernetes exporter, the Prometheus watchdog (it handles the Telegram token), the CI model gate, the model job's helpers (feedback export, report summary, MLflow read-back), the smoke test, the MinIO bucket setup, the pin script and the CI configuration tool (`SONAR_SOURCES` in the `Jenkinsfile`; coverage is measured on `api` and `ml-model`). The other files in `scripts/` and `monitoring/` are read-only measurement tools and earlier traffic designs: run by hand, deployed nowhere, and the README's numbers are their output, so refactoring them for the gate's complexity rules would put those numbers at risk. They are linted in stage 1b instead.
 - **2b. Quality Gate** — `abortPipeline: true`.
 - **3. Repository scan + model gate** — `trivy fs` on the repository itself (dependencies, secrets, IaC misconfigurations), and `scripts/verify_model_manifest.py --min-f1 0.60`, checking artifact integrity, the recorded F1, that no deployment file carries a copy of the threshold (it is read from the manifest) and that the manifest's threshold is the evaluated one, and that this threshold was selected on an independent validation fleet for exactly these artifacts — *before* an image is built.
@@ -3332,7 +3367,7 @@ this project.)
 
 ## Testing
 
-**281 tests** in 24 files (up from 15), `pytest`, in `tests/`; stage 1b runs all of them on every build:
+**285 tests** in 24 files (up from 15), `pytest`, in `tests/`; stage 1b runs all of them on every build:
 
 - `test_api.py` (69 tests) — every endpoint, the window of a reading taken from the served baselines file's own mapping, input validation (NaN/inf
   rejection, including raw `NaN`/`Infinity` tokens answered with 422 rather than 500, reserved `__` machine names, physical-range rejection (cpu=150 is a 422), the opt-in feedback token on the write and on the three read routes, the machine-name pattern (`web-01|night` is a 422), `hour` out of range (422, with or without windowed baselines), metrics count, history shape), v3/v4
@@ -3344,10 +3379,10 @@ this project.)
 - `test_decision.py` (5 tests) — the scalar and vectorized forms of the served
   decision rule produce identical results, at multiple thresholds, with and
   without per-class overrides.
-- `test_preprocess.py` (12 tests) — baseline construction, the fallback chain, z-score
+- `test_preprocess.py` (13 tests) — baseline construction, the fallback chain, z-score
   correctness, the standard-deviation floor that prevents division by zero, the per-hour
-  windows, and a 4-window file still scored with its own windows (the switch of 7 November).
-- `test_train_production.py` (25 tests) — the full training pipeline and the model gate: promotion with
+  windows, a 4-window file still scored with its own windows (the switch of 7 November), and a file read by its keys when its metadata disagrees.
+- `test_train_production.py` (27 tests) — the full training pipeline and the model gate: the v3 path's own threshold selected, recorded and checked; promotion with
   correct lineage, the CI gate accepting a genuinely promoted model and
   rejecting a tampered or low-F1 one, retraining determinism, a rejected
   candidate leaving production byte-for-byte untouched, and feedback rows
@@ -3358,7 +3393,7 @@ this project.)
   instead of being skipped; a guardrail rejection exits 3 (a crash exits 1), and a missing production
   artifact stops the run instead of counting as initial training; promotion refuses a missing, test, or train file as the validation
   fleet; and a promoted threshold is selected for the candidate that carries it; a run without `--promote` still records the six candidate files' SHA-256 (`candidate_artifacts`), which the model job's MLflow read-back compares. The standalone selection tool refuses a non-independent validation fleet, and refuses `--record` for any directory other than `models/`.
-- `test_threshold_policy.py` (21 tests) — the policy file is validated; the threshold rules (F-beta, minimum recall, recall target unreachable); training uses every normal row when asked; command-line defaults come from the policy; the guardrail also checks recall; the API takes its threshold from the manifest, an environment override, or a fallback, in that order, and says which; no file in the repository hard-codes a threshold; and the model gate flags one that does.
+- `test_threshold_policy.py` (22 tests) — the policy file is validated; the API's v3 threshold (manifest, else the single threshold, the override covering both); the threshold rules (F-beta, minimum recall, recall target unreachable); training uses every normal row when asked; command-line defaults come from the policy; the guardrail also checks recall; the API takes its threshold from the manifest, an environment override, or a fallback, in that order, and says which; no file in the repository hard-codes a threshold; and the model gate flags one that does.
 - `test_training_console.py` (9 tests) — the dataset whitelist (rejects path
   traversal in every form tried, and the validation and test fleets, which the console reads only to
   score a run), that sampling genuinely spreads across

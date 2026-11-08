@@ -93,15 +93,19 @@ def main(argv=None) -> int:
     tp.log(f"selected threshold {best['threshold']} by rule '{selection['rule']}' "
            f"(recall {best['recall']}, precision {best['precision']}, {key.upper()} {best[key]}) "
            f"on the validation fleet")
+    b3 = selection["v3"]["selected"]
+    tp.log(f"selected v3 threshold {b3['threshold']} by rule '{selection['v3']['rule']}' "
+           f"(recall {b3['recall']}, precision {b3['precision']}, {key.upper()} {b3[key]})")
 
     if a.record:
         manifest = tp.read_manifest(a.models_dir)
         prod = manifest.setdefault("production", {})
         prod["decision_threshold"] = best["threshold"]
+        prod["decision_threshold_v3"] = b3["threshold"]
         prod["threshold_selection"] = selection
         prod.pop("evaluation", None)   # recorded at the old threshold: must be redone
         tp.write_manifest(a.models_dir, manifest)
-        tp.log("manifest updated: decision_threshold set, previous test evaluation cleared "
+        tp.log("manifest updated: decision_threshold and decision_threshold_v3 set, previous test evaluation cleared "
                "-> run: python ml-model/train_production.py --evaluate-production")
     return 0
 

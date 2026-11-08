@@ -131,3 +131,13 @@ def test_apply_zscore_scores_a_frame_against_a_legacy_file(sample_df):
     z_from_legacy_frame = apply_zscore(legacy_df, legacy, ["cpu"])
     assert z_from_hourly_frame["cpu"].tolist() == pytest.approx(z_from_legacy_frame["cpu"].tolist())
     assert z_from_hourly_frame["cpu"].iloc[0] == pytest.approx(-1.0, abs=0.01)   # night mean 15, std 5
+
+
+def test_window_function_reads_the_keys_before_the_metadata(sample_df):
+    """Per-hour keys under the legacy metadata list (an experiment file written before a9e17e9a)
+    are read per hour, not sent to the all-day fallback."""
+    baselines = build_baselines(add_window_column(sample_df), ["cpu"])
+    baselines["__windows__"] = ["night", "morning", "afternoon", "evening"]
+    assert window_function(baselines) is hour_to_window
+    z = apply_zscore(add_window_column(sample_df).iloc[[0]], baselines, ["cpu"])
+    assert z["cpu"].iloc[0] == pytest.approx(-1.0, abs=0.01)                # web-01 h02 baseline used

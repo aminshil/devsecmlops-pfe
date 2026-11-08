@@ -144,7 +144,27 @@ def _resolve_threshold() -> tuple[float, str]:
 
 
 PREDICT_THRESHOLD, PREDICT_THRESHOLD_SOURCE = _resolve_threshold()
-MODEL_LINEAGE.update({"threshold": PREDICT_THRESHOLD, "threshold_source": PREDICT_THRESHOLD_SOURCE})
+
+
+def _resolve_threshold_v3() -> tuple[float, str]:
+    """(threshold, source) for the v3 path (requests without history): the same explicit
+    PREDICT_THRESHOLD override if set, else the manifest's production.decision_threshold_v3
+    (chosen for v3 by the same policy rule on its own validation curve, since 8 November
+    2026), else the single threshold above -- what a manifest from before then implies."""
+    if os.environ.get("PREDICT_THRESHOLD", "").strip():
+        return PREDICT_THRESHOLD, PREDICT_THRESHOLD_SOURCE
+    try:
+        value = (json.loads(MANIFEST_PATH.read_text()).get("production") or {}).get("decision_threshold_v3")
+    except (OSError, ValueError):
+        value = None
+    if value is None:
+        return PREDICT_THRESHOLD, f"same as v4 ({PREDICT_THRESHOLD_SOURCE}): the manifest has no decision_threshold_v3"
+    return float(value), "models/manifest.json production.decision_threshold_v3"
+
+
+PREDICT_THRESHOLD_V3, PREDICT_THRESHOLD_V3_SOURCE = _resolve_threshold_v3()
+MODEL_LINEAGE.update({"threshold": PREDICT_THRESHOLD, "threshold_source": PREDICT_THRESHOLD_SOURCE,
+                      "threshold_v3": PREDICT_THRESHOLD_V3, "threshold_v3_source": PREDICT_THRESHOLD_V3_SOURCE})
 
 
 def _check_listed_artifacts(listed: dict) -> None:
@@ -857,15 +877,15 @@ def _predict_v3_v4(reading, X, z_scores, window, machine_type, baseline_used):
     # disk_saturation | silent_failure). Better per-cause recall than the RF
     # primary in v2, especially on memory_leak. 34x smaller model (3.6MB vs
     # 124MB), baked into the image directly -- no MinIO fetch needed.
-    # Threshold-tuned prediction (see PREDICT_THRESHOLD at top of file).
-    # Flag as anomaly if P(normal) < threshold, i.e. not confident it's normal.
+    # Threshold-tuned prediction at the v3 path's own threshold (PREDICT_THRESHOLD_V3, near the
+    # top of the file). Flag as anomaly if P(normal) < threshold, i.e. not confident it's normal.
     xgb_proba = xgb_model.predict_proba(X.to_numpy())[0]
     classes = list(xgb_label_encoder.classes_)
     normal_idx = classes.index("normal")
     p_normal = float(xgb_proba[normal_idx])
     non_normal_scores = [(classes[i], xgb_proba[i]) for i in range(len(classes)) if i != normal_idx]
     # the served rule (ml-model/decision.py), single-threshold mode: per-class thresholds are v4's
-    xgb_is_anomaly, cause = _decision.classifier_vote(p_normal, non_normal_scores, PREDICT_THRESHOLD)
+    xgb_is_anomaly, cause = _decision.classifier_vote(p_normal, non_normal_scores, PREDICT_THRESHOLD_V3)
     
     # IsolationForest: unchanged safety net for novel patterns.
     iso_is_anomaly = bool(iso_model.predict(X.to_numpy())[0] == -1)
@@ -887,7 +907,7 @@ def _predict_v3_v4(reading, X, z_scores, window, machine_type, baseline_used):
         features=z_scores,
         raw_metrics=reading.metrics,
         model_version=MODEL_NAME,
-        predict_threshold=PREDICT_THRESHOLD,
+        predict_threshold=PREDICT_THRESHOLD_V3,
         xgb_p_normal=p_normal,
         xgb_cause=cause,
         iso_score=round(iso_score, 4),
@@ -1896,6 +1916,7 @@ def ui_ct():
     v4 = (prod.get("evaluation") or {}).get("v4") or {}
     return {"cluster_api": _CLUSTER_API, "feedback": _ct_feedback(), "deployed": _ct_deployed(),
             "manifest": {"served_v4_f1": v4.get("f1"), "threshold": prod.get("decision_threshold"),
+                         "threshold_v3": prod.get("decision_threshold_v3", prod.get("decision_threshold")),
                          "source": prod.get("source"), "promoted_at": prod.get("promoted_at"),
                          _RUN_ID: prod.get(_RUN_ID)},
             "history": _ct_history(manifest)}

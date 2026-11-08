@@ -123,6 +123,16 @@ def _selection_problems(prod: dict) -> list[str]:
         (val_sha is not None and val_sha == test_sha,
          "the validation fleet used to select the threshold is the test set"),
     ]
+    # the v3 path's own threshold (since 8 November 2026): optional -- a manifest without it
+    # serves v3 at decision_threshold -- but when present it must be backed the same way
+    if "decision_threshold_v3" in prod:
+        selected_v3 = prod["decision_threshold_v3"]
+        checks += [
+            (((sel.get("v3") or {}).get("selected") or {}).get("threshold") != selected_v3,
+             "the selection evidence names a different v3 threshold than decision_threshold_v3"),
+            (ev.get("threshold_v3") != selected_v3,
+             f"evaluation recorded v3 at {ev.get('threshold_v3')}, but the selected v3 threshold is {selected_v3}"),
+        ]
     return [msg for bad, msg in checks if bad]
 
 
@@ -134,6 +144,8 @@ def check_threshold(prod: dict, root: Path) -> list[str]:
     app = root / "api" / "app.py"
     if app.exists() and "decision_threshold" not in app.read_text():
         problems.append("api/app.py does not read production.decision_threshold from the manifest")
+    if app.exists() and "decision_threshold_v3" in prod and "decision_threshold_v3" not in app.read_text():
+        problems.append("api/app.py does not read production.decision_threshold_v3 from the manifest")
     return problems
 
 

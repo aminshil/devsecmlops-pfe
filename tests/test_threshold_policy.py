@@ -149,6 +149,21 @@ def test_api_falls_back_when_the_manifest_has_no_threshold(tmp_path, monkeypatch
     assert A._resolve_threshold()[0] == A.FALLBACK_THRESHOLD
 
 
+def test_api_v3_threshold_comes_from_the_manifest_or_the_single_threshold(tmp_path, monkeypatch):
+    from api import app as A
+    monkeypatch.delenv("PREDICT_THRESHOLD", raising=False)
+    p = tmp_path / "manifest.json"
+    p.write_text(json.dumps({"production": {"decision_threshold": 0.66, "decision_threshold_v3": 0.95}}))
+    monkeypatch.setattr(A, "MANIFEST_PATH", p)
+    value, source = A._resolve_threshold_v3()
+    assert value == 0.95 and "decision_threshold_v3" in source
+    p.write_text(json.dumps({"production": {"decision_threshold": 0.91}}))   # a manifest from before
+    value, source = A._resolve_threshold_v3()
+    assert value == A.PREDICT_THRESHOLD and "same as v4" in source
+    monkeypatch.setenv("PREDICT_THRESHOLD", "0.4")                           # the override covers both paths
+    assert A._resolve_threshold_v3()[0] == A.PREDICT_THRESHOLD
+
+
 def test_served_threshold_is_the_committed_manifests():
     from api import app as A
     committed = json.loads((ROOT / "models" / "manifest.json").read_text())["production"]["decision_threshold"]

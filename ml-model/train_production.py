@@ -23,7 +23,10 @@ path by which a model reaches production:
      same code, on the same independent test set (reported), using the serving decision
      rule (ml-model/decision.py), each at its OWN serving threshold: with --promote the
      candidate is evaluated at the threshold selected for it on the independent
-     validation fleet (step 2b), production at its currently deployed one. The guardrail
+     validation fleet (step 2b), production at its currently deployed one. Each serving
+     path has its own threshold, chosen by the same policy rule on its own curve: v4
+     (requests with history) and v3 (requests without; production.decision_threshold_v3,
+     since 8 November 2026 -- before, v3 was judged at v4's threshold). The guardrail
      therefore compares what each model would actually serve, not two models at one
      number chosen for only one of them.
   4. Guardrail, decided on the independent VALIDATION fleet when --promote is given (on the
@@ -253,15 +256,18 @@ def evaluate(clf, enc, iso, x_clf, x_iso, y_bin, y_type, threshold) -> dict:
     return _finalize(c)
 
 
-def served_curve(art_dir: Path, fleet: pd.DataFrame, grid: list, beta: float) -> list[dict]:
-    """Served decision (classifier OR IsolationForest, v4 path) at every threshold of
-    the grid, from one pass of the models over the fleet, EVAL_MACHINES_PER_CHUNK whole
-    machines at a time. Exact (integer counts sum across chunks), bounded memory."""
+def served_curves(art_dir: Path, fleet: pd.DataFrame, grid: list, beta: float,
+                  paths: tuple = ("v4",)) -> dict[str, list[dict]]:
+    """Served decision (classifier OR IsolationForest) at every threshold of the grid, for
+    each requested path -- "v4" (15 features, requests with history) and/or "v3" (6
+    features, requests without) -- from ONE pass of the models over the fleet,
+    EVAL_MACHINES_PER_CHUNK whole machines at a time. Exact (integer counts sum across
+    chunks), bounded memory."""
     baselines = json.load(open(art_dir / ARTIFACTS["baselines"]))
-    clf = joblib.load(art_dir / ARTIFACTS["v4_model"])
-    classes = list(joblib.load(art_dir / ARTIFACTS["v4_encoder"]).classes_)
+    clf = {p: joblib.load(art_dir / ARTIFACTS[f"{p}_model"]) for p in paths}
+    classes = {p: list(joblib.load(art_dir / ARTIFACTS[f"{p}_encoder"]).classes_) for p in paths}
     iso = joblib.load(art_dir / ARTIFACTS["iso_model"])
-    counts = {t: {"tp": 0, "fp": 0, "fn": 0} for t in grid}
+    counts = {p: {t: {"tp": 0, "fp": 0, "fn": 0} for t in grid} for p in paths}
     rows_by_machine = fleet.groupby("machine", sort=True).indices
     machines = list(rows_by_machine)
     for i in range(0, len(machines), EVAL_MACHINES_PER_CHUNK):
@@ -269,23 +275,34 @@ def served_curve(art_dir: Path, fleet: pd.DataFrame, grid: list, beta: float) ->
         t, z, z15 = fleet_features(fleet.iloc[idx].copy(), baselines)
         pos = t["label"].to_numpy() == 1
         iso_hit = iso.predict(z) == -1
-        proba = clf.predict_proba(z15)
-        for th in grid:
-            hit, cause = decision.classifier_vote_batch(proba, classes, th)
-            pred, _ = decision.final_verdict_batch(hit, cause, iso_hit)
-            pb = np.asarray(pred).astype(bool)
-            counts[th]["tp"] += int(np.sum(pb & pos))
-            counts[th]["fp"] += int(np.sum(pb & ~pos))
-            counts[th]["fn"] += int(np.sum(~pb & pos))
+        for p in paths:
+            proba = clf[p].predict_proba(z15 if p == "v4" else z)
+            for th in grid:
+                hit, cause = decision.classifier_vote_batch(proba, classes[p], th)
+                pred, _ = decision.final_verdict_batch(hit, cause, iso_hit)
+                pb = np.asarray(pred).astype(bool)
+                counts[p][th]["tp"] += int(np.sum(pb & pos))
+                counts[p][th]["fp"] += int(np.sum(pb & ~pos))
+                counts[p][th]["fn"] += int(np.sum(~pb & pos))
+    return {p: _curve(counts[p], grid, beta) for p in paths}
+
+
+def _curve(counts: dict, grid: list, beta: float) -> list[dict]:
+    """Precision, recall, F1 and F-beta at each threshold, from the integer counts."""
     b2, key, curve = beta ** 2, f"f{beta:g}", []
     for th in grid:
         c = counts[th]
-        p, r, f1 = _prf(c["tp"], c["fp"], c["fn"])
+        pr, r, f1 = _prf(c["tp"], c["fp"], c["fn"])
         denom = (1 + b2) * c["tp"] + b2 * c["fn"] + c["fp"]
         fb = (1 + b2) * c["tp"] / denom if denom else 0.0
-        curve.append({"threshold": th, "precision": round(p, 4), "recall": round(r, 4),
+        curve.append({"threshold": th, "precision": round(pr, 4), "recall": round(r, 4),
                       "f1": round(f1, 4), key: round(fb, 4)})
     return curve
+
+
+def served_curve(art_dir: Path, fleet: pd.DataFrame, grid: list, beta: float) -> list[dict]:
+    """The v4 path's curve (served_curves with paths=("v4",))."""
+    return served_curves(art_dir, fleet, grid, beta, ("v4",))["v4"]
 
 
 def select_candidate_threshold(art_dir: Path, val: pd.DataFrame, val_fp: dict,
@@ -301,8 +318,13 @@ def select_candidate_threshold(art_dir: Path, val: pd.DataFrame, val_fp: dict,
     pol = policy["threshold"]
     beta = pol["beta"] if beta is None else beta
     min_recall = pol["min_recall"] if min_recall is None else min_recall
-    curve = served_curve(art_dir, val, model_policy.threshold_grid(policy), beta)
+    curves = served_curves(art_dir, val, model_policy.threshold_grid(policy), beta, ("v4", "v3"))
+    curve = curves["v4"]
     best, rule = model_policy.choose_threshold(curve, beta, min_recall)
+    # v3 (requests without history) gets its OWN threshold by the same rule, on its own curve:
+    # judging v3 at v4's threshold rejected the per-hour candidate of 8 November 2026 on two
+    # v3 causes, while v3's own threshold passed every v3 rule (ml-model/test_v3_threshold.py)
+    best_v3, rule_v3 = model_policy.choose_threshold(curves["v3"], beta, min_recall)
     method = (f"highest precision whose recall >= {min_recall:g}" if min_recall is not None
               else f"maximise F{beta:g}")
     return {
@@ -315,6 +337,7 @@ def select_candidate_threshold(art_dir: Path, val: pd.DataFrame, val_fp: dict,
         "beta": beta,
         "selected": best,
         "curve": curve,
+        "v3": {"rule": rule_v3, "selected": best_v3, "curve": curves["v3"]},
         "artifacts": {f"models/{n}": sha256(art_dir / n) for n in ARTIFACTS.values()},
     }
 
@@ -343,19 +366,23 @@ def _select_for_promotion(args, val_fp: dict) -> dict:
     log(f"selected threshold {best['threshold']} by rule '{selection['rule']}' "
         f"(recall {best['recall']}, precision {best['precision']}, F1 {best['f1']}, "
         f"{key.upper()} {best[key]}), not inherited from production")
+    b3 = selection["v3"]["selected"]
+    log(f"selected v3 threshold {b3['threshold']} by rule '{selection['v3']['rule']}' "
+        f"(recall {b3['recall']}, precision {b3['precision']}, F1 {b3['f1']}, {key.upper()} {b3[key]})")
     return selection
 
 
-def guardrail_on_validation(args, cand_threshold: float, has_prod: bool) -> tuple[dict, dict | None]:
+def guardrail_on_validation(args, cand_threshold: float, cand_threshold_v3: float,
+                            has_prod: bool) -> tuple[dict, dict | None]:
     """Evaluate the candidate and production on the independent VALIDATION fleet, for the
     promotion guardrail. The test set is then only reported, never used to decide: a
     gate that reads the same rows as the headline score is partly grading itself.
-    Both models sit at their own serving threshold; both thresholds were chosen on this
+    Both models sit at their own serving thresholds (v4 and v3); all were chosen on this
     fleet, so any optimism it carries is the same on both sides of the comparison."""
     val = load_fleet(args.val)
     log(f"guardrail data: validation fleet ({len(val):,} rows)")
-    cand = evaluate_set(args.work_dir, val, cand_threshold)
-    prod = evaluate_set(args.models_dir, val, args.threshold) if has_prod else None
+    cand = evaluate_set(args.work_dir, val, cand_threshold, cand_threshold_v3)
+    prod = evaluate_set(args.models_dir, val, args.threshold, args.threshold_v3) if has_prod else None
     del val
     return cand, prod
 
@@ -375,9 +402,12 @@ def guardrail(cand: dict, prod: dict, max_f1_drop: float, max_recall_drop: float
     return (not reasons), reasons
 
 
-def evaluate_set(art_dir: Path, test: pd.DataFrame, threshold: float) -> dict:
+def evaluate_set(art_dir: Path, test: pd.DataFrame, threshold: float,
+                 threshold_v3: float | None = None) -> dict:
     """Evaluate one artifact set on the test set with the served decision rule,
-    EVAL_MACHINES_PER_CHUNK whole machines at a time (exact, bounded memory)."""
+    EVAL_MACHINES_PER_CHUNK whole machines at a time (exact, bounded memory).
+    v4 at `threshold`; v3 at `threshold_v3` (its own), or at `threshold` when None."""
+    th3 = threshold if threshold_v3 is None else threshold_v3
     b = json.load(open(art_dir / ARTIFACTS["baselines"]))
     m = {k: joblib.load(art_dir / v) for k, v in ARTIFACTS.items() if v.endswith(".pkl")}
     v3_classes, v4_classes = list(m["v3_encoder"].classes_), list(m["v4_encoder"].classes_)
@@ -390,7 +420,7 @@ def evaluate_set(art_dir: Path, test: pd.DataFrame, threshold: float) -> dict:
         yb, yt = t["label"].to_numpy(), t["anomaly_type"].fillna("normal").to_numpy()
         iso_hit = m["iso_model"].predict(z) == -1          # once per chunk, shared by all three
         p4 = m["v4_model"].predict_proba(z15)              # once, reused for both thresholds
-        _accumulate(acc["v3"], m["v3_model"].predict_proba(z), v3_classes, threshold, iso_hit, yb, yt)
+        _accumulate(acc["v3"], m["v3_model"].predict_proba(z), v3_classes, th3, iso_hit, yb, yt)
         _accumulate(acc["v4"], p4, v4_classes, threshold, iso_hit, yb, yt)
         _accumulate(acc[V4_AT_05], p4, v4_classes, 0.5, iso_hit, yb, yt)
         log(f"  evaluated machines {i + 1}-{min(i + EVAL_MACHINES_PER_CHUNK, len(machines))} of {len(machines)}")
@@ -437,7 +467,7 @@ def evaluate_production_only(args) -> int:
     test_fp = fingerprint({"test": args.test})["test"]
     test = load_fleet(args.test)
     test_fp["rows"] = int(len(test))
-    ev = evaluate_set(args.models_dir, test, args.threshold)
+    ev = evaluate_set(args.models_dir, test, args.threshold, args.threshold_v3)
     for p in ("v3", "v4", V4_AT_05):
         log(f"production {p}: F1={ev[p]['f1']:.4f} P={ev[p]['precision']:.4f} "
             f"R={ev[p]['recall']:.4f} classifier-only F1={ev[p]['classifier_only_f1']:.4f}")
@@ -446,7 +476,8 @@ def evaluate_production_only(args) -> int:
     prod = manifest.setdefault("production", {})
     prod.update({
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
-        "evaluation": {"test_set": test_fp, "threshold": args.threshold, **ev},
+        "evaluation": {"test_set": test_fp, "threshold": args.threshold,
+                       "threshold_v3": args.threshold_v3, **ev},
         "artifacts": {f"models/{n}": sha256(args.models_dir / n) for n in ARTIFACTS.values()},
     })
     write_manifest(args.models_dir, manifest)
@@ -554,9 +585,10 @@ def record_run(args, run: dict) -> None:
             "feedback": run["feedback"],
             "params": run["params"],
             "decision_threshold": run["params"]["threshold"],
+            "decision_threshold_v3": run["params"]["threshold_v3"],
             "threshold_selection": run["threshold_selection"],
             "evaluation": {"test_set": run["datasets"]["test"], "threshold": run["params"]["threshold"],
-                           **run["candidate_evaluation"]},
+                           "threshold_v3": run["params"]["threshold_v3"], **run["candidate_evaluation"]},
             "artifacts": {f"models/{n}": sha256(args.models_dir / n) for n in ARTIFACTS.values()},
         }
         log("PROMOTED: artifacts written, manifest updated")
@@ -570,7 +602,9 @@ def record_run(args, run: dict) -> None:
         "promoted_to_workspace": run["promoted"],
         "candidate_f1": {p: run["candidate_evaluation"][p]["f1"] for p in ("v3", "v4")},
         "candidate_threshold": run["params"]["threshold"],
+        "candidate_threshold_v3": run["params"]["threshold_v3"],
         "production_threshold": args.threshold,
+        "production_threshold_v3": args.threshold_v3,
         "threshold_selected_on": ((run["threshold_selection"] or {}).get("validation_set") or {}).get("sha256")})
     write_manifest(args.models_dir, manifest)
     if args.report:
@@ -593,6 +627,9 @@ def parse_args(argv=None):
                     help="decision threshold; default: production.decision_threshold from the "
                          "manifest (chosen by ml-model/select_threshold.py), else "
                          "$PREDICT_THRESHOLD, else FALLBACK_THRESHOLD (0.6, same as api/app.py)")
+    ap.add_argument("--threshold-v3", type=float, default=None,
+                    help="production's threshold for the v3 path (requests without history); default: "
+                         "production.decision_threshold_v3 from the manifest, else the --threshold value")
     ap.add_argument("--max-f1-drop", type=float, default=None,
                     help="default: guardrail.max_f1_drop from config/model_policy.json")
     ap.add_argument("--max-recall-drop", type=float, default=None,
@@ -612,10 +649,16 @@ def parse_args(argv=None):
         args.max_f1_drop = args.policy["guardrail"]["max_f1_drop"]
     if args.max_recall_drop is None:
         args.max_recall_drop = args.policy["guardrail"]["max_recall_drop"]
+    prod = read_manifest(args.models_dir).get("production") or {}
     if args.threshold is None:
-        selected = (read_manifest(args.models_dir).get("production") or {}).get("decision_threshold")
+        selected = prod.get("decision_threshold")
         args.threshold = float(selected if selected is not None
                                else os.environ.get("PREDICT_THRESHOLD", str(FALLBACK_THRESHOLD)))
+    if args.threshold_v3 is None:
+        # production's v3 threshold; a manifest from before 8 November 2026 has none: v3 then
+        # served at the single threshold, exactly as the API does (api/app.py)
+        selected_v3 = prod.get("decision_threshold_v3")
+        args.threshold_v3 = float(selected_v3) if selected_v3 is not None else args.threshold
     return args
 
 
@@ -647,11 +690,13 @@ def run_pipeline(args) -> int:
     del x_iso
 
     selection = None
-    cand_threshold = args.threshold
+    cand_threshold, cand_threshold_v3 = args.threshold, args.threshold_v3
     if args.promote:
         selection = _select_for_promotion(args, val_fp)
         cand_threshold = float(selection["selected"]["threshold"])
-    log(f"candidate evaluated at threshold {cand_threshold}, production at its own {args.threshold}")
+        cand_threshold_v3 = float(selection["v3"]["selected"]["threshold"])
+    log(f"candidate evaluated at thresholds v4 {cand_threshold} / v3 {cand_threshold_v3}, "
+        f"production at its own v4 {args.threshold} / v3 {args.threshold_v3}")
 
     # With --promote the guardrail decides on the validation fleet (independent of the test
     # set that supplies the headline score). Without --promote there is no validated
@@ -659,13 +704,13 @@ def run_pipeline(args) -> int:
     guard_set, guard_cand, guard_prod = "test", None, None
     if args.promote:
         guard_set = "validation"
-        guard_cand, guard_prod = guardrail_on_validation(args, cand_threshold, has_prod)
+        guard_cand, guard_prod = guardrail_on_validation(args, cand_threshold, cand_threshold_v3, has_prod)
 
     test = load_fleet(args.test)
     datasets["test"]["rows"] = int(len(test))
-    cand_eval = evaluate_set(args.work_dir, test, cand_threshold)
+    cand_eval = evaluate_set(args.work_dir, test, cand_threshold, cand_threshold_v3)
     log(f"candidate  v4 F1={cand_eval['v4']['f1']:.4f}  v3 F1={cand_eval['v3']['f1']:.4f}  (test set, reported)")
-    prod_eval = evaluate_set(args.models_dir, test, args.threshold) if has_prod else None
+    prod_eval = evaluate_set(args.models_dir, test, args.threshold, args.threshold_v3) if has_prod else None
     if prod_eval:
         log(f"production v4 F1={prod_eval['v4']['f1']:.4f}  v3 F1={prod_eval['v3']['f1']:.4f}  (test set, reported)")
         if guard_set == "validation":
@@ -685,6 +730,7 @@ def run_pipeline(args) -> int:
         "params": {"xgb": XGB_PARAMS, "iso": {**ISO_PARAMS, "contamination": contamination},
                    "normal_sample": n_norm, "policy": args.policy, "rolling_window": ROLLING_WINDOW_SIZE,
                    "rolling_base_cols": list(ROLLING_FEATURE_BASE_COLS), "threshold": cand_threshold,
+                   "threshold_v3": cand_threshold_v3,
                    "max_f1_drop": args.max_f1_drop, "max_recall_drop": args.max_recall_drop},
         "candidate_evaluation": cand_eval,
         "production_evaluation": prod_eval,

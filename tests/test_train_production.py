@@ -234,6 +234,30 @@ def test_promoted_threshold_is_selected_for_the_candidate(promoted):
     assert gate.check_threshold(prod, promoted["models"]) == []
 
 
+def test_promoted_v3_threshold_is_selected_for_the_v3_path(promoted):
+    """v3 (requests without history) gets its own threshold, chosen by the same rule on its own
+    validation curve, recorded and used for its evaluation (since 8 November 2026)."""
+    prod = json.loads((promoted["models"] / "manifest.json").read_text())["production"]
+    sel_v3 = prod["threshold_selection"]["v3"]
+    assert prod["decision_threshold_v3"] == sel_v3["selected"]["threshold"] == prod["evaluation"]["threshold_v3"]
+    assert len(sel_v3["curve"]) == len(prod["threshold_selection"]["curve"])
+    assert sel_v3["rule"] in ("min_recall", "min_recall_unreachable", "fbeta")
+
+
+def test_gate_checks_the_v3_threshold_when_present(tmp_path):
+    prod = _selected_prod()
+    assert gate.check_threshold(prod, tmp_path) == []                        # absent: v3 at the single threshold
+    prod["decision_threshold_v3"] = 0.95
+    prod["threshold_selection"]["v3"] = {"selected": {"threshold": 0.95}}
+    prod["evaluation"]["threshold_v3"] = 0.95
+    assert gate.check_threshold(prod, tmp_path) == []
+    prod["threshold_selection"]["v3"]["selected"]["threshold"] = 0.9
+    assert any("different v3 threshold" in p for p in gate.check_threshold(prod, tmp_path))
+    prod["threshold_selection"]["v3"]["selected"]["threshold"] = 0.95
+    prod["evaluation"]["threshold_v3"] = 0.66
+    assert any("evaluation recorded v3 at 0.66" in p for p in gate.check_threshold(prod, tmp_path))
+
+
 def test_select_threshold_refuses_a_non_independent_validation_fleet(tiny_fleet, promoted, tmp_path, monkeypatch):
     """The rule lives where the evidence is written: the selection tool itself must refuse the
     test or train file as validation data, and must leave the manifest untouched."""
