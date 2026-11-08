@@ -18,6 +18,7 @@ trains and scores a model, changing ONLY how the baselines are built:
   normal_only       4 windows, baselines from label-0 rows only. Uses the labels, which a real
                     operator does not have: an upper bound on what removing the anomalies could
                     gain, not a deployable option.
+  hourly24_normal_only  24 windows, label-0 rows only: the same upper bound on per-hour baselines
 
 For every variant, identically: train_production's training matrices (all rows, no feedback rows),
 its XGB/IsolationForest parameters and seeds, its threshold rule on the validation fleet
@@ -49,9 +50,10 @@ import preprocess_robust  # noqa: E402
 import train_production as tp  # noqa: E402
 
 VARIANTS = ["allday", "windows4", "windows8", "windows12", "hourly24", "trimmed",
-            "hourly24_trimmed", "normal_only"]
+            "hourly24_trimmed", "normal_only", "hourly24_normal_only"]
 # hours per window for the fixed-width variants (each window is named after its first hour)
-WIDTH = {"windows8": 3, "windows12": 2, "hourly24": 1, "hourly24_trimmed": 1}
+WIDTH = {"windows8": 3, "windows12": 2, "hourly24": 1, "hourly24_trimmed": 1,
+         "hourly24_normal_only": 1}
 DATA = ROOT / "data"
 
 
@@ -72,7 +74,7 @@ def set_windows(df, kind: str):
 def build(kind: str, train):
     if kind in ("trimmed", "hourly24_trimmed"):
         b = preprocess_robust.build_baselines(train, tp.FEATURES)
-    elif kind == "normal_only":
+    elif kind in ("normal_only", "hourly24_normal_only"):
         b = preprocess.build_baselines(train[train["label"] == 0], tp.FEATURES)
     else:
         b = preprocess.build_baselines(train, tp.FEATURES)
