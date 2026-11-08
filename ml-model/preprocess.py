@@ -81,6 +81,16 @@ def add_window_column(df, timestamp_col="timestamp"):
     return df
 
 
+def _mean_std(group, feature_cols):
+    """{col: [mean, std]} of one group of rows; std (ddof=0) floored at STD_FLOOR."""
+    out = {}
+    for col in feature_cols:
+        mean = float(group[col].mean())
+        std  = float(group[col].std(ddof=0))
+        out[col] = [mean, max(std, STD_FLOOR)]
+    return out
+
+
 def build_baselines(df, feature_cols,
                     machine_col="machine", type_col="type",
                     window_col="window"):
@@ -109,33 +119,19 @@ def build_baselines(df, feature_cols,
 
     # 1. Per-machine per-window baselines (primary)
     for (machine, window), group in df.groupby([machine_col, window_col]):
-        key = f"{machine}|{window}"
-        baselines[key] = {}
-        for col in feature_cols:
-            mean = float(group[col].mean())
-            std  = float(group[col].std(ddof=0))
-            baselines[key][col] = [mean, max(std, STD_FLOOR)]
+        baselines[f"{machine}|{window}"] = _mean_std(group, feature_cols)
 
     # 2. Per-machine (any time) baselines — fallback if a window is missing
     for machine, group in df.groupby(machine_col):
         key = str(machine)
-        baselines[key] = {}
-        for col in feature_cols:
-            mean = float(group[col].mean())
-            std  = float(group[col].std(ddof=0))
-            baselines[key][col] = [mean, max(std, STD_FLOOR)]
+        baselines[key] = _mean_std(group, feature_cols)
         if type_col in df.columns:
             baselines[key]["__type__"] = str(group[type_col].iloc[0])
 
     # 3. Per-type baselines
     if type_col in df.columns:
         for mtype, group in df.groupby(type_col):
-            key = f"__type__{mtype}"
-            baselines[key] = {}
-            for col in feature_cols:
-                mean = float(group[col].mean())
-                std  = float(group[col].std(ddof=0))
-                baselines[key][col] = [mean, max(std, STD_FLOOR)]
+            baselines[f"__type__{mtype}"] = _mean_std(group, feature_cols)
 
     # 4. Global fallback
     baselines["__global__"] = {
