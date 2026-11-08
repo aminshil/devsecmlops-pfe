@@ -1,0 +1,40 @@
+{
+  "requests": 16600,
+  "anomalous_readings": 1094,
+  "served_by_model": {
+    "telecom_v4_rolling": 16600
+  },
+  "f1": 0.7765,
+  "precision": 0.714,
+  "recall": 0.851,
+  "per_cause_recall": {
+    "cascade": 0.2941,
+    "cpu_spike": 0.9892,
+    "disk_saturation": 1.0,
+    "memory_leak": 0.949,
+    "network_flood": 0.9889,
+    "silent_failure": 0.9721
+  },
+  "cause_accuracy_on_detected": 0.9965,
+  "latency_ms": {
+    "p50": 334.0,
+    "p95": 608.0,
+    "max": 2299.7
+  },
+  "test_set": {
+    "file": "data/telecom_fleet_v2_test.csv",
+    "sha256": "3b6b6e2144100d43522a79a9a685eecc49e2bcecc573b001584614f0a5a8894a"
+  },
+  "days": 14,
+  "every_hours": 4,
+  "errors": 0,
+  "url": "http://192.168.49.2:30080",
+  "finished_at": "2026-11-08T06:11:15Z",
+  "served_model": {
+    "mlflow_run_id": "518d2f207a434e678f3d6bd639d9885a",
+    "promoted_at": "2026-11-08T04:03:17.501702+00:00",
+    "threshold": 0.66,
+    "threshold_v3": 0.95,
+    "served_v4_f1": 0.761
+  }
+}
