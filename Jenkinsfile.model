@@ -10,8 +10,16 @@
 //   5  Evidence                 report summary; smoke: the real models/ is byte-for-byte untouched
 //   6  Verify MLflow + MinIO    full only: the run's six model files are downloaded back from MLflow (MinIO)
 //                               and each SHA-256 compared with the one the run recorded
-//   7  Commit promoted model    run the CI model gate on the promoted manifest, then git commit + push
-//   8  Trigger the application pipeline, which gates, builds, scans, deploys and verifies the image
+//   7  Activate locally         run the CI model gate on the promoted manifest, then make it this site's
+//                               current model in the local model store (no Git push, no Git credential)
+//   8  Trigger the application pipeline with MODEL_SOURCE=store: it bakes this site's current model into
+//      the image, then gates, builds, scans, deploys and verifies it
+//
+// SITE (default "default"): which site's model. Each site keeps its own models on its own machine in
+//   the local model store (scripts/model_store.py, under MODEL_STORE in the jenkins_home volume);
+//   a site with no model yet starts from the repository's reference model in models/, so its first
+//   retraining must beat that model on the site's own test set. Data: fleet-data/ for "default",
+//   fleet-data/sites/<site>/ for any other site. MLflow experiment: telecom-<site> (other sites).
 //
 // SCOPE=smoke (default): tiny fleets, scratch directories, no MLflow logging (keeps the production
 //   experiment clean), never commits or deploys. About 5 minutes. Proves the wiring in Jenkins.
@@ -19,12 +27,11 @@
 //   Needs about 9 GB of free memory: stop SonarQube first. PROMOTE is honoured only here.
 //
 // A rejected candidate is a valid outcome: the build is marked UNSTABLE, production is untouched and
-// nothing is committed. The run report is archived either way.
+// nothing is activated. The run report is archived either way.
 //
 // Prerequisites this job needs (provisioned by Ansible, not by this file):
 //   - the Jenkins container has data/ mounted read-only at /var/jenkins_home/fleet-data
-//   - a Jenkins credential "github-pat-devsecmlops" (username+PAT), with push access to this repo
-//     (only needed to promote)
+//   - nothing else: promotion no longer pushes to Git, so no Git credential is needed
 pipeline {
     agent any
 
@@ -33,8 +40,10 @@ pipeline {
                description: 'smoke: tiny generated fleets, scratch directories, never commits or deploys. full: the full-size datasets, logs to MLflow, needs about 9 GB free memory.')
         booleanParam(name: 'INCLUDE_FEEDBACK', defaultValue: true,
                      description: 'Export operator verdicts from PostgreSQL (kubectl exec) and train on them too')
+        string(name: 'SITE', defaultValue: 'default',
+               description: 'Which site this model is for (lowercase letters, digits, - and _). Its model lives in the local model store.')
         booleanParam(name: 'PROMOTE', defaultValue: false,
-                     description: 'full scope only: select the candidate threshold on the validation fleet, then commit and deploy the candidate if the guardrail passes')
+                     description: 'full scope only: select the candidate threshold on the validation fleet, then activate it in this site's local model store and deploy it if the guardrail passes')
     }
 
     environment {
@@ -44,6 +53,7 @@ pipeline {
         // server into MinIO, so no storage credentials are needed here.
         MLFLOW_TRACKING_URI = "http://172.17.0.1:5001"
         MIN_F1        = "0.60"          // minimum served v4 F1 the CI model gate accepts
+        MODEL_STORE   = "/var/jenkins_home/model-store"   // each site's promoted models (scripts/model_store.py)
     }
 
     options {
@@ -63,6 +73,17 @@ pipeline {
                 '''
                 script {
                     env.DO_PROMOTE = (params.SCOPE == 'full' && params.PROMOTE) ? 'true' : 'false'
+                    // params.SITE is null on the first run after the parameter was added: default it
+                    def site = params.SITE ?: 'default'
+                    if (!(site ==~ /[a-z0-9][a-z0-9_-]{0,31}/)) {
+                        error("invalid SITE '${site}': lowercase letters, digits, - and _ only")
+                    }
+                    env.SITE_NAME = site
+                    env.SITE_DATA = site == 'default' ? env.DATA : "${env.DATA}/sites/${site}"
+                    if (site != 'default') {
+                        env.MLFLOW_EXPERIMENT_NAME = "telecom-${site}"
+                    }
+                    echo "site ${site}: data ${env.SITE_DATA}, model store ${env.MODEL_STORE}/${site}"
                     if (params.PROMOTE && params.SCOPE != 'full') {
                         echo 'PROMOTE is ignored in smoke scope: nothing is committed or deployed'
                     }
@@ -77,9 +98,13 @@ pipeline {
                     }
                     if (params.SCOPE == 'full') {
                         sh '''
-                            test -f ${DATA}/telecom_fleet_v2_labeled.csv
-                            test -f ${DATA}/telecom_fleet_v2_test.csv
-                            test -f ${DATA}/telecom_fleet_v2_val.csv
+                            test -f ${SITE_DATA}/telecom_fleet_v2_labeled.csv
+                            test -f ${SITE_DATA}/telecom_fleet_v2_test.csv
+                            test -f ${SITE_DATA}/telecom_fleet_v2_val.csv
+                            # this site's production model: created from the reference model the first time,
+                            # then copied into build/staging, the folder the guardrail compares against
+                            python3 scripts/model_store.py init  --site "${SITE_NAME}" --from models
+                            python3 scripts/model_store.py stage --site "${SITE_NAME}" --to build/staging
                             avail=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
                             echo "memory available: ${avail} MiB"
                             if [ "$avail" -lt 9000 ]; then
@@ -131,9 +156,9 @@ pipeline {
                               "--normal-sample 5000 --models-dir build/smoke-models --work-dir build/smoke-work " +
                               "${feedbackArg} --report build/model-report.json"
                     } else {
-                        def promoteArgs = env.DO_PROMOTE == 'true' ? "--promote --val ${env.DATA}/telecom_fleet_v2_val.csv" : ''
-                        cmd = "python3 ml-model/train_production.py " +
-                              "--train ${env.DATA}/telecom_fleet_v2_labeled.csv --test ${env.DATA}/telecom_fleet_v2_test.csv " +
+                        def promoteArgs = env.DO_PROMOTE == 'true' ? "--promote --val ${env.SITE_DATA}/telecom_fleet_v2_val.csv" : ''
+                        cmd = "python3 ml-model/train_production.py --models-dir build/staging " +
+                              "--train ${env.SITE_DATA}/telecom_fleet_v2_labeled.csv --test ${env.SITE_DATA}/telecom_fleet_v2_test.csv " +
                               "${feedbackArg} ${promoteArgs} --report build/model-report.json"
                     }
                     def rc = sh(returnStatus: true, script: cmd)
@@ -177,35 +202,26 @@ pipeline {
             }
         }
 
-        stage('7. Commit promoted model') {
+        stage('7. Activate in the local model store') {
             when { expression { env.MODEL_OUTCOME == 'promoted' } }
             steps {
-                withCredentials([usernamePassword(credentialsId: 'github-pat-devsecmlops',
-                                                  usernameVariable: 'GIT_USER',
-                                                  passwordVariable: 'GIT_TOKEN')]) {
-                    sh '''
-                        python3 scripts/verify_model_manifest.py --min-f1 ${MIN_F1} || { echo "CI model gate refused the promoted model (see above). The threshold needs no manual edit: it is selected by the pipeline and read by the API from the manifest."; exit 1; }
-                        F1=$(python3 -c "import json;print(json.load(open('models/manifest.json'))['production']['evaluation']['v4']['f1'])")
-                        git config user.name  "devsecmlops-model-pipeline"
-                        git config user.email "model-pipeline@devsecmlops.local"
-                        git add models/
-                        git commit -m "model: promote candidate from Jenkins model build ${BUILD_NUMBER} (served v4 F1 ${F1})"
-                        # The token never goes on a command line (it would be visible in the process
-                        # list): git asks this helper, which reads it from the environment at run time.
-                        ASKPASS="$(mktemp)"
-                        printf '#!/bin/sh\ncase "$1" in Username*) echo "$GIT_USER" ;; *) echo "$GIT_TOKEN" ;; esac\n' > "$ASKPASS"
-                        chmod 700 "$ASKPASS"
-                        GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0 git push https://github.com/aminshil/devsecmlops-pfe.git HEAD:main
-                        rm -f "$ASKPASS"
-                    '''
-                }
+                // No Git push and no Git credential: the promoted model stays on this site. The CI
+                // model gate checks it first; then the store keeps the previous model as a version
+                // (rollback: scripts/model_store.py rollback) and the candidate becomes current.
+                sh '''
+                    python3 scripts/verify_model_manifest.py --manifest build/staging/manifest.json --min-f1 ${MIN_F1} || { echo "CI model gate refused the promoted model (see above)"; exit 1; }
+                    python3 scripts/model_store.py activate --site "${SITE_NAME}" --from build/staging --build "${BUILD_NUMBER}"
+                    python3 scripts/model_store.py status --site "${SITE_NAME}"
+                '''
             }
         }
 
         stage('8. Deploy through the application pipeline') {
             when { expression { env.MODEL_OUTCOME == 'promoted' } }
             steps {
-                build job: 'devsecmlops-pipeline', wait: true
+                // The application pipeline bakes this site's current model (from the store) into the image.
+                build job: 'devsecmlops-pipeline', wait: true,
+                      parameters: [string(name: 'MODEL_SOURCE', value: 'store'), string(name: 'SITE', value: env.SITE_NAME)]
             }
         }
     }

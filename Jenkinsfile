@@ -9,16 +9,27 @@ pipeline {
         disableConcurrentBuilds()
     }
 
+    // Which model the image bakes in. A push (webhook) uses the defaults: auto + default, which is
+    // exactly the old behaviour until this site has promoted a model locally, and that site's
+    // current model afterwards (so a code change never redeploys an older model).
+    parameters {
+        choice(name: 'MODEL_SOURCE', choices: ['auto', 'repo', 'store'],
+               description: "auto: the site's current model from the local model store if it has one, else the repository's models/. repo: always models/. store: always the store (fails if the site has no model).")
+        string(name: 'SITE', defaultValue: 'default',
+               description: 'Which site the image is built for (lowercase letters, digits, - and _).')
+    }
+
     environment {
         // What SonarQube analyses: the serving code, the ML pipeline, and every script that runs in production or
         // in a pipeline (the traffic agent, the k8s exporter, the Prometheus watchdog, which handles the Telegram
         // token, the CI model gate and the model job's helpers). The other scripts in scripts/ and monitoring/ are
         // read-only measurement tools and earlier traffic designs: run by hand, deployed nowhere, and the README's
         // numbers are their output, so they are linted (ruff) but kept out of the gate (README, L3).
-        SONAR_SOURCES = "api,ml-model,monitoring/production_agent.py,monitoring/k8s_exporter.py,scripts/prometheus_watchdog.py,scripts/verify_model_manifest.py,scripts/verify_mlflow_artifacts.py,scripts/export_feedback_dataset.py,scripts/model_report_summary.py,scripts/smoke_test.py,scripts/ensure_minio_bucket.py,scripts/pin_versions.py,scripts/ci_config.py"
+        SONAR_SOURCES = "api,ml-model,monitoring/production_agent.py,monitoring/k8s_exporter.py,scripts/prometheus_watchdog.py,scripts/verify_model_manifest.py,scripts/verify_mlflow_artifacts.py,scripts/export_feedback_dataset.py,scripts/model_report_summary.py,scripts/smoke_test.py,scripts/ensure_minio_bucket.py,scripts/pin_versions.py,scripts/ci_config.py,scripts/model_store.py"
         IMAGE_NAME    = "devsecmlops-api"
-        IMAGE_TAG     = "${readFile('VERSION').trim()}-b${BUILD_NUMBER}"
+        // IMAGE_TAG is set in stage 1: <version>-b<build>, plus -<site> when the model comes from the store
         REGISTRY      = "localhost:5000"
+        MODEL_STORE   = "/var/jenkins_home/model-store"   // each site's promoted models (scripts/model_store.py)
         // Minimum served v4 F1 (independent test set) recorded in
         // models/manifest.json. Was already defined here but never
         // actually checked anywhere in the pipeline.
@@ -32,6 +43,28 @@ pipeline {
                 checkout scm
                 sh 'git log --oneline -1'
                 sh 'ls -la'
+                script {
+                    def site = params.SITE ?: 'default'
+                    def source = params.MODEL_SOURCE ?: 'auto'
+                    if (!(site ==~ /[a-z0-9][a-z0-9_-]{0,31}/)) {
+                        error("invalid SITE '${site}': lowercase letters, digits, - and _ only")
+                    }
+                    if (source == 'auto') {
+                        source = sh(returnStatus: true,
+                                    script: "python3 scripts/model_store.py exists --site '${site}'") == 0 ? 'store' : 'repo'
+                    }
+                    def version = readFile('VERSION').trim()
+                    if (source == 'store') {
+                        // copy this site's current model out of the store, every SHA-256 checked
+                        sh "python3 scripts/model_store.py export --site '${site}' --to build/site-models"
+                        env.MODELS_SRC = 'build/site-models'
+                        env.IMAGE_TAG = "${version}-b${env.BUILD_NUMBER}-${site}"
+                    } else {
+                        env.MODELS_SRC = 'models'
+                        env.IMAGE_TAG = "${version}-b${env.BUILD_NUMBER}"
+                    }
+                    echo "model source: ${source} (${env.MODELS_SRC}), site ${site}, image tag ${env.IMAGE_TAG}"
+                }
             }
         }
 
@@ -87,7 +120,7 @@ pipeline {
                     # exactly the ones a real training run evaluated and
                     # promoted (SHA-256 match), with a recorded F1 at or
                     # above the floor -- not just "some manifest exists".
-                    python3 scripts/verify_model_manifest.py --min-f1 ${F1_THRESHOLD}
+                    python3 scripts/verify_model_manifest.py --manifest ${MODELS_SRC}/manifest.json --min-f1 ${F1_THRESHOLD}
                 '''
             }
         }
@@ -95,7 +128,7 @@ pipeline {
         stage('4. Build Docker image') {
             steps {
                 sh '''
-                    docker build --pull --build-arg APT_REFRESH=${IMAGE_TAG} -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                    docker build --pull --build-arg APT_REFRESH=${IMAGE_TAG} --build-arg MODELS_SRC=${MODELS_SRC} -t ${IMAGE_NAME}:${IMAGE_TAG} .
                     docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
                     docker images | grep ${IMAGE_NAME} | head -5
                 '''

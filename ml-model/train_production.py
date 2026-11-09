@@ -543,7 +543,8 @@ def log_to_mlflow(run: dict, work_dir: Path) -> str | None:
         return None
     try:
         import mlflow
-        mlflow.set_experiment("telecom-production-model")
+        # one experiment per site when the model job sets it (telecom-<site>); default unchanged
+        mlflow.set_experiment(os.environ.get("MLFLOW_EXPERIMENT_NAME") or "telecom-production-model")
         with mlflow.start_run() as r:
             p = run["params"]
             mlflow.log_params({"normal_sample": p["normal_sample"], "threshold": p["threshold"], "threshold_v3": p["threshold_v3"],
