@@ -159,6 +159,9 @@ export MINIO_ROOT_PASSWORD='choose-12-or-more-chars'
 export GRAFANA_ADMIN_PASSWORD='choose-12-or-more-chars'
 export OPS_UI_USER='operator'
 export OPS_UI_PASSWORD='choose-12-or-more-chars'
+# this machine's site name (lowercase letters, digits, - and _): its data go in data/sites/<site>/ and
+# its models stay in its own Jenkins model store. Leave it out on the original VM (site "default").
+# export PFE_SITE='sfax'
 # optional, NOT wired into Ansible, leave it out for the demo. To protect POST /feedback:
 #   kubectl set env deployment/anomaly-api FEEDBACK_TOKEN=<value> -n ml-serving
 # and give the same variable to the control panel and scripts/feedback_demo.py, otherwise their verdicts get a 401

@@ -206,6 +206,9 @@
       # Versioned datasets for the model pipeline job (Jenkinsfile.model),
       # read-only: training never modifies its inputs.
       - "{{ repo_dir }}/data:/var/jenkins_home/fleet-data:ro"
+    # The site this Jenkins belongs to: the jobs' default SITE (Jenkinsfile, Jenkinsfile.model).
+    env:
+      PFE_SITE: "{{ site_name }}"
   # networks left to the "Attach Jenkins to its required networks" task
   # below, which is also what jenkins-networks.service re-asserts on every
   # boot -- see that task for why a static `networks:` list here isn't

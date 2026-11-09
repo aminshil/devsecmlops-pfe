@@ -15,7 +15,8 @@
 //   8  Trigger the application pipeline with MODEL_SOURCE=store: it bakes this site's current model into
 //      the image, then gates, builds, scans, deploys and verifies it
 //
-// SITE (default "default"): which site's model. Each site keeps its own models on its own machine in
+// SITE (empty = this installation's site, PFE_SITE, which Ansible sets from site_name; "default" when
+//   unset): which site's model. Each site keeps its own models on its own machine in
 //   the local model store (scripts/model_store.py, under MODEL_STORE in the jenkins_home volume);
 //   a site with no model yet starts from the repository's reference model in models/, so its first
 //   retraining must beat that model on the site's own test set. Data: fleet-data/ for "default",
@@ -31,6 +32,7 @@
 //
 // Prerequisites this job needs (provisioned by Ansible, not by this file):
 //   - the Jenkins container has data/ mounted read-only at /var/jenkins_home/fleet-data
+//   - the Jenkins container has PFE_SITE, this machine's site name (Ansible site_name)
 //   - nothing else: promotion no longer pushes to Git, so no Git credential is needed
 pipeline {
     agent any
@@ -40,8 +42,8 @@ pipeline {
                description: 'smoke: tiny generated fleets, scratch directories, never commits or deploys. full: the full-size datasets, logs to MLflow, needs about 9 GB free memory.')
         booleanParam(name: 'INCLUDE_FEEDBACK', defaultValue: true,
                      description: 'Export operator verdicts from PostgreSQL (kubectl exec) and train on them too')
-        string(name: 'SITE', defaultValue: 'default',
-               description: 'Which site this model is for (lowercase letters, digits, - and _). Its model lives in the local model store.')
+        string(name: 'SITE', defaultValue: '',
+               description: "Which site this model is for (lowercase letters, digits, - and _). Empty: this installation's site (PFE_SITE, set by Ansible), or 'default' if it has none. Its model lives in the local model store.")
         booleanParam(name: 'PROMOTE', defaultValue: false,
                      description: 'full scope only: select the candidate threshold on the validation fleet, then activate it in this site's local model store and deploy it if the guardrail passes')
     }
@@ -73,8 +75,9 @@ pipeline {
                 '''
                 script {
                     env.DO_PROMOTE = (params.SCOPE == 'full' && params.PROMOTE) ? 'true' : 'false'
-                    // params.SITE is null on the first run after the parameter was added: default it
-                    def site = params.SITE ?: 'default'
+                    // empty SITE (or null, on the first run after the parameter was added): the site this
+                    // Jenkins belongs to (container variable PFE_SITE, Ansible site_name), else 'default'
+                    def site = params.SITE?.trim() ?: (env.PFE_SITE?.trim() ?: 'default')
                     if (!(site ==~ /[a-z0-9][a-z0-9_-]{0,31}/)) {
                         error("invalid SITE '${site}': lowercase letters, digits, - and _ only")
                     }

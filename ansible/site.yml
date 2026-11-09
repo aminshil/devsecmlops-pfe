@@ -60,9 +60,16 @@
             file: "{{ playbook_dir }}/group_vars/production_secrets.yml"
           when: profile == 'production' and _prod_secrets.stat.exists
           # Without that file db_password stays CHANGE_ME_VIA_VAULT and the secrets role stops with a clear message.
+        - name: Check the site name (it becomes a directory of the model store)
+          ansible.builtin.assert:
+            that: site_name is match('^[a-z0-9][a-z0-9_-]{0,31}$')
+            fail_msg: >-
+              site_name '{{ site_name }}' (PFE_SITE) is not a valid site name: lowercase letters, digits,
+              - and _ only, 32 characters at most (scripts/model_store.py).
+            quiet: true
         - name: Announce the profile
           ansible.builtin.debug:
-            msg: "Bringing up the platform with the '{{ profile }}' profile."
+            msg: "Bringing up the platform with the '{{ profile }}' profile for site '{{ site_name }}'."
 
   roles:
     # --- common to both profiles ---

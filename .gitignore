@@ -11,6 +11,8 @@ __pycache__/
 # Large data files (regenerate with scripts)
 data/smd-raw/
 data/*.csv
+# each site's own datasets (data/sites/<site>/, Jenkinsfile.model); data/*.csv does not reach sub-folders
+data/sites/
 data/demo_labels.jsonl
 data/demo_labels.jsonl.lock
 data/*.incidents.json

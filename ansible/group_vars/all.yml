@@ -57,3 +57,9 @@ venv_python: python3
 minio_root_user: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') }}"
 minio_root_password: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') }}"
 jenkins_image_tag: "2.2"   # 2.2: base image and tools pinned with checksums (jenkins/Dockerfile)
+# This installation's site: each data centre has its own name, its own data (data/sites/<site>/) and
+# its own models (the Jenkins model store, scripts/model_store.py). Jenkins gets it as PFE_SITE, and
+# both jobs use it when their SITE parameter is left empty. Set once per machine in
+# /root/.devsecmlops.env (export PFE_SITE='sfax'); unset means 'default', the original VM.
+site_name: "{{ lookup('ansible.builtin.env', 'PFE_SITE') | default('default', true) }}"
+

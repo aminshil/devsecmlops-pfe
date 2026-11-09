@@ -9,14 +9,15 @@ pipeline {
         disableConcurrentBuilds()
     }
 
-    // Which model the image bakes in. A push (webhook) uses the defaults: auto + default, which is
-    // exactly the old behaviour until this site has promoted a model locally, and that site's
-    // current model afterwards (so a code change never redeploys an older model).
+    // Which model the image bakes in. A push (webhook) uses the defaults: auto + this installation's
+    // site (PFE_SITE, set by Ansible from site_name), which is exactly the old behaviour until the
+    // site has promoted a model locally, and the site's current model afterwards (so a code change
+    // never redeploys an older model, nor another site's).
     parameters {
         choice(name: 'MODEL_SOURCE', choices: ['auto', 'repo', 'store'],
                description: "auto: the site's current model from the local model store if it has one, else the repository's models/. repo: always models/. store: always the store (fails if the site has no model).")
-        string(name: 'SITE', defaultValue: 'default',
-               description: 'Which site the image is built for (lowercase letters, digits, - and _).')
+        string(name: 'SITE', defaultValue: '',
+               description: "Which site the image is built for (lowercase letters, digits, - and _). Empty: this installation's site (PFE_SITE, set by Ansible), or 'default' if it has none.")
     }
 
     environment {
@@ -44,7 +45,8 @@ pipeline {
                 sh 'git log --oneline -1'
                 sh 'ls -la'
                 script {
-                    def site = params.SITE ?: 'default'
+                    // empty SITE: the site this Jenkins belongs to (container variable PFE_SITE, Ansible site_name)
+                    def site = params.SITE?.trim() ?: (env.PFE_SITE?.trim() ?: 'default')
                     def source = params.MODEL_SOURCE ?: 'auto'
                     if (!(site ==~ /[a-z0-9][a-z0-9_-]{0,31}/)) {
                         error("invalid SITE '${site}': lowercase letters, digits, - and _ only")
