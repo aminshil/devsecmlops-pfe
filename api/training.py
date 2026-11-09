@@ -15,6 +15,7 @@ the guardrail on the full independent test set and records the lineage.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -28,7 +29,7 @@ from sklearn.metrics import (f1_score, precision_score, recall_score,
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
-MODELS_DIR = ROOT / "models"
+MODELS_DIR = Path(os.environ["MODELS_DIR"]) if os.environ.get("MODELS_DIR") else ROOT / "models"   # as api/app.py
 
 TEST_DATASET = "telecom_fleet_v2_test.csv"   # independent evaluation set (seed 123)
 EVAL_ROWS = 200_000                           # held-out rows used by every comparison

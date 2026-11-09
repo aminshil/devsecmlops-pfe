@@ -62,7 +62,11 @@ import math
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ROOT       = Path(__file__).resolve().parent.parent
-MODELS_DIR = ROOT / "models"
+# MODELS_DIR: the folder holding the served model files and models/manifest.json.
+# Default = the repository's models/ (unchanged behaviour). A site can point it at its own
+# local model store (e.g. MODELS_DIR=/var/lib/devsecmlops/models/current); inside the image
+# the files are always at /app/models.
+MODELS_DIR = Path(os.environ["MODELS_DIR"]) if os.environ.get("MODELS_DIR") else ROOT / "models"
 # Single source of truth for the version: the VERSION file (also used for
 # the Jenkins image tag and the Ansible deploy tag).
 APP_VERSION = (ROOT / "VERSION").read_text().strip() if (ROOT / "VERSION").exists() else "unknown"
@@ -171,7 +175,7 @@ def _check_listed_artifacts(listed: dict) -> None:
     """Every file the manifest lists exists and has its recorded SHA-256."""
     import hashlib
     for rel, expected in listed.items():
-        path = ROOT / rel
+        path = MODELS_DIR / Path(rel).name    # manifest paths are "models/<file>": resolved in MODELS_DIR
         if not path.exists():
             raise RuntimeError(f"production artifact missing: {rel} (listed in the manifest)")
         if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
@@ -193,7 +197,7 @@ def _verify_artifact_integrity(loaded=()) -> None:
     if not listed:
         raise RuntimeError("model manifest lists no production artifact: refusing to load unverified models")
     _check_listed_artifacts(listed)
-    covered = {(ROOT / rel).resolve() for rel in listed}
+    covered = {(MODELS_DIR / Path(rel).name).resolve() for rel in listed}
     unlisted = [str(Path(f)) for f in loaded if Path(f).exists() and Path(f).resolve() not in covered]
     if unlisted:
         raise RuntimeError(f"artifact integrity check failed: not in the manifest: {', '.join(unlisted)}")

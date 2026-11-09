@@ -29,10 +29,12 @@ model accuracy (see README, "cascading failures" section) -- this
 scorer intentionally does NOT use it.
 """
 import json
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-GRAPH_PATH = ROOT / "models" / "dependency_graph.json"
+# Same MODELS_DIR rule as api/app.py: the site's model folder when set, else the repository's models/.
+GRAPH_PATH = (Path(os.environ["MODELS_DIR"]) if os.environ.get("MODELS_DIR") else ROOT / "models") / "dependency_graph.json"
 
 DOWNSTREAM_WEIGHT = 0.15   # score bonus per anomalous downstream dependent
 

@@ -7,6 +7,11 @@
 # major OS or interpreter. Python 3.10 reaches end-of-life in October 2026.
 FROM python:3.12-slim-trixie
 
+# MODELS_SRC: where the model files are taken from, relative to the build context.
+# Default = models/ (the repository, unchanged behaviour). A site builds with
+# --build-arg MODELS_SRC=build/site-models to bake its own locally promoted model.
+ARG MODELS_SRC=models
+
 # ── Security: run as non-root (Trivy/SonarQube quality gates will check) ──
 RUN groupadd -r -g 10001 appuser && useradd -r -u 10001 -g appuser -m -d /home/appuser appuser
 
@@ -54,29 +59,29 @@ COPY ml-model/root_cause.py ./ml-model/root_cause.py
 COPY ml-model/decision.py ./ml-model/decision.py
 
 # ── Copy production inference artifacts (v3/v4 XGBoost + IsolationForest safety net) ──
-COPY models/telecom_serving_model.pkl     ./models/
-COPY models/telecom_serving_baselines.json ./models/
+COPY ${MODELS_SRC}/telecom_serving_model.pkl     ./models/
+COPY ${MODELS_SRC}/telecom_serving_baselines.json ./models/
 
 # v3 artifacts (all small enough to bake in directly -- no MinIO fetch needed,
 # unlike v2 whose 124MB RandomForest requires runtime download):
-COPY models/telecom_xgb_classifier_v2.pkl    ./models/
-COPY models/telecom_xgb_label_encoder_v2.pkl ./models/
+COPY ${MODELS_SRC}/telecom_xgb_classifier_v2.pkl    ./models/
+COPY ${MODELS_SRC}/telecom_xgb_label_encoder_v2.pkl ./models/
 # v4 rolling-features model (15 features). Loaded alongside v3; used when
 # the /predict caller supplies a 'history' field. See README v4 section.
-COPY models/telecom_xgb_v4_rolling.pkl         ./models/
-COPY models/telecom_xgb_v4_rolling_encoder.pkl ./models/
-COPY models/telecom_iso_v2.pkl               ./models/
-COPY models/telecom_baselines_v2.json        ./models/
+COPY ${MODELS_SRC}/telecom_xgb_v4_rolling.pkl         ./models/
+COPY ${MODELS_SRC}/telecom_xgb_v4_rolling_encoder.pkl ./models/
+COPY ${MODELS_SRC}/telecom_iso_v2.pkl               ./models/
+COPY ${MODELS_SRC}/telecom_baselines_v2.json        ./models/
 
 # Legacy v2 RandomForest artifacts (124MB) are the only ones fetched from
 # MinIO at startup (MODEL_NAME=telecom_v2) -- see docker-entrypoint.sh.
 # v3/v4 (the production path) are baked in above.
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-COPY models/dependency_graph.json ./models/
+COPY ${MODELS_SRC}/dependency_graph.json ./models/
 # Lineage + SHA-256 of every production artifact; verified by the API
 # before any model file is unpickled.
-COPY models/manifest.json ./models/
+COPY ${MODELS_SRC}/manifest.json ./models/
 COPY VERSION ./VERSION
 
 # ── Runtime config (override at run/deploy time with -e MODEL_NAME=...) ──
