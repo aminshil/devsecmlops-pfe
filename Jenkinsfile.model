@@ -45,7 +45,7 @@ pipeline {
         string(name: 'SITE', defaultValue: '',
                description: "Which site this model is for (lowercase letters, digits, - and _). Empty: this installation's site (PFE_SITE, set by Ansible), or 'default' if it has none. Its model lives in the local model store.")
         booleanParam(name: 'PROMOTE', defaultValue: false,
-                     description: 'full scope only: select the candidate threshold on the validation fleet, then activate it in this site's local model store and deploy it if the guardrail passes')
+                     description: "full scope only: select the candidate threshold on the validation fleet, then activate it in this site's local model store and deploy it if the guardrail passes")
     }
 
     environment {
