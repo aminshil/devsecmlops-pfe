@@ -24,7 +24,7 @@ Section 9 lists the 14 gaps the VPS run found, two more (15 and 16) found afterw
 | CPU / RAM | 8 threads and 16 GB at least (the original VM). The full model job checks for **9,000 MiB free** before it trains (`Jenkinsfile.model`, preflight); SonarQube and Minikube need several GB each. The VPS had 16 vCPU and 62 GB: nothing had to be stopped | VERIFIED (VM, VPS) |
 | Disk | 100 GB free or more. Every Jenkins build leaves a ~2 GB image; SonarQube turns read-only at 95% disk use | README |
 | Internet | `get.docker.com`, `dl.k8s.io`, GitHub (Prometheus and MinIO releases, the repository), Docker Hub, PyPI, Minikube's download host, the deadsnakes PPA (22.04 only), `mirror.gcr.io` (Trivy's vulnerability database) | VERIFIED (VPS) |
-| Account | A GitHub token for the repository. A fine-grained token limited to this one repository, permission *Contents: read and write*, is enough: Jenkins checks out with it, and the model job pushes a promoted model with it | VERIFIED (VPS) |
+| Account | A GitHub token for the repository. A fine-grained token limited to this one repository, permission *Contents: read*, is enough since 9 November: Jenkins only checks out with it (a promoted model stays in the site's model store, section 10; until then the model job pushed it, which needed *read and write*) | VERIFIED (VPS) |
 
 All commands run as root (`sudo -i`), as on the original VM and the VPS.
 
@@ -284,7 +284,7 @@ Ansible does not configure Jenkins' jobs, credentials and plugins, nor SonarQube
 1. Unlock: `docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword`, install the suggested plugins, create the admin user. (The admin password can be changed later under the user menu, *Security*.)
 2. Plugins the Jenkinsfiles need: Pipeline (`workflow-aggregator`), Git, Credentials Binding (all three among the suggested plugins), and **SonarQube Scanner for Jenkins** (`sonar`), installed from Manage Jenkins, Plugins. On the VPS all four were then present.
 3. Manage Jenkins, Credentials, add:
-   - id **`github-pat-devsecmlops`**: *Username with password*, your GitHub user name and the token (section 0). Used for checkout and for pushing a promoted model.
+   - id **`github-pat-devsecmlops`**: *Username with password*, your GitHub user name and the token (section 0). Used for checkout only (since 9 November a promoted model is never pushed; section 10).
    - a *Secret text* credential holding the SonarQube token from 6a.3 (any id; the VPS used `sona-token`).
 4. Manage Jenkins, System, SonarQube servers: tick *Environment variables*, add one named **`sonarqube`**, URL **`http://sonarqube:9000`**, token = the Secret text above. Not `localhost`: inside the Jenkins container `localhost` is Jenkins itself; the two containers reach each other by name over `devsecmlops-net`.
 5. Create two Pipeline jobs, each *Pipeline script from SCM*, Git, `https://github.com/aminshil/devsecmlops-pfe.git`, branch `*/main`, credential `github-pat-devsecmlops`:
@@ -307,7 +307,7 @@ VPS: Python 3.13.5, Trivy 0.74.0, kubectl v1.36.2; SonarQube `UP`; the API pods 
 
 1. **`devsecmlops-pipeline`**, Build Now. SonarQube must be running. On the VPS, build #1 took about 8 minutes, all 12 stages green: `ruff` clean, 272 tests, Quality Gate OK, repository scan clean, model gate F1 0.7292, image built, smoke-tested (7 PASS), 0 HIGH/CRITICAL vulnerabilities, pushed, deployed by a rolling update and smoke-tested again inside the new pod. The first Trivy run downloads its vulnerability database (about 131 MB). If the post-deploy smoke test fails, the pipeline rolls the deployment back (`kubectl rollout undo`). Build #2, on the fixed commit `1b591925` (2 November): `ruff` clean, 275 tests, Quality Gate OK on the changed code, 0 HIGH/CRITICAL vulnerabilities, `2.20.3-b2` pushed, deployed and smoke-tested in the new pod. Build #3, on `eac7d6a6` (the MinIO build, gap 8): 276 tests, Quality Gate OK, Trivy 0 findings in `minio/Dockerfile`, `2.20.3-b3` deployed and smoke-tested.
 2. **`devsecmlops-model`**, `SCOPE=smoke` (`INCLUDE_FEEDBACK` on, `PROMOTE` off). A few minutes. On the VPS it ended **UNSTABLE, which is the correct result**: the candidate trained on the 3-day smoke fleet (v4 F1 0.5537) was rejected by the guardrail against production (0.7731 on the same data), and all 17 production files were hash-checked unchanged ("the real models/ directory is untouched").
-3. **`devsecmlops-model`**, `SCOPE=full`, **`PROMOTE` off**. About 26 minutes on the VPS: 17,280,000 training rows plus the operator verdicts exported from PostgreSQL (28 rows), candidate trained in 892 s, candidate v4 F1 0.7290 against production 0.7292, guardrail PASS, run logged to MLflow with its six files stored in MinIO. On the original VM (16 GB RAM) the preflight found 8,948 MiB free and stopped (build 10, 3 November): `docker stop sonarqube` for the run, `docker start sonarqube` after it; build 11 then passed, training and evaluation taking 31 minutes (384 operator verdicts, candidate v4 F1 0.7290 against 0.7292, stage 6 identical). Keep `PROMOTE` off on a test machine: on, stage 7 commits the model and pushes it to `main`.
+3. **`devsecmlops-model`**, `SCOPE=full`, **`PROMOTE` off**. About 26 minutes on the VPS: 17,280,000 training rows plus the operator verdicts exported from PostgreSQL (28 rows), candidate trained in 892 s, candidate v4 F1 0.7290 against production 0.7292, guardrail PASS, run logged to MLflow with its six files stored in MinIO. On the original VM (16 GB RAM) the preflight found 8,948 MiB free and stopped (build 10, 3 November): `docker stop sonarqube` for the run, `docker start sonarqube` after it; build 11 then passed, training and evaluation taking 31 minutes (384 operator verdicts, candidate v4 F1 0.7290 against 0.7292, stage 6 identical). With `PROMOTE` on, stage 7 activates the model in this site's local model store and stage 8 deploys it; nothing is pushed (section 10; until 9 November stage 7 pushed it to `main`).
    - **The firewall.** The model job reaches MLflow on the host at `http://172.17.0.1:5001`, through Docker's default bridge. On the VPS ufw was active with a default-deny policy, so the job stopped at "MLflow is not reachable" (the log showed `[UFW BLOCK] IN=docker0 SRC=172.17.0.2 DST=172.17.0.1 DPT=5001`). Docker's own documentation notes that Docker and ufw filter traffic in ways that interact badly [117]. The rule that fixed it opens port 5001 to that bridge only, nothing on the public side (the `prerequisites` role now adds it when ufw is active; FIXED, re-test):
      ```bash
      ufw allow from 172.17.0.0/16 to 172.17.0.1 port 5001 proto tcp comment 'Jenkins container -> MLflow'
@@ -402,6 +402,8 @@ If the first command still answers "accepting connections", the plugin does not 
 | 14 | `full_verification.sh` outdated | it counted the retired fleet simulator (always 0) and needed the cluster paths exported | Updated (FIXED, re-test: run on the VPS with no paths exported, every check `200`/`active`, 200 machines reporting) |
 | 15 | The original VM's venv was Python 3.10 (numpy 2.2.6) | Found on the original VM after the VPS run (2 November), not on the VPS: `requirements-api.txt` pins numpy 2.5.4 since 27 October (commit `8dced809`), which cannot install on 3.10, so a playbook re-run on the VM stopped at the venv check (before that check existed it stopped at the pip step). Nothing that ran was affected: Jenkins tests on Python 3.13 and the image serves on 3.12 | **FIXED** on the VM, 2 November: venv rebuilt on Python 3.12.16 (section 8), numpy 2.5.4, 276 tests passed |
 | 16 | Ansible ran its modules with whichever Python 3.12 it found first | Found on the original VM (2 November), re-running the playbook after gap 15: ansible-core 2.17 tries `python3.12` before `/usr/bin/python3` [120]. On the VPS the app venv was active, so it took the venv's Python and passed by chance; on the VM no venv was active, so it took deadsnakes' `/usr/bin/python3.12`, which loads Ubuntu's `pkg_resources` for Python 3.10, and the `pip` module stopped (`module 'pkgutil' has no attribute 'ImpImporter'`). The VM's Ansible had also been installed inside the old venv, so it went with the venv rebuild | **FIXED**: `inventory.ini` sets `ansible_python_interpreter=/usr/bin/python3`; Ansible reinstalled for the system Python (section 1). Re-run on the VM, 2 November: `failed=0`, 11/11 layers up, the API's 4 pods and Postgres `Running` |
+| 17 | SonarQube's "new code" on a machine that joins later | VPS, 10 November: the default *previous version* baseline stayed at the first analysis (1 November) because no `sonar.projectVersion` is sent; ten days of code failed `new_coverage` (34.3% < 80%) | Baseline set to the deployed version's analysis (section 10, step 4); sending the version from the `Jenkinsfile` is the fix, not done |
+| 18 | The model job did not compile on the new branch | An apostrophe in a single-quoted Groovy string (`'… this site's …'`) [123]; Jenkins compiles a Jenkinsfile only when a build starts | Fixed in `5b38b64f` with `tests/test_jenkinsfile_strings.py`; Jenkins' validator before a first build (section 10, step 3) [122] |
 
 Still true from before:
 
@@ -412,4 +414,70 @@ Still true from before:
 | A new `docker` group membership does not apply to a running play | The play uses a local connection and cannot refresh it. On a non-root account, log out and in (or `newgrp docker`) after the first Docker install and re-run |
 | The served model's MLflow run lives on the original VM | `/health` names MLflow run `518d2f20…`, logged on the VM on 8 November (before it, `d81b7ea6…`, 21 October); a new machine's MLflow does not have it, so `scripts/verify_mlflow_artifacts.py` (default mode) only works there. A new machine's own runs are verified with `--report` (section 7) |
 
-Sources [111]–[120] are listed in `docs/SOURCES.md`.
+Sources [111]–[124] are listed in `docs/SOURCES.md`.
+
+---
+
+## 10. A second site  (VERIFIED (VPS), 10 November 2026)
+
+Each machine is a **site** with its own name, data and models; Git carries the code only (README, "Multi-site"). This is what turned the VPS of sections 0–9 into site `sfax`, the original VM staying site `default`.
+
+**1. Name the site** (once per machine), then re-run the playbook. Jenkins is recreated with `PFE_SITE` (its jobs and credentials stay in the `jenkins_home` volume), so start it while no build runs:
+
+```bash
+grep -q '^export PFE_SITE=' /root/.devsecmlops.env || echo "export PFE_SITE='sfax'" >> /root/.devsecmlops.env
+cd /root/devsecmlops-pfe/ansible && source /root/.devsecmlops.env && ansible-playbook -i inventory.ini site.yml 2>&1 | tail -5
+docker exec jenkins printenv PFE_SITE          # sfax
+```
+
+VPS: `failed=0`, `11/11 layers up`, `sfax`. The play stops before any change if the name is not lowercase letters, digits, `-` and `_` (at most 32 characters).
+
+**2. The site's data**, in `data/sites/<site>/` (ignored by Git). The VPS used the project's generator with its own seeds and a different anomaly ratio:
+
+```bash
+cd /root/devsecmlops-pfe && source venv/bin/activate && D=data/sites/sfax && mkdir -p $D
+G=ml-model/generate_telecom_fleet.py
+python3 $G --machines 200 --days 14 --seed 501 --anomaly-ratio 0.08 --output $D/telecom_fleet_v2_labeled.csv
+python3 $G --machines 200 --days 7  --seed 502 --anomaly-ratio 0.08 --output $D/telecom_fleet_v2_val.csv
+python3 $G --machines 200 --days 14 --seed 503 --anomaly-ratio 0.08 --output $D/telecom_fleet_v2_test.csv
+chmod -R a+rX data/sites && wc -l $D/*.csv && git status --short -- data     # 8,064,001 / 4,032,001 / 8,064,001; nothing listed
+```
+
+**3. Jenkins.** Nothing new to configure: both jobs read `PFE_SITE`, so leave `SITE` empty. The GitHub credential is now used for checkout only, so a read-only token is enough. Before a first build on a new branch, Jenkins' own validator checks both files (an API token from your user page, `http://localhost:8080/me/security/`) [122]:
+
+```bash
+read -rsp "Jenkins API token: " T; echo
+for f in Jenkinsfile Jenkinsfile.model; do echo "$f: $(curl -s -X POST -u "admin:$T" -F "jenkinsfile=<$f" http://localhost:8080/pipeline-model-converter/validate)"; done; unset T
+```
+
+**4. SonarQube's "new code" on a machine that joins later.** The default definition, *previous version*, starts at the first analysis of the current project version [121], and the `Jenkinsfile` sends no `sonar.projectVersion`, so on the VPS every build was compared with 1 November and failed `new_coverage` (34.3% < 80%) on ten days of code already gated on the VM. Set the baseline to the analysis of the version being deployed (*specific analysis*, branch level only [121]); the SonarQube admin password is asked for, hidden:
+
+```bash
+python3 - <<'EOF'
+import base64, getpass, json, urllib.parse, urllib.request
+S, P = "http://localhost:9000", "devsecmlops-pfe"
+auth = "Basic " + base64.b64encode(("admin:" + getpass.getpass("SonarQube admin password: ")).encode()).decode()
+def call(method, path, **p):
+    data = urllib.parse.urlencode(p).encode() if method == "POST" else None
+    url = S + path + ("" if data else "?" + urllib.parse.urlencode(p))
+    with urllib.request.urlopen(urllib.request.Request(url, data=data, method=method, headers={"Authorization": auth}), timeout=30) as r:
+        b = r.read(); return json.loads(b) if b else {}
+br = [b["name"] for b in call("GET", "/api/project_branches/list", project=P)["branches"] if b.get("isMain")][0]
+a = call("GET", "/api/project_analyses/search", project=P, branch=br, ps=1)["analyses"][0]
+print("baseline:", a["key"], a["date"], a.get("revision", "")[:8])
+call("POST", "/api/new_code_periods/set", project=P, branch=br, type="SPECIFIC_ANALYSIS", value=a["key"])
+print(call("GET", "/api/new_code_periods/show", project=P, branch=br))
+EOF
+```
+
+VPS: baseline `8e2294aa…` (`21bff003`); the next application build (`b8`) passed the Quality Gate. Passing `-Dsonar.projectVersion=$(cat VERSION)` from the `Jenkinsfile` would make *previous version* move with each release; not done.
+
+**5. First builds on the site.**
+
+| Build | Expected | VPS |
+|---|---|---|
+| `devsecmlops-pipeline`, `SITE` empty | `model source: repo (models), site sfax` (the site has no model yet) | `b8`: `SUCCESS` |
+| `devsecmlops-model`, `SCOPE=smoke` | `site sfax: data /var/jenkins_home/fleet-data/sites/sfax`; `UNSTABLE` is the normal result | `UNSTABLE`, production files hash-identical |
+| `devsecmlops-model`, `SCOPE=full`, `PROMOTE` on | `OK: sfax: initialised from models`, then the guardrail decides; on PASS: `OK: sfax: build N is now current`, and the application build it starts prints `model source: store (build/site-models), site sfax, image tag …-sfax` | 14-day training set: guardrail REJECT (v4 F1 0.7946 → 0.7607), nothing activated |
+
+**6. Check which model a site serves:** `curl -s http://192.168.49.2:30080/health` → `model_lineage.train_dataset` names the file it was trained on (`data/telecom_fleet_v2_labeled.csv` for the reference model, `/var/jenkins_home/fleet-data/sites/sfax/…` for the site's own), and `docker exec jenkins python3 /var/jenkins_home/workspace/devsecmlops-model/scripts/model_store.py status --site sfax` lists the current model and the kept versions.

@@ -348,3 +348,16 @@ measurements are the evidence that it works as configured; these pages define wh
      interpreter paths" and warns that "future installation of another Python interpreter could alter the one
      chosen"; `ansible_python_interpreter` sets it per host (gap 16).
      https://docs.ansible.com/ansible/11/reference_appendices/interpreter_discovery.html
+121. SonarSource, *About new code* (SonarQube Server): *previous version* considers new "any code that has changed
+     since the most recent version increment of the project", the version being `sonar.projectVersion`; "The
+     Specific analysis option can only be set at the branch level". The VPS's baseline (README, Multi-site; setup
+     guide, section 10). https://docs.sonarsource.com/sonarqube-server/latest/user-guide/about-new-code/
+122. Jenkins, *Pipeline Development Tools*: "Jenkins can validate, or lint, a Declarative Pipeline from the command
+     line before actually running it", by an HTTP POST to `pipeline-model-converter/validate`.
+     https://www.jenkins.io/doc/book/pipeline/development/
+123. Apache Groovy, *Syntax*, single-quoted strings: "You can escape single quotes with the backslash character to
+     avoid terminating the string literal" (the model job's `PROMOTE` description, fixed in `5b38b64f`).
+     https://docs.groovy-lang.org/docs/groovy-3.0.2/html/documentation/core-syntax.html
+124. Docker, *Build variables*: "Build arguments are variables for the Dockerfile itself. Use them to parameterize
+     values of Dockerfile instructions" (`ARG MODELS_SRC`, the folder an image bakes its model from).
+     https://docs.docker.com/build/building/variables/
