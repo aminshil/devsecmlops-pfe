@@ -246,7 +246,7 @@ What the VPS run needed by hand, now done by the playbook (all FIXED, re-test):
 | `KUBECONFIG` and `MINIKUBE_HOME` exported in the shell, or minikube as root used `/root/.minikube`, a cluster Jenkins cannot see | the play exports both for every task |
 | Jenkins given access to the cluster files with `setfacl` (stages 8–9 need them) | the `kubernetes` cluster tasks grant the ACL to the Jenkins uid only (demo profile) |
 | The Jenkins image's Docker group id: fixed at 999 | built with the host socket's group id; the play checks that Jenkins can reach Docker |
-| A ufw rule so the Jenkins model job can reach MLflow (section 7) | `prerequisites` adds it when ufw is active |
+| A ufw rule so the Jenkins model job can reach MLflow (section 7) | no longer needed: MLflow is a container on `devsecmlops-net`, reached by name (11 November) |
 | The MinIO image built by hand and passed with `-e img_minio=minio-pinned:local` | `prerequisites` builds it from the checksummed release binary (section 5a) |
 
 **Re-run after the fixes** (same VPS, 2 November, in a shell with no `KUBECONFIG`/`MINIKUBE_HOME` exported): `--tags kubernetes` alone, `failed=0` (no `'profile' is undefined`); the full demo run, `failed=0`, the network and ufw tasks `ok` (already in place), the sysctl file and the ACL applied once, the Jenkins→Docker check `ok`, and `11/11 layers up`. The Jenkins image built with `DOCKER_GID` from the host socket: `groups=1000(jenkins),999(dockerhost)`.
@@ -255,13 +255,13 @@ What the VPS run needed by hand, now done by the playbook (all FIXED, re-test):
 
 ```bash
 export KUBECONFIG=/home/pfe/.kube/config MINIKUBE_HOME=/home/pfe/.minikube
-systemctl is-active prometheus k8s-exporter production-agent control-panel mlflow
+systemctl is-active prometheus k8s-exporter production-agent control-panel
 docker ps --format '{{.Names}}  {{.Status}}'
 curl -s -o /dev/null -w "control panel /ui %{http_code}\n" http://localhost:8000/ui
 curl -s http://192.168.49.2:30080/health | python3 -c "import sys,json; d=json.load(sys.stdin); l=d['model_lineage']; print(d['status'], d['version'], l.get('threshold'), '|', l.get('threshold_source'))"
 ```
 
-Expected (VPS): five `active`; containers `registry minio sonarqube jenkins grafana node-exporter` plus `minikube`; `/ui` answers `200` (the control panel lives at `/ui`; `/` is a `404` by design); `/health` prints `ok`, the version, the v4 threshold (`0.66` since 8 November 2026; `0.91` on the VPS run) and `models/manifest.json production.decision_threshold`. Ports seen from the VPS itself: Jenkins `8080` (403, login), SonarQube `9000`, Grafana `3000`, MLflow `5001`, MinIO console `9002`, Prometheus `9090`.
+Expected: four `active` (MLflow was a fifth unit until it became a container, 11 November); containers `registry minio mlflow sonarqube jenkins grafana node-exporter` plus `minikube`; `/ui` answers `200` (the control panel lives at `/ui`; `/` is a `404` by design); `/health` prints `ok`, the version, the v4 threshold (`0.66` since 8 November 2026; `0.91` on the VPS run) and `models/manifest.json production.decision_threshold`. Ports seen from the VPS itself: Jenkins `8080` (403, login), SonarQube `9000`, Grafana `3000`, MLflow `5001`, MinIO console `9002`, Prometheus `9090`.
 
 The playbook's last line now reports the control panel's layer count (`N/N layers up`); it printed `?/?` before, because its status call had no credentials (FIXED, re-test).
 
@@ -392,7 +392,7 @@ If the first command still answers "accepting connections", the plugin does not 
 | 8 | MinIO image deleted upstream | `pull access denied` (Docker Hub), `401` (Quay) | Built by the playbook from the release binary, SHA-256 checked, `FROM scratch`, non-root; the old root-owned data volume given to its user once (section 5a; FIXED, re-test). On the original VM (2 November) the playbook switched MinIO and its 259 MB of MLflow data to the built image: run as uid 10002, no error in its log, the served model's 6 files read back identical (`scripts/verify_mlflow_artifacts.py`); the first write after it, model build 11 (3 November, `SCOPE=full`, `PROMOTE` off), stored a new run's 6 files and stage 6 read them back identical |
 | 9 | The control panel summary printed `?/?` | its status call had no credentials | Basic auth on that call (FIXED, re-test) |
 | 10 | The guide checked `:8000/` | `404` by design | Guide checks `/ui` (section 5d) |
-| 11 | ufw blocked the model job → MLflow | `[UFW BLOCK] … DPT=5001` | Rule added by `prerequisites` when ufw is active (FIXED, re-test) |
+| 11 | ufw blocked the model job → MLflow | `[UFW BLOCK] … DPT=5001` | First a ufw rule added by `prerequisites`; since 11 November MLflow is a container on `devsecmlops-net` and no rule is needed (VERIFIED (VPS): old rule removed, full model run passed stage 6) |
 | 12 | Model job stage 6 failed without `PROMOTE` | "no artifact hashes" | Hashes recorded on every run; 3 tests. **Confirmed**: the full run on `1b591925` (2 November) passed stage 6 by itself, `Finished: SUCCESS` |
 | 13 | node-exporter series labelled `machine="pfe-vm"`, `type="web"` | read by nothing, and wrong on any other host | Labels removed from `monitoring/prometheus.yml`; the two host panels that showed the raw label set have readable legends (FIXED, re-test) |
 | 14 | `full_verification.sh` outdated | it counted the retired fleet simulator (always 0) and needed the cluster paths exported | Updated (FIXED, re-test: run on the VPS with no paths exported, every check `200`/`active`, 200 machines reporting) |

@@ -213,7 +213,7 @@ the VM — there is no service listening on the host's own `localhost`.
 | Jenkins | `http://localhost:8080` | `http://192.168.100.42:8080` |
 | SonarQube | `http://localhost:9000` | `http://192.168.100.42:9000` |
 | MinIO console | `http://localhost:9002` | `http://192.168.100.42:9002` |
-| MLflow | `http://localhost:5001` | `http://192.168.100.42:5001` |
+| MLflow | `http://localhost:5001` | not reachable by design (published on 127.0.0.1 only): use the VM's own browser, or a tunnel from Windows, `ssh -L 5001:127.0.0.1:5001 pfe@192.168.100.42`, then `http://localhost:5001` |
 | Grafana | `http://localhost:3000` | `http://192.168.100.42:3000` |
 
 Run `hostname -I` on the VM to confirm the current IP — it can change

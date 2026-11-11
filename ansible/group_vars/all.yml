@@ -68,4 +68,3 @@ jenkins_image_tag: "2.2"   # 2.2: base image and tools pinned with checksums (je
 # both jobs use it when their SITE parameter is left empty. Set once per machine in
 # /root/.devsecmlops.env (export PFE_SITE='sfax'); unset means 'default', the original VM.
 site_name: "{{ lookup('ansible.builtin.env', 'PFE_SITE') | default('default', true) }}"
-

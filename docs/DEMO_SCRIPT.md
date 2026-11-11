@@ -167,7 +167,7 @@ git status --short                                                       # must 
 ## 5. Do not do live
 
 - `train_production.py` of any kind. Training and evaluation use up to about 11 GB of memory, and this VM froze once under that load.
-- `PROMOTE=true` on `devsecmlops-model`. It changes the served model, pushes a commit to `main` and starts a deploy build that needs SonarQube running. It has run four times (13 October, build 7; 19 October, build 8, full data; 21 October, build 9, with feedback; 8 November, build 15, per-hour baselines), plus one run the guardrail refused (8 November); the next promotion belongs after the defense.
+- `PROMOTE=true` on `devsecmlops-model`. It changes the served model: it activates the candidate in this site's local model store (no Git push since 9 November) and starts a deploy build that needs SonarQube running. It has promoted four times on the VM (13 October, build 7; 19 October, build 8, full data; 21 October, build 9, with feedback; 8 November, build 15, per-hour baselines) and once on the VPS (site sfax, 10 November, model build 12), plus two runs the guardrail refused (8 November on the VM, 10 November on the VPS); the next promotion belongs after the defense.
 - Starting a main-pipeline build. Build #98 took 46 minutes on a base-image cache miss (about 600 MB of wheels at under 400 kB/s).
 - The Kubernetes **Fix** button in Status (untested live).
 - The Ansible `production` profile. It overwrites the PostgreSQL Secret, and the running database keeps its old password.
