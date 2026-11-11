@@ -51,9 +51,9 @@ pipeline {
     environment {
         DATA          = "/var/jenkins_home/fleet-data"      // read-only mount of repo data/
         KUBECONFIG    = "/home/pfe/.kube/config"
-        // Tracking server on the host (Docker bridge gateway); artifacts are proxied by the
-        // server into MinIO, so no storage credentials are needed here.
-        MLFLOW_TRACKING_URI = "http://172.17.0.1:5001"
+        // Tracking server: the mlflow container on devsecmlops-net, reached by name (Jenkins is attached to
+        // that network); artifacts are proxied by the server into MinIO, so no storage credentials are needed here.
+        MLFLOW_TRACKING_URI = "http://mlflow:5001"
         MIN_F1        = "0.60"          // minimum served v4 F1 the CI model gate accepts
         MODEL_STORE   = "/var/jenkins_home/model-store"   // each site's promoted models (scripts/model_store.py)
     }

@@ -612,7 +612,7 @@
     h+=sectionTitle("4 · Retraining runs (manifest history, newest first)");
     h+=ctHistoryTable(d.history||[]);
     h+=sectionTitle("5 · Where the retraining runs");
-    h+='<div class="hint"><a href="'+base+':8080/job/devsecmlops-model/" target="_blank" rel="noopener noreferrer">Jenkins job devsecmlops-model</a> · <a href="'+base+':5001/" target="_blank" rel="noopener noreferrer">MLflow</a></div>';
+    h+='<div class="hint"><a href="'+base+':8080/job/devsecmlops-model/" target="_blank" rel="noopener noreferrer">Jenkins job devsecmlops-model</a> · <a href="'+base+':5001/" target="_blank" rel="noopener noreferrer">MLflow (opens on this machine only)</a></div>';
     body.innerHTML=h;
   }
   // ---- Fleet tab: live topology coloured by the models' own verdicts ----

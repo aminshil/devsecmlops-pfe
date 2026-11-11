@@ -26,6 +26,12 @@ minio_build_dir: /var/lib/devsecmlops/minio-build
 minio_console_url: "http://localhost:9002"
 img_minio: "{{ minio_image_local }}"
 img_sonarqube: "sonarqube:24.04@sha256:160bd2f6a3485bd09b655ef22dd63c02bd1fa7ba82aa5d9973fd010b8bcca0b3"
+# MLflow is not pulled: the prerequisites role builds mlflow/Dockerfile (python base pinned by digest, MLflow and
+# boto3 by version). mlflow_version is the one in requirements.txt: the training scripts and the Jenkins model
+# job (Jenkinsfile.model) run the same one (tests/test_mlflow_container.py checks that they agree).
+mlflow_version: "3.17.2"
+mlflow_image: "devsecmlops-mlflow:{{ mlflow_version }}"
+mlflow_uid: 10003
 port_control_panel: 8000
 port_grafana: 3000
 port_prometheus: 9090

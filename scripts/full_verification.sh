@@ -112,7 +112,7 @@ curl -s -m 5 http://localhost:3000/api/health 2>&1
 
 echo ""
 echo "--- Host services (systemd) ---"
-for u in prometheus k8s-exporter production-agent control-panel mlflow prometheus-watchdog; do
+for u in prometheus k8s-exporter production-agent control-panel prometheus-watchdog; do
   echo "$u: $(systemctl is-active "$u" 2>&1)"
 done
 
@@ -135,6 +135,7 @@ curl -s -m 5 -o /dev/null -w "ready: HTTP %{http_code}\n" http://localhost:9093/
 echo ""
 echo "--- MLflow and MinIO (demo profile) ---"
 curl -s -m 5 -o /dev/null -w "MLflow /health: HTTP %{http_code}\n" http://localhost:5001/health 2>&1
+echo "MLflow container: $(docker inspect -f '{{.State.Status}} / health {{.State.Health.Status}}' mlflow 2>&1)"
 curl -s -m 5 -o /dev/null -w "MinIO /minio/health/live: HTTP %{http_code}\n" http://localhost:9001/minio/health/live 2>&1
 
 echo ""

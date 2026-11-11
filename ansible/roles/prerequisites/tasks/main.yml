@@ -75,80 +75,136 @@
     mode: "0700"
   become: true
 
-- name: Write the MLflow server environment (root-only, never in the unit file)
-  ansible.builtin.copy:
-    dest: /etc/devsecmlops/mlflow.env
-    mode: "0600"
-    content: |
-      MLFLOW_S3_ENDPOINT_URL=http://localhost:9001
-      AWS_ACCESS_KEY_ID={{ minio_root_user }}
-      AWS_SECRET_ACCESS_KEY={{ minio_root_password }}
-  become: true
-  no_log: true
+# --- MLflow tracking server: a container on devsecmlops-net (mlflow/Dockerfile) ---------------------------
+# It used to be a systemd unit that ran from the virtualenv and listened on every interface without a login,
+# so that the Jenkins container could reach it through the Docker bridge (and ufw needed a rule for that).
+# Now Jenkins reaches it by name (http://mlflow:5001), the host publishes it on 127.0.0.1 only, and the MinIO
+# keys are the container's own environment. MLflow checks the Host header (DNS-rebinding protection) and
+# answers 403 to a name it was not told about, so --allowed-hosts lists the container's name [125].
+- name: Look for the old MLflow systemd unit (a host process; absent on a new machine)
+  ansible.builtin.stat:
+    path: /etc/systemd/system/mlflow.service
+  register: mlflow_old_unit
 
-- name: Install the MLflow tracking server unit
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/mlflow.service
-    mode: "0644"
-    content: |
-      [Unit]
-      Description=MLflow tracking server (:5001, artifacts proxied to MinIO)
-      After=network.target docker.service
-
-      [Service]
-      EnvironmentFile=/etc/devsecmlops/mlflow.env
-      WorkingDirectory={{ repo_dir }}
-      # --artifacts-destination + --serve-artifacts: clients (the training
-      # pipeline, the Jenkins model job) upload artifacts THROUGH the tracking
-      # server, so MinIO credentials exist only on this host service.
-      ExecStart={{ repo_dir }}/venv/bin/mlflow server --host 0.0.0.0 --port 5001 \
-        --backend-store-uri sqlite:///{{ repo_dir }}/mlflow.db \
-        --artifacts-destination s3://mlflow-artifacts/ --serve-artifacts
-      Restart=always
-      RestartSec=5
-
-      [Install]
-      WantedBy=multi-user.target
-  become: true
-
-- name: Enable and start MLflow
+- name: Stop and disable the old MLflow unit (it holds port 5001 and the database file)
   ansible.builtin.systemd:
     name: mlflow.service
+    state: stopped
+    enabled: false
+  become: true
+  when: mlflow_old_unit.stat.exists
+
+- name: Remove the old MLflow unit and its environment file (the MinIO keys are now the container's)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/mlflow.service
+    - /etc/devsecmlops/mlflow.env
+  become: true
+
+- name: Reload systemd after removing the old unit
+  ansible.builtin.systemd:
     daemon_reload: true
-    enabled: true
+  become: true
+  when: mlflow_old_unit.stat.exists
+
+- name: Build the MLflow image (devsecmlops-mlflow)
+  community.docker.docker_image:
+    name: devsecmlops-mlflow
+    tag: "{{ mlflow_version }}"
+    build:
+      path: "{{ repo_dir }}/mlflow"
+      pull: false
+      args:
+        MLFLOW_VERSION: "{{ mlflow_version }}"
+    source: build
+    force_source: false
+
+- name: Ensure the MLflow data volume exists (the SQLite database in /data)
+  community.docker.docker_volume:
+    name: mlflow_data
+    state: present
+
+- name: Read where the MLflow data volume lives on the host
+  community.docker.docker_volume_info:
+    name: mlflow_data
+  register: mlflow_volume
+
+- name: Give the MLflow data volume to the MLflow user (SQLite writes its journal next to the database)
+  ansible.builtin.file:
+    path: "{{ mlflow_volume.volume.Mountpoint }}"
+    state: directory
+    owner: "{{ mlflow_uid }}"
+    group: "{{ mlflow_uid }}"
+    mode: "0750"
+  become: true
+  when: mlflow_volume.exists | default(false)
+
+- name: Look for an MLflow database already in the volume
+  ansible.builtin.stat:
+    path: "{{ mlflow_volume.volume.Mountpoint }}/mlflow.db"
+  register: mlflow_volume_db
+  become: true
+  when: mlflow_volume.exists | default(false)
+
+- name: Look for the database of the old host service
+  ansible.builtin.stat:
+    path: "{{ repo_dir }}/mlflow.db"
+  register: mlflow_old_db
+
+- name: Copy the old database into the volume (once; the original stays where it is, as a backup)
+  ansible.builtin.copy:
+    src: "{{ repo_dir }}/mlflow.db"
+    dest: "{{ mlflow_volume.volume.Mountpoint }}/mlflow.db"
+    remote_src: true
+    owner: "{{ mlflow_uid }}"
+    group: "{{ mlflow_uid }}"
+    mode: "0600"
+  become: true
+  when:
+    - mlflow_volume.exists | default(false)
+    - mlflow_old_db.stat.exists
+    - not ((mlflow_volume_db.stat | default({})).exists | default(false))
+
+- name: Ensure MLflow (experiment tracking) is running
+  community.docker.docker_container:
+    name: mlflow
+    image: "{{ mlflow_image }}"
     state: started
-  become: true
+    restart_policy: always
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "5001"
+      - "--backend-store-uri"
+      - "sqlite:////data/mlflow.db"
+      - "--artifacts-destination"
+      - "s3://mlflow-artifacts/"
+      - "--serve-artifacts"
+      - "--allowed-hosts"
+      - "mlflow:5001,localhost:*,127.0.0.1:*"
+    ports: ["127.0.0.1:5001:5001"]
+    volumes: ["mlflow_data:/data"]
+    networks:
+      - name: "{{ docker_net_name | default('devsecmlops-net') }}"
+    env:
+      MLFLOW_S3_ENDPOINT_URL: "http://minio:9000"
+      AWS_ACCESS_KEY_ID: "{{ minio_root_user }}"
+      AWS_SECRET_ACCESS_KEY: "{{ minio_root_password }}"
+  no_log: true
+  # --host 0.0.0.0 is the container's own interface; the host side is 127.0.0.1 only (ports above).
 
-# The Jenkins model job reaches MLflow on the host through Docker's default bridge (Jenkinsfile.model:
-# MLFLOW_TRACKING_URI=http://172.17.0.1:5001; Jenkins' address there is 172.17.0.x). On a host whose
-# firewall (ufw) is active with a default-deny policy, that traffic is dropped and the full scope stops
-# at "MLflow is not reachable" (VPS test, 1 November). One rule opens the port to that bridge only;
-# nothing changes on the public interface. Hosts without ufw, or with ufw inactive, are left alone.
-- name: Check whether ufw is installed and active
-  ansible.builtin.command: ufw status
-  register: ufw_status
-  changed_when: false
-  failed_when: false   # expected: ufw not installed (rc 127/2) -- then there is nothing to open
-  check_mode: false   # read-only probe
-  become: true
-
-- name: Read Docker's default bridge (subnet and gateway)
-  ansible.builtin.command: >-
-    docker network inspect bridge
-    -f '{{ '{{' }}(index .IPAM.Config 0).Subnet{{ '}}' }} {{ '{{' }}(index .IPAM.Config 0).Gateway{{ '}}' }}'
-  register: docker_bridge
-  changed_when: false
-  check_mode: false   # read-only probe
-  when: "'Status: active' in ufw_status.stdout"
-
-- name: Allow the Docker bridge to reach MLflow (:5001) through ufw
-  ansible.builtin.command: >-
-    ufw allow from {{ docker_bridge.stdout.split()[0] }} to {{ docker_bridge.stdout.split()[1] }}
-    port 5001 proto tcp comment 'Jenkins container -> MLflow'
-  register: ufw_rule
-  changed_when: "'Rule added' in ufw_rule.stdout"
-  become: true
-  when: "'Status: active' in ufw_status.stdout"
+- name: Wait until MLflow answers on the host's loopback
+  ansible.builtin.uri:
+    url: http://127.0.0.1:5001/health
+    status_code: 200
+  register: mlflow_health
+  until: mlflow_health.status == 200
+  retries: 30
+  delay: 2
+  when: not ansible_check_mode
 
 - name: Ensure SonarQube (SAST) is running
   community.docker.docker_container:
@@ -240,6 +296,16 @@
   loop:
     - "{{ docker_net_name }}"
     - minikube
+
+- name: Check that Jenkins reaches MLflow by name (the model job's tracking address)
+  # a real API route, not /health: /health is answered whatever the Host header says
+  ansible.builtin.command: docker exec jenkins curl -sf -m 10 "http://mlflow:5001/api/2.0/mlflow/experiments/get?experiment_id=0"
+  register: jenkins_mlflow
+  changed_when: false
+  until: jenkins_mlflow.rc == 0
+  retries: 10
+  delay: 3
+  when: not ansible_check_mode   # in a dry run the container may not exist yet
 
 - name: Install the jenkins-networks systemd unit
   ansible.builtin.copy:

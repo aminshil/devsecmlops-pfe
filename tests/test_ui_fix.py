@@ -16,8 +16,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import api.app as app_module  # noqa: E402
 
 CREDS = ("fix-test-user", "fix-test-password-0123456789")
-LAYERS = [("Prometheus", "prometheus"), ("K8s exporter", "k8s-exporter"), ("Production agent", "production-agent"),
-          ("MLflow", "mlflow")]
+LAYERS = [("Prometheus", "prometheus"), ("K8s exporter", "k8s-exporter"), ("Production agent", "production-agent")]
 
 
 @pytest.fixture
@@ -70,7 +69,7 @@ def test_an_unknown_process_keeps_the_old_behaviour(calls):
 
 
 def test_every_layer_on_the_status_tab_has_a_fix():
-    """Found when Fix on MLflow answered \"no known fix\": it is a systemd unit the map did not list."""
+    """Found when Fix on MLflow answered \"no known fix\": it was then a systemd unit the map did not list (now a container)."""
     names = {name for _, _, _, name, _ in app_module._PORT_LAYERS} | {"Kubernetes"}
     assert names <= set(app_module._FIX_MAP), names - set(app_module._FIX_MAP)
 
@@ -78,3 +77,9 @@ def test_every_layer_on_the_status_tab_has_a_fix():
 def test_docker_layers_still_use_docker(client, calls):
     r = client.post("/ui/fix", auth=CREDS, json={"layer": "Grafana", "action": "stop"})
     assert r.json()["ok"] is True and calls == [["docker", "stop", "grafana"]]
+
+
+@pytest.mark.parametrize("action", ["stop", "start"])
+def test_mlflow_is_a_container_not_a_systemd_unit(client, calls, action):
+    r = client.post("/ui/fix", auth=CREDS, json={"layer": "MLflow", "action": action})
+    assert r.json()["ok"] is True and calls == [["docker", action, "mlflow"]]

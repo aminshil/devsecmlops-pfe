@@ -361,3 +361,11 @@ measurements are the evidence that it works as configured; these pages define wh
 124. Docker, *Build variables*: "Build arguments are variables for the Dockerfile itself. Use them to parameterize
      values of Dockerfile instructions" (`ARG MODELS_SRC`, the folder an image bakes its model from).
      https://docs.docker.com/build/building/variables/
+125. MLflow, *Security Configuration* (tracking server): `--allowed-hosts` "Controls which Host headers the server
+     accepts" (DNS-rebinding protection); the default is localhost and private IP addresses, so a container name such
+     as `mlflow` must be listed (tested on 3.17.2: 403 on an API route without it, 200 with it).
+     https://mlflow.org/docs/latest/ml/tracking/server/security/configuration
+126. Docker, *Port publishing and mapping*: "Publishing container ports is insecure by default"; a port published on
+     `127.0.0.1` (`-p 127.0.0.1:5001:5001`) is reachable only from the Docker host. Releases before 28.0.0 let hosts
+     on the same layer 2 segment reach ports published to localhost.
+     https://docs.docker.com/engine/network/port-publishing/

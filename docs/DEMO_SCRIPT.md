@@ -13,10 +13,10 @@ Replace `<vm-ip>` with the output of `hostname -I`. Type credentials before the 
 ```bash
 cd ~/devsecmlops-pfe
 df -h / | tail -1                                           # want < 85% (it was 97% once; see Fallbacks)
-systemctl is-active prometheus k8s-exporter production-agent control-panel mlflow prometheus-watchdog   # 6 x active
-docker ps --format '{{.Names}}: {{.Status}}' | sort         # 9 Up: alertmanager blackbox-exporter grafana jenkins minikube minio node-exporter registry sonarqube
+systemctl is-active prometheus k8s-exporter production-agent control-panel prometheus-watchdog   # 5 x active
+docker ps --format '{{.Names}}: {{.Status}}' | sort         # 10 Up: alertmanager blackbox-exporter grafana jenkins minikube minio mlflow (healthy) node-exporter registry sonarqube
 kubectl -n ml-serving get pods                              # 2 x anomaly-api + postgres-0, all Running
-docker exec jenkins getent hosts sonarqube registry minio   # 3 addresses: devsecmlops-net is intact
+docker exec jenkins getent hosts sonarqube registry minio mlflow   # 4 addresses: devsecmlops-net is intact
 python3 scripts/verify_model_manifest.py --min-f1 0.60      # all OK lines
 git status --short; git log --oneline -1                    # clean tree
 ```
@@ -29,7 +29,7 @@ Open these tabs in advance and log in:
 | Grafana | `http://<vm-ip>:3000` → dashboard `devsecmlops-fleet` |
 | Jenkins | `http://<vm-ip>:8080` → job `devsecmlops-pipeline` |
 | SonarQube | `http://<vm-ip>:9000` → project `devsecmlops-pfe` |
-| MLflow | `http://<vm-ip>:5001` → experiment `telecom-production-model` |
+| MLflow | `http://localhost:5001`, in the VM's own browser (published on 127.0.0.1 only) → experiment `telecom-production-model` |
 | README | the GitHub page, scrolled to "At a glance" |
 
 Have `screenshots/` open as a last-resort fallback.

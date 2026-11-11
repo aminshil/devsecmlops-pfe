@@ -171,30 +171,28 @@ model, the preprocessing path is probably wrong, not the model.
 
 ## "MLflow UI doesn't load in the browser" (`localhost:5001`)
 
-**Root cause (updated -- this used to be true, no longer is):** MLflow
-used to run as a manually-started foreground process with no supervision,
-which is exactly why this entry originally existed. As of the most recent
-infrastructure pass, MLflow is a proper systemd service
-(`mlflow.service`, `Restart=always`, enabled at boot), installed by
-Ansible, with `--serve-artifacts` proxying uploads to MinIO -- MinIO
-credentials live only in the service's own root-only env file
-(`/etc/devsecmlops/mlflow.env`), never in a client's environment or
-committed in this file.
+**Root cause (updated):** MLflow is a container (`mlflow`, image `devsecmlops-mlflow`, restart
+policy `always`) on `devsecmlops-net`, published on `127.0.0.1:5001` only, so the page opens from
+the machine itself (or through an SSH tunnel), not from another computer's browser. The server proxies
+artifacts to MinIO (`--serve-artifacts`); the MinIO keys exist only in the container's environment.
+Its database is the `mlflow_data` volume (`/data/mlflow.db`).
 
-**Fix -- check and restart the real service, do not hand-launch a new one:**
+**Fix -- check and restart the container, do not hand-launch a new one:**
 
 ```bash
-systemctl status mlflow
-journalctl -u mlflow -n 50 --no-pager
+docker ps -a --filter name=mlflow
+docker logs --tail 50 mlflow
 
 # If it's genuinely down:
-sudo systemctl restart mlflow
+docker start mlflow
 sleep 5
-curl -s -o /dev/null -w "MLflow: %{http_code}\n" -m 5 http://localhost:5001
+curl -s -o /dev/null -w "MLflow: %{http_code}\n" -m 5 http://localhost:5001/health
 ```
 
-If `systemctl status mlflow` shows it was never installed at all, the
-Ansible playbook has not been run against this VM -- see the Ansible (L6)
+An answer of `403` ("Invalid Host header") means the request used a host name that is not in
+`--allowed-hosts` (`mlflow:5001`, `localhost:*`, `127.0.0.1:*`).
+
+If `docker ps -a` shows no `mlflow` container, the Ansible playbook has not been run on this machine -- see the Ansible (L6)
 section of the README rather than starting MLflow by hand, since a
 hand-started process will not be supervised and this same problem will
 recur on the next reboot.

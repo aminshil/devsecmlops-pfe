@@ -70,7 +70,7 @@ The current numbers, build and deployment state are summarized in [At a glance](
 - **A long, honest list of real bugs found by actually running things**, not just reading code — see each layer's "Real bugs found and fixed" subsection. A non-exhaustive sample: a Dockerfile version pin silently installed completely unpinned because of an unquoted shell redirect; a benchmark script's row-subsampling silently collapsed to exactly one machine at real scale; a demo traffic generator could never assemble a real rolling-history window; an Ansible template drifted so far from the real Kubernetes manifest that a production deploy would have shipped an unhardened pod; three containers silently lost their shared Docker network after being recreated, breaking CI with no warning until the next build.
 - **Twenty-four engineering decisions**, documented with real numbers, including several tested, rejected, and — in at least one case — later revisited and reversed on stronger evidence (see [L0](#l0--ml-model)).
 - **Real-world validation**: the same per-machine, per-window z-score methodology, applied to the real, public Server Machine Dataset, yields results consistent with published unsupervised sequence-model literature on the same benchmark.
-- **Infrastructure that survives a reboot**: every host service (Prometheus, the exporters, MLflow, the control panel) is a supervised systemd unit in both the demo and production Ansible profiles — closing a real gap where the demo profile's plain background processes died on a VM restart during this project's own development.
+- **Infrastructure that survives a reboot**: every host service (Prometheus, the exporters, the control panel) is a supervised systemd unit in both the demo and production Ansible profiles — closing a real gap where the demo profile's plain background processes died on a VM restart during this project's own development.
 
 ---
 
@@ -153,7 +153,7 @@ ansible-playbook -i inventory.ini site.yml --syntax-check
 ansible-playbook -i inventory.ini site.yml --check
 ```
 
-After a successful demo run, the control panel at `http://<vm-ip>:8000/ui` reports every platform layer's live status. Grafana is at `:3000`, Prometheus at `:9090`, Jenkins at `:8080`, SonarQube at `:9000`, MLflow at `:5001`.
+After a successful demo run, the control panel at `http://<vm-ip>:8000/ui` reports every platform layer's live status. Grafana is at `:3000`, Prometheus at `:9090`, Jenkins at `:8080`, SonarQube at `:9000`, MLflow at `http://localhost:5001` (from the machine itself only: it has no login, so it is published on 127.0.0.1).
 
 ---
 
@@ -2342,12 +2342,16 @@ docker run -d --name minio --restart=always \
   -v minio_data:/data \
   devsecmlops-minio:RELEASE.2025-09-07T16-13-09Z server /data --console-address ":9001"
 
-export MLFLOW_S3_ENDPOINT_URL=http://localhost:9001
-export AWS_ACCESS_KEY_ID="${MINIO_ROOT_USER:?}"
-export AWS_SECRET_ACCESS_KEY="${MINIO_ROOT_PASSWORD:?}"
-mlflow server --host 0.0.0.0 --port 5001 \
-  --backend-store-uri sqlite:///mlflow.db \
-  --artifacts-destination s3://mlflow-artifacts/ --serve-artifacts
+# MLflow (the image is built by the prerequisites role from mlflow/Dockerfile): on the Docker network,
+# published on 127.0.0.1 only, its database in the mlflow_data volume
+docker run -d --name mlflow --restart=always --network devsecmlops-net \
+  -p 127.0.0.1:5001:5001 -v mlflow_data:/data \
+  -e MLFLOW_S3_ENDPOINT_URL=http://minio:9000 \
+  -e AWS_ACCESS_KEY_ID="${MINIO_ROOT_USER:?}" -e AWS_SECRET_ACCESS_KEY="${MINIO_ROOT_PASSWORD:?}" \
+  devsecmlops-mlflow:3.17.2 --host 0.0.0.0 --port 5001 \
+  --backend-store-uri sqlite:////data/mlflow.db \
+  --artifacts-destination s3://mlflow-artifacts/ --serve-artifacts \
+  --allowed-hosts "mlflow:5001,localhost:*,127.0.0.1:*"
 ```
 
 ### Files
@@ -2450,7 +2454,7 @@ survive a reboot. The unified, systemd-everywhere design closes that gap.
 
 #### MLflow provisioned and supervised
 
-MLflow runs as a systemd service (`:5001`) with `--serve-artifacts`,
+MLflow runs as a container (`devsecmlops-mlflow`, restart policy `always`, on `devsecmlops-net`, published on `127.0.0.1:5001`) with `--serve-artifacts`,
 proxying uploads to MinIO — see [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store)
 above for the real round-trip verification. It was not consistently running
 before this pass.
@@ -2543,7 +2547,7 @@ Numbers in brackets are entries of [docs/SOURCES.md](docs/SOURCES.md) (111 to 11
 - **`devsecmlops-net` was never created**, although every support container joins it: the registry task stopped on a clean machine. `prerequisites` creates it.
 - **The Jenkins deploy stages need the cluster files**, which Minikube writes root-only; the grant was done by hand. `cluster.yml` now gives the Jenkins uid (and nobody else) a POSIX ACL, as `scripts/k8s_recover.sh` already did after a rebuild. The Jenkins image no longer hard-codes the Docker socket's group id (999): it is built with the host's (`DOCKER_GID`), and the play checks that Jenkins can reach Docker.
 - **SonarQube needs `vm.max_map_count` ≥ 524288** [114] (Ubuntu: 65530): set and persisted by `prerequisites`.
-- **ufw dropped the model job's calls to MLflow** (`[UFW BLOCK] IN=docker0 SRC=172.17.0.2 DST=172.17.0.1 DPT=5001`) [117]: `prerequisites` adds one rule, port 5001 from Docker's default bridge only, when ufw is active.
+- **ufw dropped the model job's calls to MLflow** (`[UFW BLOCK] IN=docker0 SRC=172.17.0.2 DST=172.17.0.1 DPT=5001`) [117]: `prerequisites` added one rule, port 5001 from Docker's default bridge only. Since MLflow became a container (the Jenkins container reaches it as `http://mlflow:5001` over `devsecmlops-net`, like SonarQube and MinIO) no rule is needed and the role no longer adds one.
 - **Model job stage 6 could not pass without `PROMOTE`**: the candidate's file hashes were recorded only inside the threshold selection, which exists only when promoting. `train_production.py` records them on every run (`candidate_artifacts`); `verify_mlflow_artifacts.py` reads them. Confirmed by the VPS full run on `1b591925` (2 November): stage 6 passed by itself.
 - **Older Ansible and Python fail late and obscurely** (apt's ansible-core 2.10 against `community.docker` [113]; Python 3.10 against numpy 2.5.4 [111]): the play now stops first with the fix to apply.
 - **The control panel summary always printed `?/? layers up`** (its status call had no credentials), and **`full_verification.sh` counted the retired fleet simulator** (always 0) and needed the cluster paths exported: both fixed.
@@ -2582,7 +2586,7 @@ The rendered Deployment used the Ansible default tag (`devsecmlops-api:<VERSION>
 | `ansible/group_vars/demo.yml`, `production.yml` | Per-profile toggles. |
 | `roles/system/` | OS packages, the Prometheus binary. |
 | `roles/app_setup/` | Python virtualenv, dependencies, the API image. |
-| `roles/prerequisites/` | Creates `devsecmlops-net`, sets `vm.max_map_count`; registry, MinIO (`tasks/minio.yml`: built from its release binary, its data volume, the bucket), MLflow (and its ufw rule when ufw is active), SonarQube, Jenkins — all on `devsecmlops-net`. |
+| `roles/prerequisites/` | Creates `devsecmlops-net`, sets `vm.max_map_count`; registry, MinIO (`tasks/minio.yml`: built from its release binary, its data volume, the bucket), MLflow (a container: image built from `mlflow/Dockerfile`, the `mlflow_data` volume holding the migrated `mlflow.db`, published on 127.0.0.1), SonarQube, Jenkins — all on `devsecmlops-net`. |
 | `minio/Dockerfile`, `minio/passwd`, `minio/group` | The MinIO image: `FROM scratch`, the release binary the role downloads and checks, run by uid 10002. |
 | `roles/secrets/` | Production-only, Vault-backed DB Secret applied via stdin. |
 | `roles/kubernetes/` (+ `templates/deployment.yaml.j2`) | Minikube, the demo DB Secret, the rendered Deployment — now in sync with `kubernetes/deployment.yaml`. `tasks/cluster.yml` starts the cluster and grants Jenkins its ACL; `secrets` and `prerequisites` include it too. |
@@ -2686,7 +2690,7 @@ Every hardening measure across the platform, in one place:
 | Input handling | Path traversal in the training console's dataset selector closed; the console no longer offers the validation and test fleets for training, and bounds its inputs (at most 500,000 sampled rows, the VM's out-of-memory path being a full 17M-row read; 10 to 1,000 trees). `NaN`/`infinity` rejected at the API boundary. `history` validated strictly (exact keys, exact length). `machine` follows the pattern the prediction log can be queried with (`[A-Za-z0-9_.-]{1,64}`), and `hour` is checked at parse time (0-23, 422). The panel escapes the values it inserts into a page with `ctEsc` (the four places the 27 October review found unescaped included). |
 | Scanning | Trivy scans both the repository (dependencies, committed secrets, Kubernetes/Dockerfile misconfigurations) and the built image, both blocking (`--exit-code 1`) in CI. |
 | Secrets in transit | Both cluster Secrets (the PostgreSQL credentials and the feedback token) reach `kubectl` on stdin, in the demo profile (`scripts/ensure_db_secret.sh`) as in the production one (Ansible): never as a command argument, which the process list shows (until 27 October the demo path and the feedback token used `--from-literal`). The model job no longer pushes (since 9 November a promoted model stays in the site's store; until then it pushed with a `GIT_ASKPASS` helper instead of a token in the URL), archives only the feedback export's fingerprint (not the export: raw metrics, operator notes), and the legacy entrypoint passes the MinIO keys to Python through the environment, not pasted into its source. |
-| Network exposure | On this host only (127.0.0.1): Alertmanager (its API accepts silences without authentication; Prometheus, the watchdog and the panel are on the same host) and the Kubernetes exporter. On the LAN, behind a login: the control panel (Basic auth), Jenkins, SonarQube, Grafana, MinIO (its S3 API on `:9001` needs its keys; its console is on `:9002`). On the LAN without one: Prometheus (`:9090`, read-only queries; its admin API is off by default), node-exporter (`:9100`), MLflow (`:5001`, see Known limitations) and the local registry (`:5000`; deploys do not pull from it: stage 8 loads the image Jenkins just built into Minikube directly). The cluster API (NodePort `30080`) is on the Minikube bridge, inside the VM. |
+| Network exposure | On this host only (127.0.0.1): Alertmanager (its API accepts silences without authentication; Prometheus, the watchdog and the panel are on the same host), the Kubernetes exporter and MLflow (it has no login, so it is published on 127.0.0.1 only; the Jenkins container reaches it as `http://mlflow:5001` over `devsecmlops-net` [125][126]). On the LAN, behind a login: the control panel (Basic auth), Jenkins, SonarQube, Grafana, MinIO (its S3 API on `:9001` needs its keys; its console is on `:9002`). On the LAN without one: Prometheus (`:9090`, read-only queries; its admin API is off by default), node-exporter (`:9100`) and the local registry (`:5000`; deploys do not pull from it: stage 8 loads the image Jenkins just built into Minikube directly). The cluster API (NodePort `30080`) is on the Minikube bridge, inside the VM. |
 
 ---
 
@@ -3361,7 +3365,7 @@ F1 = 0.269 on the Server Machine Dataset (28 real servers, public benchmark used
 
 ### 15. Why MLflow + MinIO run outside the Kubernetes cluster
 
-Same reasoning as Jenkins, SonarQube, and the local Docker registry: **shared platform/tooling services supporting the development process are not the product being served to end users**. In a real organization, one MLflow server tracks experiments across many projects; it does not live inside a single project's own K8s namespace. Only the anomaly-api workload runs in K8s (namespace `ml-serving`), matching how production would separate stateful tooling from stateless application deployments. As of the most recent infrastructure pass, MLflow itself now runs as a supervised systemd service rather than a manually-started process -- see [L6 — Ansible](#l6--ansible-infrastructure-as-code) -- closing a real gap where it had, for a time, not been running at all.
+Same reasoning as Jenkins, SonarQube, and the local Docker registry: **shared platform/tooling services supporting the development process are not the product being served to end users**. In a real organization, one MLflow server tracks experiments across many projects; it does not live inside a single project's own K8s namespace. Only the anomaly-api workload runs in K8s (namespace `ml-serving`), matching how production would separate stateful tooling from stateless application deployments. As of the most recent infrastructure pass, MLflow itself now runs as a container (restart policy `always`) rather than a manually-started process -- see [L6 — Ansible](#l6--ansible-infrastructure-as-code) -- closing a real gap where it had, for a time, not been running at all.
 
 ### 16. Why the CI/CD pipeline uses fail-fast pytest before SonarQube
 
@@ -3726,7 +3730,7 @@ python monitoring/k8s_exporter.py &
   - the v3 fallback shared the v4 threshold (recall 0.7545) until 8 November, when it got its own (0.95, test recall 0.8007); recall is per reading, not per incident (below);
   - no test runs against a real PostgreSQL (`api/feedback_db.py` is tested through a stub connection; a CI service container is the fix); the unit tests run on the Jenkins image's Python, not the serving image's 3.12 (the Jenkins container reaches Docker through the host socket, so mounting its workspace into a `python:3.12` container needs host paths it does not have);
   - the operations console's code (`subprocess`, `systemctl`, `docker`) ships in the serving image, switched off by `ENABLE_OPS_UI` rather than absent; the legacy v1 model and `boto3` are still in the image (a legacy selector now refuses to start without `ALLOW_LEGACY_MODELS=1`, since only telecom_v3's files are hashed in the manifest); superseded experiment scripts sit next to the canonical pipeline in `ml-model/`;
-  - the control panel runs as root over plain HTTP (a sudoers rule for its few `systemctl` and `docker` commands would let it run unprivileged); MLflow listens on every interface without authentication (the Jenkins container reaches it through the Docker bridge, `172.17.0.1:5001`, so it cannot be bound to 127.0.0.1; a firewall rule limited to the bridge is the fix);
+  - the control panel runs as root over plain HTTP (a sudoers rule for its few `systemctl` and `docker` commands would let it run unprivileged); MLflow has no login (it is published on 127.0.0.1 only; the Jenkins container reaches it by name on `devsecmlops-net`, which needs `--allowed-hosts` [125]);
   - the feedback export has no source filter (below); transitive dependencies are not locked (above).
 - **Headline scores are on synthetic data.** The F1, precision and recall quoted for the deployed model (0.761 / 0.725 / 0.801) are measured on a generated fleet whose anomalies and labels come from the same generator, and the operator verdicts in the feedback loop are simulated from those labels. The only real-data check is SMD (F1 0.269), so these numbers must not be read as real-world detection accuracy.
 - **Unseen machines are the real weak spot (measured, `scripts/new_site_eval.py`).** On a fresh 7-day fleet (seed 777, 4,032,000 rows), measured on build 9 (4 windows) at its threshold 0.91: with the same machine names F1 is 0.730; with renamed machines whose type is known, 0.758 (the per-type baseline is enough); with renamed machines and **no type**, which is what `/predict` sees for a machine it has never heard of, **F1 drops to 0.386** (precision 0.289, recall 0.582) because the global baseline fits no machine type; with an added +-15% per-machine level shift, 0.352. The data are still simulated, but the mechanism is real: a new machine must be given a type, or have its own baseline, before its alerts can be trusted. The request accepts an optional `machine_type` (the production agent sends it); a client that omits it for a machine the API has never seen gets the global baseline.
