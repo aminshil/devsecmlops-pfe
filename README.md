@@ -2454,7 +2454,7 @@ survive a reboot. The unified, systemd-everywhere design closes that gap.
 
 #### MLflow provisioned and supervised
 
-MLflow runs as a container (`devsecmlops-mlflow`, restart policy `always`, on `devsecmlops-net`, published on `127.0.0.1:5001`) with `--serve-artifacts`,
+MLflow runs as a container (`devsecmlops-mlflow`, restart policy `always`, on `devsecmlops-net`, published on `127.0.0.1:5001`; its image scanned by Trivy on 11 November with `--severity HIGH,CRITICAL --ignore-unfixed`: 0 vulnerabilities in Debian 12.15's 105 packages and in every Python package, 0 secrets) with `--serve-artifacts`,
 proxying uploads to MinIO — see [MLflow and MinIO](#mlflow-and-minio-experiment-tracking-artifact-store)
 above for the real round-trip verification. It was not consistently running
 before this pass.
