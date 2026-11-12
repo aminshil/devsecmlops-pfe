@@ -342,11 +342,13 @@ VPS: the live validation gave exactly the original VM's numbers, 16,600 requests
 
 ```bash
 command -v python3.12 || (add-apt-repository -y ppa:deadsnakes/ppa && apt-get install -y python3.12 python3.12-venv python3.12-dev)
-cd /root/devsecmlops-pfe && U=$(grep -l "$PWD/venv/bin" /etc/systemd/system/*.service | xargs -n1 basename) && echo "units: $U" && mkdir -p /root/backups && cp -a mlflow.db /root/backups/mlflow.db.before-py312 && systemctl stop $U && mv venv /root/backups/venv-py310 && python3.12 -m venv venv && venv/bin/pip install -q --upgrade pip && venv/bin/pip install -q -r requirements.txt -r requirements-dev.txt && venv/bin/python --version && systemctl start $U && sleep 10 && systemctl is-active $U && echo "REBUILD OK" || { echo "FAILED: rolling back"; systemctl stop $U; [ -d /root/backups/venv-py310 ] && rm -rf venv && mv /root/backups/venv-py310 venv; systemctl start $U; systemctl is-active $U; }
+cd /root/devsecmlops-pfe && U=$(grep -l "$PWD/venv/bin" /etc/systemd/system/*.service | xargs -n1 basename) && echo "units: $U" && mkdir -p /root/backups && systemctl stop $U && mv venv /root/backups/venv-py310 && python3.12 -m venv venv && venv/bin/pip install -q --upgrade pip && venv/bin/pip install -q -r requirements.txt -r requirements-dev.txt && venv/bin/python --version && systemctl start $U && sleep 10 && systemctl is-active $U && echo "REBUILD OK" || { echo "FAILED: rolling back"; systemctl stop $U; [ -d /root/backups/venv-py310 ] && rm -rf venv && mv /root/backups/venv-py310 venv; systemctl start $U; systemctl is-active $U; }
 venv/bin/python -m pytest -q tests 2>&1 | tail -1      # 276 passed
 ```
 
 On the original VM (Ubuntu 22.04.5): Python 3.12.16 from the deadsnakes PPA; the four units (`control-panel`, `k8s-exporter`, `mlflow`, `production-agent`) active again; numpy 2.2.6 → 2.5.4 and scipy 1.15.3 → 1.18.1, so the host now runs the serving image's versions; MLflow `200`, the control panel `401` (it asks for the operations-UI login, as it should), 276 tests passed, `git status` clean. Once the new venv has run for a while, delete `/root/backups/venv-py310` (2 GB; done on the VM).
+
+Since 11 November MLflow is a container: it no longer runs from the venv, so the command above finds three units, and its database is in the `mlflow_data` volume, not in the repository.
 
 **Freeing disk space without touching what is in use** (VERIFIED (VM), 2 November: 92% → 85% used, 6.5 → 12 GB free). It stops unless the deployed image is the one you name, keeps that image and the previous one (the pipeline's `kubectl rollout undo` needs it) inside Minikube, removes only untagged images and anonymous volumes, and trims the journal:
 

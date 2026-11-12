@@ -221,7 +221,7 @@ measurements are the evidence that it works as configured; these pages define wh
 78. Ansible, *Protecting sensitive data with Ansible Vault*. https://docs.ansible.com/ansible/latest/vault_guide/index.html
 79. Ansible, *community.docker.docker_container module* (Grafana, MinIO and the other containers).
     https://docs.ansible.com/ansible/latest/collections/community/docker/docker_container_module.html
-80. Ansible, *ansible.builtin.systemd_service module* (the control panel, MLflow and agent units).
+80. Ansible, *ansible.builtin.systemd_service module* (the control panel and agent units; MLflow was one until it became a container on 11 November).
     https://docs.ansible.com/ansible/latest/collections/ansible/builtin/systemd_service_module.html
 81. systemd, *systemd.service* (`Restart=always`: why the panel's Stop and Fix go through `systemctl`).
     https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html
