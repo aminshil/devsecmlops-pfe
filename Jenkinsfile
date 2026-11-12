@@ -9,7 +9,8 @@ pipeline {
         disableConcurrentBuilds()
     }
 
-    // Which model the image bakes in. A push (webhook) uses the defaults: auto + this installation's
+    // Which model the image bakes in. A build started by hand without changing the parameters (Build
+    // Now; there is no webhook) uses the defaults: auto + this installation's
     // site (PFE_SITE, set by Ansible from site_name), which is exactly the old behaviour until the
     // site has promoted a model locally, and the site's current model afterwards (so a code change
     // never redeploys an older model, nor another site's).
